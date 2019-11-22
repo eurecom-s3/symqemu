@@ -86,6 +86,7 @@ typedef enum {
     TCG_REG_RDI = TCG_REG_EDI,
 
     TCG_AREG0 = TCG_REG_EBP,
+    TCG_AREG1 = TCG_REG_R15,
     TCG_REG_CALL_STACK = TCG_REG_ESP
 } TCGReg;
 

@@ -585,6 +585,9 @@ typedef struct TCGTemp {
     unsigned int temp_local:1;
     unsigned int temp_allocated:1;
 
+    /* If true, this temp contains a symbolic expression. */
+    unsigned int symbolic_expression:1;
+
     tcg_target_long val;
     struct TCGTemp *mem_base;
     intptr_t mem_offset;
@@ -743,6 +746,7 @@ struct TCGContext {
 extern TCGContext tcg_init_ctx;
 extern __thread TCGContext *tcg_ctx;
 extern TCGv_env cpu_env;
+extern TCGv_ptr cpu_env_exprs;
 
 static inline size_t temp_idx(TCGTemp *ts)
 {
@@ -922,8 +926,8 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb);
 
 void tcg_set_frame(TCGContext *s, TCGReg reg, intptr_t start, intptr_t size);
 
-TCGTemp *tcg_global_mem_new_internal(TCGType, TCGv_ptr,
-                                     intptr_t, const char *);
+TCGTemp *tcg_global_mem_new_internal(
+    TCGType, TCGv_ptr, intptr_t, TCGv_ptr, const char *);
 TCGTemp *tcg_temp_new_internal(TCGType, bool);
 void tcg_temp_free_internal(TCGTemp *);
 TCGv_vec tcg_temp_new_vec(TCGType type);
@@ -949,10 +953,11 @@ static inline void tcg_temp_free_vec(TCGv_vec arg)
     tcg_temp_free_internal(tcgv_vec_temp(arg));
 }
 
-static inline TCGv_i32 tcg_global_mem_new_i32(TCGv_ptr reg, intptr_t offset,
-                                              const char *name)
+static inline TCGv_i32 tcg_global_mem_new_i32(
+    TCGv_ptr reg, intptr_t offset, TCGv_ptr expr_reg, const char *name)
 {
-    TCGTemp *t = tcg_global_mem_new_internal(TCG_TYPE_I32, reg, offset, name);
+    TCGTemp *t = tcg_global_mem_new_internal(
+        TCG_TYPE_I32, reg, offset, expr_reg, name);
     return temp_tcgv_i32(t);
 }
 
@@ -968,10 +973,11 @@ static inline TCGv_i32 tcg_temp_local_new_i32(void)
     return temp_tcgv_i32(t);
 }
 
-static inline TCGv_i64 tcg_global_mem_new_i64(TCGv_ptr reg, intptr_t offset,
-                                              const char *name)
+static inline TCGv_i64 tcg_global_mem_new_i64(
+    TCGv_ptr reg, intptr_t offset, TCGv_ptr expr_reg, const char *name)
 {
-    TCGTemp *t = tcg_global_mem_new_internal(TCG_TYPE_I64, reg, offset, name);
+    TCGTemp *t = tcg_global_mem_new_internal(
+        TCG_TYPE_I64, reg, offset, expr_reg, name);
     return temp_tcgv_i64(t);
 }
 
@@ -987,10 +993,11 @@ static inline TCGv_i64 tcg_temp_local_new_i64(void)
     return temp_tcgv_i64(t);
 }
 
-static inline TCGv_ptr tcg_global_mem_new_ptr(TCGv_ptr reg, intptr_t offset,
-                                              const char *name)
+static inline TCGv_ptr tcg_global_mem_new_ptr(
+    TCGv_ptr reg, intptr_t offset, TCGv_ptr expr_reg, const char *name)
 {
-    TCGTemp *t = tcg_global_mem_new_internal(TCG_TYPE_PTR, reg, offset, name);
+    TCGTemp *t = tcg_global_mem_new_internal(
+        TCG_TYPE_PTR, reg, offset, expr_reg, name);
     return temp_tcgv_ptr(t);
 }
 
@@ -1276,8 +1283,8 @@ static inline unsigned get_mmuidx(TCGMemOpIdx oi)
 #ifdef HAVE_TCG_QEMU_TB_EXEC
 uintptr_t tcg_qemu_tb_exec(CPUArchState *env, uint8_t *tb_ptr);
 #else
-# define tcg_qemu_tb_exec(env, tb_ptr) \
-    ((uintptr_t (*)(void *, void *))tcg_ctx->code_gen_prologue)(env, tb_ptr)
+# define tcg_qemu_tb_exec(env, env_exprs, tb_ptr)                  \
+    ((uintptr_t (*)(void *, void *, void *))tcg_ctx->code_gen_prologue)(env, env_exprs, tb_ptr)
 #endif
 
 void tcg_register_jit(void *buf, size_t buf_size);

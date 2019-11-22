@@ -161,6 +161,7 @@ static int tcg_out_ldst_finalize(TCGContext *s);
 static TCGContext **tcg_ctxs;
 static unsigned int n_tcg_ctxs;
 TCGv_env cpu_env = 0;
+TCGv_ptr cpu_env_exprs = 0;
 
 struct tcg_region_tree {
     QemuMutex lock;
@@ -924,7 +925,7 @@ void tcg_context_init(TCGContext *s)
     TCGOpDef *def;
     TCGArgConstraint *args_ct;
     int *sorted_args;
-    TCGTemp *ts;
+    TCGTemp *ts, *ts_expr;
 
     memset(s, 0, sizeof(*s));
     s->nb_globals = 0;
@@ -994,8 +995,11 @@ void tcg_context_init(TCGContext *s)
 #endif
 
     tcg_debug_assert(!tcg_regset_test_reg(s->reserved_regs, TCG_AREG0));
+    tcg_debug_assert(!tcg_regset_test_reg(s->reserved_regs, TCG_AREG1));
     ts = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, TCG_AREG0, "env");
     cpu_env = temp_tcgv_ptr(ts);
+    ts_expr = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, TCG_AREG1, "env_exprs");
+    cpu_env_exprs = temp_tcgv_ptr(ts_expr);
 }
 
 /*
@@ -1175,15 +1179,21 @@ void tcg_set_frame(TCGContext *s, TCGReg reg, intptr_t start, intptr_t size)
 }
 
 TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
-                                     intptr_t offset, const char *name)
+                                     intptr_t offset, TCGv_ptr exprs_base,
+                                     const char *name)
 {
     TCGContext *s = tcg_ctx;
-    TCGTemp *base_ts = tcgv_ptr_temp(base);
-    TCGTemp *ts = tcg_global_alloc(s);
+    int expr_idx = s->nb_globals / 2;
+    TCGTemp *base_ts = tcgv_ptr_temp(base),
+        *exprs_base_ts = tcgv_ptr_temp(exprs_base);
+    TCGTemp *ts = tcg_global_alloc(s), *ts_expr = tcg_global_alloc(s);
+    char buf[64];
     int indirect_reg = 0, bigendian = 0;
 #ifdef HOST_WORDS_BIGENDIAN
     bigendian = 1;
 #endif
+
+    tcg_debug_assert(s->nb_globals % 2 == 0);
 
     if (!base_ts->fixed_reg) {
         /* We do not support double-indirect registers.  */
@@ -1196,7 +1206,6 @@ TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
 
     if (TCG_TARGET_REG_BITS == 32 && type == TCG_TYPE_I64) {
         TCGTemp *ts2 = tcg_global_alloc(s);
-        char buf[64];
 
         ts->base_type = TCG_TYPE_I64;
         ts->type = TCG_TYPE_I32;
@@ -1227,6 +1236,16 @@ TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
         ts->mem_offset = offset;
         ts->name = name;
     }
+
+    ts_expr->base_type = TCG_TYPE_PTR;
+    ts_expr->type = TCG_TYPE_PTR;
+    ts_expr->symbolic_expression = 1;
+    ts_expr->mem_allocated = 1;
+    ts_expr->mem_base = exprs_base_ts;
+    ts_expr->mem_offset = expr_idx * sizeof(void *);
+    pstrcpy(buf, sizeof(buf), name);
+    pstrcat(buf, sizeof(buf), "_expr");
+    ts_expr->name = strdup(buf);
     return ts;
 }
 
