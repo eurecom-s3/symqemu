@@ -1252,7 +1252,7 @@ TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
 TCGTemp *tcg_temp_new_internal(TCGType type, bool temp_local)
 {
     TCGContext *s = tcg_ctx;
-    TCGTemp *ts;
+    TCGTemp *ts, *ts_expr;
     int idx, k;
 
     k = type + (temp_local ? TCG_TYPE_COUNT : 0);
@@ -1265,6 +1265,12 @@ TCGTemp *tcg_temp_new_internal(TCGType type, bool temp_local)
         ts->temp_allocated = 1;
         tcg_debug_assert(ts->base_type == type);
         tcg_debug_assert(ts->temp_local == temp_local);
+
+        ts_expr = &s->temps[idx+1];
+        ts_expr->temp_allocated = 1;
+        ts_expr->symbolic_expression = 1;
+        tcg_debug_assert(ts_expr->base_type == TCG_TYPE_PTR);
+        tcg_debug_assert(ts_expr->temp_local == temp_local);
     } else {
         ts = tcg_temp_alloc(s);
         if (TCG_TARGET_REG_BITS == 32 && type == TCG_TYPE_I64) {
@@ -1286,10 +1292,17 @@ TCGTemp *tcg_temp_new_internal(TCGType type, bool temp_local)
             ts->temp_allocated = 1;
             ts->temp_local = temp_local;
         }
+
+        ts_expr = tcg_temp_alloc(s);
+        ts_expr->base_type = TCG_TYPE_PTR;
+        ts_expr->type = TCG_TYPE_PTR;
+        ts_expr->temp_allocated = 1;
+        ts_expr->temp_local = temp_local;
+        ts_expr->symbolic_expression = 1;
     }
 
 #if defined(CONFIG_DEBUG_TCG)
-    s->temps_in_use++;
+    s->temps_in_use += 2;
 #endif
     return ts;
 }
@@ -1333,9 +1346,10 @@ void tcg_temp_free_internal(TCGTemp *ts)
 {
     TCGContext *s = tcg_ctx;
     int k, idx;
+    TCGTemp *ts_expr = temp_expr(ts);
 
 #if defined(CONFIG_DEBUG_TCG)
-    s->temps_in_use--;
+    s->temps_in_use -= 2;
     if (s->temps_in_use < 0) {
         fprintf(stderr, "More temporaries freed than allocated!\n");
     }
@@ -1344,6 +1358,10 @@ void tcg_temp_free_internal(TCGTemp *ts)
     tcg_debug_assert(ts->temp_global == 0);
     tcg_debug_assert(ts->temp_allocated != 0);
     ts->temp_allocated = 0;
+
+    tcg_debug_assert(ts_expr->temp_global == 0);
+    tcg_debug_assert(ts_expr->temp_allocated != 0);
+    ts_expr->temp_allocated = 0;
 
     idx = temp_idx(ts);
     k = ts->base_type + (ts->temp_local ? TCG_TYPE_COUNT : 0);
