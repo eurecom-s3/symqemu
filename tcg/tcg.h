@@ -839,14 +839,25 @@ static inline TCGv_vec temp_tcgv_vec(TCGTemp *t)
     return (TCGv_vec)temp_tcgv_i32(t);
 }
 
-/* For now, we assume that the host has 64-bit pointers. */
+static inline TCGv_ptr tcgv_i32_expr(TCGv_i32 v)
+{
+    return temp_tcgv_ptr(temp_expr(tcgv_i32_temp(v)));
+}
 
-static inline TCGv_i64 tcgv_i32_expr(TCGv_i32 v)
+static inline TCGv_ptr tcgv_i64_expr(TCGv_i64 v)
+{
+    return temp_tcgv_ptr(temp_expr(tcgv_i64_temp(v)));
+}
+
+/* Expression pointers as (64-bit) numbers for code simplification. This assumes
+ * that we're running on a 64-bit architecture! */
+
+static inline TCGv_i64 tcgv_i32_expr_num(TCGv_i32 v)
 {
     return temp_tcgv_i64(temp_expr(tcgv_i32_temp(v)));
 }
 
-static inline TCGv_i64 tcgv_i64_expr(TCGv_i64 v)
+static inline TCGv_i64 tcgv_i64_expr_num(TCGv_i64 v)
 {
     return temp_tcgv_i64(temp_expr(tcgv_i64_temp(v)));
 }
