@@ -354,6 +354,7 @@ static inline void tcg_gen_mov_i32(TCGv_i32 ret, TCGv_i32 arg)
 
 static inline void tcg_gen_movi_i32(TCGv_i32 ret, int32_t arg)
 {
+    tcg_gen_op2i_i64(INDEX_op_movi_i64, tcgv_i32_expr(ret), 0);
     tcg_gen_op2i_i32(INDEX_op_movi_i32, ret, arg);
 }
 
@@ -558,6 +559,7 @@ static inline void tcg_gen_mov_i64(TCGv_i64 ret, TCGv_i64 arg)
 
 static inline void tcg_gen_movi_i64(TCGv_i64 ret, int64_t arg)
 {
+    tcg_gen_op2i_i64(INDEX_op_movi_i64, tcgv_i64_expr(ret), 0);
     tcg_gen_op2i_i64(INDEX_op_movi_i64, ret, arg);
 }
 
