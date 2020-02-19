@@ -852,12 +852,12 @@ static inline TCGv_ptr tcgv_i64_expr(TCGv_i64 v)
 /* Expression pointers as (64-bit) numbers for code simplification. This assumes
  * that we're running on a 64-bit architecture! */
 
-static inline TCGv_i64 tcgv_i32_expr_num(TCGv_i32 v)
+static inline TCGv tcgv_i32_expr_num(TCGv_i32 v)
 {
     return temp_tcgv_i64(temp_expr(tcgv_i32_temp(v)));
 }
 
-static inline TCGv_i64 tcgv_i64_expr_num(TCGv_i64 v)
+static inline TCGv tcgv_i64_expr_num(TCGv_i64 v)
 {
     return temp_tcgv_i64(temp_expr(tcgv_i64_temp(v)));
 }
