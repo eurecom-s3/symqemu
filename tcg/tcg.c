@@ -999,6 +999,7 @@ void tcg_context_init(TCGContext *s)
     ts = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, TCG_AREG0, "env");
     cpu_env = temp_tcgv_ptr(ts);
     ts_expr = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, TCG_AREG1, "env_exprs");
+    ts_expr->symbolic_expression = 1;
     cpu_env_exprs = temp_tcgv_ptr(ts_expr);
 }
 
