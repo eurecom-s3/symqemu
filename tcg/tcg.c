@@ -1198,9 +1198,11 @@ TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
     if (!base_ts->fixed_reg) {
         /* We do not support double-indirect registers.  */
         tcg_debug_assert(!base_ts->indirect_reg);
+        tcg_debug_assert(!exprs_base_ts->indirect_reg);
         base_ts->indirect_base = 1;
+        exprs_base_ts->indirect_base = 1;
         s->nb_indirects += (TCG_TARGET_REG_BITS == 32 && type == TCG_TYPE_I64
-                            ? 2 : 1);
+                            ? 4 : 2);
         indirect_reg = 1;
     }
 
@@ -1240,6 +1242,7 @@ TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
     ts_expr->base_type = TCG_TYPE_PTR;
     ts_expr->type = TCG_TYPE_PTR;
     ts_expr->symbolic_expression = 1;
+    ts_expr->indirect_reg = indirect_reg;
     ts_expr->mem_allocated = 1;
     ts_expr->mem_base = exprs_base_ts;
     ts_expr->mem_offset = expr_idx * sizeof(void *);

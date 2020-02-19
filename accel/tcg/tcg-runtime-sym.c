@@ -33,3 +33,9 @@ void *HELPER(sym_sub_i32)(uint32_t arg1, void *arg1_expr,
     /* TODO */
     return NOT_IMPLEMENTED;
 }
+
+void *HELPER(sym_load_i64)(uint64_t addr, uint64_t length)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
