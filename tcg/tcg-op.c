@@ -1203,16 +1203,25 @@ void tcg_gen_xor_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 
 void tcg_gen_shl_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_shift_left_i64(tcgv_i64_expr(ret),
+                                  arg1, tcgv_i64_expr(arg1),
+                                  arg2, tcgv_i64_expr(arg2));
     gen_helper_shl_i64(ret, arg1, arg2);
 }
 
 void tcg_gen_shr_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_shift_right_i64(tcgv_i64_expr(ret),
+                                   arg1, tcgv_i64_expr(arg1),
+                                   arg2, tcgv_i64_expr(arg2));
     gen_helper_shr_i64(ret, arg1, arg2);
 }
 
 void tcg_gen_sar_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_arithmetic_shift_right_i64(tcgv_i64_expr(ret),
+                                              arg1, tcgv_i64_expr(arg1),
+                                              arg2, tcgv_i64_expr(arg2));
     gen_helper_sar_i64(ret, arg1, arg2);
 }
 

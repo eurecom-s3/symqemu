@@ -439,16 +439,25 @@ static inline void tcg_gen_xor_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 
 static inline void tcg_gen_shl_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 {
+    gen_helper_sym_shift_left_i32(tcgv_i32_expr(ret),
+                                  arg1, tcgv_i32_expr(arg1),
+                                  arg2, tcgv_i32_expr(arg2));
     tcg_gen_op3_i32(INDEX_op_shl_i32, ret, arg1, arg2);
 }
 
 static inline void tcg_gen_shr_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 {
+    gen_helper_sym_shift_right_i32(tcgv_i32_expr(ret),
+                                   arg1, tcgv_i32_expr(arg1),
+                                   arg2, tcgv_i32_expr(arg2));
     tcg_gen_op3_i32(INDEX_op_shr_i32, ret, arg1, arg2);
 }
 
 static inline void tcg_gen_sar_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 {
+    gen_helper_sym_arithmetic_shift_right_i32(tcgv_i32_expr(ret),
+                                              arg1, tcgv_i32_expr(arg1),
+                                              arg2, tcgv_i32_expr(arg2));
     tcg_gen_op3_i32(INDEX_op_sar_i32, ret, arg1, arg2);
 }
 
@@ -668,16 +677,25 @@ static inline void tcg_gen_xor_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 
 static inline void tcg_gen_shl_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_shift_left_i64(tcgv_i64_expr(ret),
+                                  arg1, tcgv_i64_expr(arg1),
+                                  arg2, tcgv_i64_expr(arg2));
     tcg_gen_op3_i64(INDEX_op_shl_i64, ret, arg1, arg2);
 }
 
 static inline void tcg_gen_shr_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_shift_right_i64(tcgv_i64_expr(ret),
+                                   arg1, tcgv_i64_expr(arg1),
+                                   arg2, tcgv_i64_expr(arg2));
     tcg_gen_op3_i64(INDEX_op_shr_i64, ret, arg1, arg2);
 }
 
 static inline void tcg_gen_sar_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_arithmetic_shift_right_i64(tcgv_i64_expr(ret),
+                                              arg1, tcgv_i64_expr(arg1),
+                                              arg2, tcgv_i64_expr(arg2));
     tcg_gen_op3_i64(INDEX_op_sar_i64, ret, arg1, arg2);
 }
 
