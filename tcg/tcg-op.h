@@ -408,6 +408,9 @@ static inline void tcg_gen_st_i32(TCGv_i32 arg1, TCGv_ptr arg2,
 
 static inline void tcg_gen_add_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 {
+    gen_helper_sym_add_i32(tcgv_i32_expr(ret),
+                           arg1, tcgv_i32_expr(arg1),
+                           arg2, tcgv_i32_expr(arg2));
     tcg_gen_op3_i32(INDEX_op_add_i32, ret, arg1, arg2);
 }
 
@@ -634,6 +637,9 @@ static inline void tcg_gen_st_i64(TCGv_i64 arg1, TCGv_ptr arg2,
 
 static inline void tcg_gen_add_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_add_i64(tcgv_i64_expr(ret),
+                           arg1, tcgv_i64_expr(arg1),
+                           arg2, tcgv_i64_expr(arg2));
     tcg_gen_op3_i64(INDEX_op_add_i64, ret, arg1, arg2);
 }
 
