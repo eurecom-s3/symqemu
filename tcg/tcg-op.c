@@ -2889,9 +2889,9 @@ void tcg_gen_qemu_ld_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 
     /* For now, we only handle loads that don't change endianness */
     tcg_debug_assert(!(memop & MO_BSWAP));
-    load_size = tcg_temp_new_i64();
-    tcg_gen_movi_i64(load_size, 1 << (memop & MO_SIZE));
-    gen_helper_sym_load_i64(tcgv_i64_expr(val), addr, load_size);
+    load_size = tcg_const_i64(1 << (memop & MO_SIZE));
+    gen_helper_sym_load_i64(
+        tcgv_i64_expr(val), addr, tcgv_i64_expr(addr), load_size);
     tcg_temp_free_i64(load_size);
 
     orig_memop = memop;
