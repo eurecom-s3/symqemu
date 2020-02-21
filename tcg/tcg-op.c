@@ -94,6 +94,68 @@ void tcg_gen_op6(TCGOpcode opc, TCGArg a1, TCGArg a2, TCGArg a3,
     op->args[5] = a6;
 }
 
+void tcg_gen_ldst_op_i64(TCGOpcode opc, TCGv_i64 val,
+                         TCGv_ptr base, TCGArg offset)
+{
+    uint64_t data_size;
+    TCGv_i64 data_size_temp, offset_temp;
+
+    switch (opc) {
+    case INDEX_op_ld8u_i64:
+    case INDEX_op_ld8s_i64:
+    case INDEX_op_st8_i64:
+        data_size = 1;
+        break;
+    case INDEX_op_ld16u_i64:
+    case INDEX_op_ld16s_i64:
+    case INDEX_op_st16_i64:
+        data_size = 2;
+        break;
+    case INDEX_op_ld32u_i64:
+    case INDEX_op_ld32s_i64:
+    case INDEX_op_st32_i64:
+        data_size = 4;
+        break;
+    case INDEX_op_ld_i64:
+    case INDEX_op_st_i64:
+        data_size = 8;
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    data_size_temp = tcg_const_i64(data_size);
+    offset_temp = tcg_const_i64(offset);
+
+    switch (opc) {
+    case INDEX_op_ld8u_i64:
+    case INDEX_op_ld8s_i64:
+    case INDEX_op_ld16u_i64:
+    case INDEX_op_ld16s_i64:
+    case INDEX_op_ld32u_i64:
+    case INDEX_op_ld32s_i64:
+    case INDEX_op_ld_i64:
+        gen_helper_sym_load_host_i64(
+            tcgv_i64_expr(val), base, offset_temp, data_size_temp);
+        break;
+    case INDEX_op_st8_i64:
+    case INDEX_op_st16_i64:
+    case INDEX_op_st32_i64:
+    case INDEX_op_st_i64:
+        gen_helper_sym_store_host_i64(
+            val, tcgv_i64_expr(val),
+            base, offset_temp, data_size_temp);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    tcg_temp_free_i64(data_size_temp);
+    tcg_temp_free_i64(offset_temp);
+
+    tcg_gen_op3(opc, tcgv_i64_arg(val), tcgv_ptr_arg(base), offset);
+}
+
 void tcg_gen_mb(TCGBar mb_type)
 {
     if (tcg_ctx->tb_cflags & CF_PARALLEL) {

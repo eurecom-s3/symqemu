@@ -393,7 +393,7 @@ struct CPUState {
     void *env_ptr; /* CPUArchState */
     IcountDecr *icount_decr_ptr;
     /* space for symbolic expressions corresponding to env */
-    void *env_exprs[512]; /* TCG_MAX_TEMPS */
+    void *env_exprs[0x2000]; /* TODO this works for x86; find something more general */
 
     /* Accessed in parallel; all accesses must be atomic */
     struct TranslationBlock *tb_jmp_cache[TB_JMP_CACHE_SIZE];

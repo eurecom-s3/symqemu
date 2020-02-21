@@ -41,6 +41,18 @@ void *HELPER(sym_load_i64)(uint64_t addr, void *addr_expr, uint64_t length)
     return NOT_IMPLEMENTED;
 }
 
+void *HELPER(sym_load_host_i64)(void *addr, uint64_t offset, uint64_t length)
+{
+    return HELPER(sym_load_i64)(
+        (uint64_t)((uint8_t*)addr + offset), NULL, length);
+}
+
+void HELPER(sym_store_host_i64)(uint64_t value, void *value_expr,
+                                void *addr, uint64_t offset, uint64_t length)
+{
+    /* TODO */
+}
+
 void *HELPER(sym_shift_right_i32)(uint32_t arg1, void *arg1_expr,
                                   uint32_t arg2, void *arg2_expr)
 {
