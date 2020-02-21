@@ -421,16 +421,25 @@ static inline void tcg_gen_sub_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 
 static inline void tcg_gen_and_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 {
+    gen_helper_sym_and_i32(tcgv_i32_expr(ret),
+                           arg1, tcgv_i32_expr(arg1),
+                           arg2, tcgv_i32_expr(arg2));
     tcg_gen_op3_i32(INDEX_op_and_i32, ret, arg1, arg2);
 }
 
 static inline void tcg_gen_or_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 {
+    gen_helper_sym_or_i32(tcgv_i32_expr(ret),
+                          arg1, tcgv_i32_expr(arg1),
+                          arg2, tcgv_i32_expr(arg2));
     tcg_gen_op3_i32(INDEX_op_or_i32, ret, arg1, arg2);
 }
 
 static inline void tcg_gen_xor_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 {
+    gen_helper_sym_xor_i32(tcgv_i32_expr(ret),
+                           arg1, tcgv_i32_expr(arg1),
+                           arg2, tcgv_i32_expr(arg2));
     tcg_gen_op3_i32(INDEX_op_xor_i32, ret, arg1, arg2);
 }
 
@@ -659,16 +668,25 @@ static inline void tcg_gen_sub_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 
 static inline void tcg_gen_and_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_and_i64(tcgv_i64_expr(ret),
+                           arg1, tcgv_i64_expr(arg1),
+                           arg2, tcgv_i64_expr(arg2));
     tcg_gen_op3_i64(INDEX_op_and_i64, ret, arg1, arg2);
 }
 
 static inline void tcg_gen_or_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_or_i64(tcgv_i64_expr(ret),
+                          arg1, tcgv_i64_expr(arg1),
+                          arg2, tcgv_i64_expr(arg2));
     tcg_gen_op3_i64(INDEX_op_or_i64, ret, arg1, arg2);
 }
 
 static inline void tcg_gen_xor_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    gen_helper_sym_xor_i64(tcgv_i64_expr(ret),
+                           arg1, tcgv_i64_expr(arg1),
+                           arg2, tcgv_i64_expr(arg2));
     tcg_gen_op3_i64(INDEX_op_xor_i64, ret, arg1, arg2);
 }
 
