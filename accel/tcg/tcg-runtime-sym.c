@@ -146,6 +146,76 @@ void *HELPER(sym_xor_i32)(uint32_t arg1, void *arg1_expr,
     return NOT_IMPLEMENTED;
 }
 
+void *HELPER(sym_andc_i32)(uint32_t arg1, void *arg1_expr,
+                           uint32_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_andc_i64)(uint64_t arg1, void *arg1_expr,
+                           uint64_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_eqv_i32)(uint32_t arg1, void *arg1_expr,
+                          uint32_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_eqv_i64)(uint64_t arg1, void *arg1_expr,
+                          uint64_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_nand_i32)(uint32_t arg1, void *arg1_expr,
+                           uint32_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_nand_i64)(uint64_t arg1, void *arg1_expr,
+                           uint64_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_nor_i32)(uint32_t arg1, void *arg1_expr,
+                          uint32_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_nor_i64)(uint64_t arg1, void *arg1_expr,
+                          uint64_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_orc_i32)(uint32_t arg1, void *arg1_expr,
+                          uint32_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_orc_i64)(uint64_t arg1, void *arg1_expr,
+                          uint64_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
 void *HELPER(sym_load_guest)(target_ulong addr, void *addr_expr, uint64_t length)
 {
     /* TODO */

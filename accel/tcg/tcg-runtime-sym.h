@@ -22,6 +22,11 @@ SYM_HELPER_BINARY(shift_left)
 SYM_HELPER_BINARY(and)
 SYM_HELPER_BINARY(or)
 SYM_HELPER_BINARY(xor)
+SYM_HELPER_BINARY(andc)
+SYM_HELPER_BINARY(eqv)
+SYM_HELPER_BINARY(nand)
+SYM_HELPER_BINARY(nor)
+SYM_HELPER_BINARY(orc)
 
 #undef SYM_HELPER_BINARY
 
@@ -45,4 +50,4 @@ DEF_HELPER_FLAGS_4(sym_extract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64)
 /* TODO In theory, host and guest address spaces could overlap. How do we
  * distinguish between the two? */
 
-/* TODO call, brcond_i32/i64, neg */
+/* TODO call, brcond_i32/i64, neg, not, clz, ctz */
