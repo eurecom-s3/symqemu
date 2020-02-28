@@ -76,11 +76,25 @@ void *HELPER(sym_xor_i32)(uint32_t arg1, void *arg1_expr,
     return NOT_IMPLEMENTED;
 }
 
-void *HELPER(sym_load)(target_ulong addr, void *addr_expr, uint64_t length)
+void *HELPER(sym_load_guest)(target_ulong addr, void *addr_expr, uint64_t length)
 {
     /* TODO */
     /* TODO try an alternative address; cast the address to uint64_t */
     return NOT_IMPLEMENTED;
+}
+
+void HELPER(sym_store_guest_i32)(uint32_t value, void *value_expr,
+                                 target_ulong addr, void *addr_expr,
+                                 uint64_t length)
+{
+    /* TODO */
+}
+
+void HELPER(sym_store_guest_i64)(uint64_t value, void *value_expr,
+                                 target_ulong addr, void *addr_expr,
+                                 uint64_t length)
+{
+    /* TODO */
 }
 
 void *HELPER(sym_load_host)(void *addr, uint64_t offset, uint64_t length)
