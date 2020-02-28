@@ -94,6 +94,60 @@ void tcg_gen_op6(TCGOpcode opc, TCGArg a1, TCGArg a2, TCGArg a3,
     op->args[5] = a6;
 }
 
+void tcg_gen_ldst_op_i32(TCGOpcode opc, TCGv_i32 val,
+                         TCGv_ptr base, TCGArg offset)
+{
+    uint64_t data_size;
+    TCGv_i64 data_size_temp, offset_temp;
+
+    switch (opc) {
+    case INDEX_op_ld8u_i32:
+    case INDEX_op_ld8s_i32:
+    case INDEX_op_st8_i32:
+        data_size = 1;
+        break;
+    case INDEX_op_ld16u_i32:
+    case INDEX_op_ld16s_i32:
+    case INDEX_op_st16_i32:
+        data_size = 2;
+        break;
+    case INDEX_op_ld_i32:
+    case INDEX_op_st_i32:
+        data_size = 4;
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    data_size_temp = tcg_const_i64(data_size);
+    offset_temp = tcg_const_i64(offset);
+
+    switch (opc) {
+    case INDEX_op_ld8u_i32:
+    case INDEX_op_ld8s_i32:
+    case INDEX_op_ld16u_i32:
+    case INDEX_op_ld16s_i32:
+    case INDEX_op_ld_i32:
+        gen_helper_sym_load_host(
+            tcgv_i32_expr(val), base, offset_temp, data_size_temp);
+        break;
+    case INDEX_op_st8_i32:
+    case INDEX_op_st16_i32:
+    case INDEX_op_st_i32:
+        gen_helper_sym_store_host_i32(
+            val, tcgv_i32_expr(val),
+            base, offset_temp, data_size_temp);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    tcg_temp_free_i64(data_size_temp);
+    tcg_temp_free_i64(offset_temp);
+
+    tcg_gen_op3(opc, tcgv_i32_arg(val), tcgv_ptr_arg(base), offset);
+}
+
 void tcg_gen_ldst_op_i64(TCGOpcode opc, TCGv_i64 val,
                          TCGv_ptr base, TCGArg offset)
 {
@@ -135,7 +189,7 @@ void tcg_gen_ldst_op_i64(TCGOpcode opc, TCGv_i64 val,
     case INDEX_op_ld32u_i64:
     case INDEX_op_ld32s_i64:
     case INDEX_op_ld_i64:
-        gen_helper_sym_load_host_i64(
+        gen_helper_sym_load_host(
             tcgv_i64_expr(val), base, offset_temp, data_size_temp);
         break;
     case INDEX_op_st8_i64:
@@ -2968,8 +3022,8 @@ void tcg_gen_qemu_ld_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     /* For now, we only handle loads that don't change endianness */
     tcg_debug_assert(!(memop & MO_BSWAP));
     load_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_load_i64(
-        tcgv_i64_expr(val), addr, tcgv_i64_expr(addr), load_size);
+    gen_helper_sym_load(tcgv_i64_expr(val), addr, tcgv_i64_expr(addr),
+                        load_size);
     tcg_temp_free_i64(load_size);
 
     orig_memop = memop;

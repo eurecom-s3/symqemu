@@ -54,6 +54,8 @@ void vec_gen_4(TCGOpcode, TCGType, unsigned, TCGArg, TCGArg, TCGArg, TCGArg);
 
 void tcg_gen_ldst_op_i64(TCGOpcode opc, TCGv_i64 val,
                          TCGv_ptr base, TCGArg offset);
+void tcg_gen_ldst_op_i32(TCGOpcode opc, TCGv_i32 val,
+                         TCGv_ptr base, TCGArg offset);
 
 static inline void tcg_gen_op1_i32(TCGOpcode opc, TCGv_i32 a1)
 {
@@ -117,12 +119,6 @@ static inline void tcg_gen_op3i_i64(TCGOpcode opc, TCGv_i64 a1,
                                     TCGv_i64 a2, TCGArg a3)
 {
     tcg_gen_op3(opc, tcgv_i64_arg(a1), tcgv_i64_arg(a2), a3);
-}
-
-static inline void tcg_gen_ldst_op_i32(TCGOpcode opc, TCGv_i32 val,
-                                       TCGv_ptr base, TCGArg offset)
-{
-    tcg_gen_op3(opc, tcgv_i32_arg(val), tcgv_ptr_arg(base), offset);
 }
 
 static inline void tcg_gen_op4_i32(TCGOpcode opc, TCGv_i32 a1, TCGv_i32 a2,

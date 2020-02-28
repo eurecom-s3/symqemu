@@ -17,8 +17,10 @@ SYM_HELPER_BINARY(xor)
 
 #undef SYM_HELPER_BINARY
 
-DEF_HELPER_FLAGS_3(sym_load_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64)
-DEF_HELPER_FLAGS_3(sym_load_host_i64, TCG_CALL_NO_RWG_SE, ptr, ptr, i64, i64)
+DEF_HELPER_FLAGS_3(sym_load, TCG_CALL_NO_RWG_SE, ptr, dh_alias_tl, ptr, i64)
+DEF_HELPER_FLAGS_3(sym_load_host, TCG_CALL_NO_RWG_SE, ptr, ptr, i64, i64)
+DEF_HELPER_FLAGS_5(sym_store_host_i32, TCG_CALL_NO_RWG, void, i32, ptr, ptr,
+                   i64, i64)
 DEF_HELPER_FLAGS_5(sym_store_host_i64, TCG_CALL_NO_RWG, void, i64, ptr, ptr,
                    i64, i64)
 
