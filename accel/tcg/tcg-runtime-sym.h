@@ -4,13 +4,21 @@
   DEF_HELPER_FLAGS_4(sym_##name##_i64, TCG_CALL_NO_RWG_SE, ptr,                \
                      i64, ptr, i64, ptr)
 
+/* Arithmetic */
 SYM_HELPER_BINARY(add)
 SYM_HELPER_BINARY(sub)
+SYM_HELPER_BINARY(mul)
+SYM_HELPER_BINARY(div)
+SYM_HELPER_BINARY(divu)
+SYM_HELPER_BINARY(rem)
+SYM_HELPER_BINARY(remu)
 
+/* Shifts */
 SYM_HELPER_BINARY(shift_right)
 SYM_HELPER_BINARY(arithmetic_shift_right)
 SYM_HELPER_BINARY(shift_left)
 
+/* Logical operations */
 SYM_HELPER_BINARY(and)
 SYM_HELPER_BINARY(or)
 SYM_HELPER_BINARY(xor)
@@ -36,3 +44,5 @@ DEF_HELPER_FLAGS_4(sym_extract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64)
 
 /* TODO In theory, host and guest address spaces could overlap. How do we
  * distinguish between the two? */
+
+/* TODO call, brcond_i32/i64, neg */

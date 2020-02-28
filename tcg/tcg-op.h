@@ -459,6 +459,7 @@ static inline void tcg_gen_sar_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 
 static inline void tcg_gen_mul_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 {
+    SYM_HELPER_BINARY_32(mul);
     tcg_gen_op3_i32(INDEX_op_mul_i32, ret, arg1, arg2);
 }
 
@@ -690,6 +691,7 @@ static inline void tcg_gen_sar_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 
 static inline void tcg_gen_mul_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
+    SYM_HELPER_BINARY_64(mul);
     tcg_gen_op3_i64(INDEX_op_mul_i64, ret, arg1, arg2);
 }
 #else /* TCG_TARGET_REG_BITS == 32 */
@@ -1335,8 +1337,5 @@ static inline void tcg_gen_trunc_ptr_i32(TCGv_i32 r, TCGv_ptr a)
 
 #undef PTR
 #undef NAT
-
-#undef SYM_HELPER_BINARY_32
-#undef SYM_HELPER_BINARY_64
 
 #endif /* TCG_TCG_OP_H */
