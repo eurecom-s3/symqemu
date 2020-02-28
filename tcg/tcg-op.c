@@ -2932,11 +2932,19 @@ static void tcg_gen_req_mo(TCGBar type)
 void tcg_gen_qemu_ld_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 {
     TCGMemOp orig_memop;
+    TCGv_i64 load_size;
 
     tcg_gen_req_mo(TCG_MO_LD_LD | TCG_MO_ST_LD);
     memop = tcg_canonicalize_memop(memop, 0, 0);
     trace_guest_mem_before_tcg(tcg_ctx->cpu, cpu_env,
                                addr, trace_mem_get_info(memop, 0));
+
+    /* For now, we only handle loads that don't change endianness */
+    tcg_debug_assert(!(memop & MO_BSWAP));
+    load_size = tcg_const_i64(1 << (memop & MO_SIZE));
+    gen_helper_sym_load(tcgv_i32_expr(val), addr, tcgv_i64_expr(addr),
+                        load_size);
+    tcg_temp_free_i64(load_size);
 
     orig_memop = memop;
     if (!TCG_TARGET_HAS_MEMORY_BSWAP && (memop & MO_BSWAP)) {
