@@ -216,6 +216,18 @@ void *HELPER(sym_orc_i64)(uint64_t arg1, void *arg1_expr,
     return NOT_IMPLEMENTED;
 }
 
+void *HELPER(sym_sext_or_trunc)(void *expr, uint64_t target_length)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_zext_or_trunc)(void *expr, uint64_t target_length)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
 void *HELPER(sym_load_guest)(target_ulong addr, void *addr_expr, uint64_t length)
 {
     /* TODO */

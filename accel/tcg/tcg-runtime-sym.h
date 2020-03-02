@@ -32,6 +32,10 @@ SYM_HELPER_BINARY(orc)
 
 #undef SYM_HELPER_BINARY
 
+/* Extension and truncation */
+DEF_HELPER_FLAGS_2(sym_sext_or_trunc, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)
+DEF_HELPER_FLAGS_2(sym_zext_or_trunc, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)
+
 /* Guest memory */
 DEF_HELPER_FLAGS_3(sym_load_guest, TCG_CALL_NO_RWG_SE, ptr, dh_alias_tl, ptr, i64)
 DEF_HELPER_FLAGS_5(sym_store_guest_i32, TCG_CALL_NO_RWG, void, i32, ptr,
@@ -52,4 +56,5 @@ DEF_HELPER_FLAGS_4(sym_extract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64)
 /* TODO In theory, host and guest address spaces could overlap. How do we
  * distinguish between the two? */
 
-/* TODO call, brcond_i32/i64, neg, not, clz, ctz */
+/* TODO call, brcond_i32/i64, neg, not, clz, ctz; immediate versions of all
+ * instrumented instructions */
