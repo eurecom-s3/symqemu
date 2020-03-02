@@ -17,6 +17,8 @@ SYM_HELPER_BINARY(remu)
 SYM_HELPER_BINARY(shift_right)
 SYM_HELPER_BINARY(arithmetic_shift_right)
 SYM_HELPER_BINARY(shift_left)
+SYM_HELPER_BINARY(rotate_left)
+SYM_HELPER_BINARY(rotate_right)
 
 /* Logical operations */
 SYM_HELPER_BINARY(and)

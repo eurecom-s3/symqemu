@@ -300,6 +300,34 @@ void *HELPER(sym_shift_left_i64)(uint64_t arg1, void *arg1_expr,
     return NOT_IMPLEMENTED;
 }
 
+void *HELPER(sym_rotate_left_i32)(uint32_t arg1, void *arg1_expr,
+                                  uint32_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_rotate_left_i64)(uint64_t arg1, void *arg1_expr,
+                                  uint64_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_rotate_right_i32)(uint32_t arg1, void *arg1_expr,
+                                   uint32_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_rotate_right_i64)(uint64_t arg1, void *arg1_expr,
+                                   uint64_t arg2, void *arg2_expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
 void *HELPER(sym_extract_i32)(uint32_t arg, void *arg_expr,
                               uint32_t ofs, uint32_t len)
 {
