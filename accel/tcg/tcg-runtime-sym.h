@@ -53,8 +53,11 @@ DEF_HELPER_FLAGS_5(sym_store_host_i32, TCG_CALL_NO_RWG, void, i32, ptr, ptr,
 DEF_HELPER_FLAGS_5(sym_store_host_i64, TCG_CALL_NO_RWG, void, i64, ptr, ptr,
                    i64, i64)
 
+/* Bit fields */
 DEF_HELPER_FLAGS_4(sym_extract_i32, TCG_CALL_NO_RWG_SE, ptr, i32, ptr, i32, i32)
 DEF_HELPER_FLAGS_4(sym_extract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64)
+DEF_HELPER_FLAGS_5(sym_extract2_i32, TCG_CALL_NO_RWG_SE, ptr, i32, ptr, i32, ptr, i64)
+DEF_HELPER_FLAGS_5(sym_extract2_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr, i64)
 DEF_HELPER_FLAGS_4(sym_sextract_i32, TCG_CALL_NO_RWG_SE, ptr, i32, ptr, i32, i32)
 DEF_HELPER_FLAGS_4(sym_sextract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64)
 
@@ -63,3 +66,6 @@ DEF_HELPER_FLAGS_4(sym_sextract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64
 
 /* TODO call, brcond_i32/i64, neg, not, clz, ctz, deposit; immediate versions of
  * all instrumented instructions */
+
+/* The extrl and extrh instructions aren't emitted on 64-bit hosts. If we ever
+ * extend support to other host architectures, we need to implement them. */

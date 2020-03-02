@@ -360,6 +360,22 @@ void *HELPER(sym_extract_i64)(uint64_t arg, void *arg_expr,
     return NOT_IMPLEMENTED;
 }
 
+void *HELPER(sym_extract2_i32)(uint32_t ah, void *ah_expr,
+                               uint32_t al, void *al_expr,
+                               uint64_t ofs)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_extract2_i64)(uint64_t ah, void *ah_expr,
+                               uint64_t al, void *al_expr,
+                               uint64_t ofs)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
 void *HELPER(sym_sextract_i32)(uint32_t arg, void *arg_expr,
                                uint32_t ofs, uint32_t len)
 {
