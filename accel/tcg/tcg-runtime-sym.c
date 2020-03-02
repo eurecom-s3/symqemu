@@ -359,3 +359,17 @@ void *HELPER(sym_extract_i64)(uint64_t arg, void *arg_expr,
     /* TODO */
     return NOT_IMPLEMENTED;
 }
+
+void *HELPER(sym_sextract_i32)(uint32_t arg, void *arg_expr,
+                               uint32_t ofs, uint32_t len)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_sextract_i64)(uint64_t arg, void *arg_expr,
+                               uint64_t ofs, uint64_t len)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}

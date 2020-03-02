@@ -840,14 +840,6 @@ void tcg_gen_extract_i32(TCGv_i32 ret, TCGv_i32 arg,
     tcg_debug_assert(len <= 32);
     tcg_debug_assert(ofs + len <= 32);
 
-    TCGv_i32 ofs_tmp, len_tmp;
-    ofs_tmp = tcg_const_i32(ofs);
-    len_tmp = tcg_const_i32(len);
-    gen_helper_sym_extract_i32(
-        tcgv_i32_expr(ret), arg, tcgv_i32_expr(arg), ofs_tmp, len_tmp);
-    tcg_temp_free_i32(ofs_tmp);
-    tcg_temp_free_i32(len_tmp);
-
     /* Canonicalize certain special cases, even if extract is supported.  */
     if (ofs + len == 32) {
         tcg_gen_shri_i32(ret, arg, 32 - len);
@@ -860,6 +852,13 @@ void tcg_gen_extract_i32(TCGv_i32 ret, TCGv_i32 arg,
 
     if (TCG_TARGET_HAS_extract_i32
         && TCG_TARGET_extract_i32_valid(ofs, len)) {
+        TCGv_i32 ofs_tmp, len_tmp;
+        ofs_tmp = tcg_const_i32(ofs);
+        len_tmp = tcg_const_i32(len);
+        gen_helper_sym_extract_i32(
+            tcgv_i32_expr(ret), arg, tcgv_i32_expr(arg), ofs_tmp, len_tmp);
+        tcg_temp_free_i32(ofs_tmp);
+        tcg_temp_free_i32(len_tmp);
         tcg_gen_op4ii_i32(INDEX_op_extract_i32, ret, arg, ofs, len);
         return;
     }
@@ -923,6 +922,13 @@ void tcg_gen_sextract_i32(TCGv_i32 ret, TCGv_i32 arg,
 
     if (TCG_TARGET_HAS_sextract_i32
         && TCG_TARGET_extract_i32_valid(ofs, len)) {
+        TCGv_i32 ofs_tmp, len_tmp;
+        ofs_tmp = tcg_const_i32(ofs);
+        len_tmp = tcg_const_i32(len);
+        gen_helper_sym_sextract_i32(
+            tcgv_i32_expr(ret), arg, tcgv_i32_expr(arg), ofs_tmp, len_tmp);
+        tcg_temp_free_i32(ofs_tmp);
+        tcg_temp_free_i32(len_tmp);
         tcg_gen_op4ii_i32(INDEX_op_sextract_i32, ret, arg, ofs, len);
         return;
     }
@@ -2400,14 +2406,6 @@ void tcg_gen_extract_i64(TCGv_i64 ret, TCGv_i64 arg,
     tcg_debug_assert(len <= 64);
     tcg_debug_assert(ofs + len <= 64);
 
-    TCGv_i64 ofs_tmp, len_tmp;
-    ofs_tmp = tcg_const_i64(ofs);
-    len_tmp = tcg_const_i64(len);
-    gen_helper_sym_extract_i64(
-        tcgv_i64_expr(ret), arg, tcgv_i64_expr(arg), ofs_tmp, len_tmp);
-    tcg_temp_free_i64(ofs_tmp);
-    tcg_temp_free_i64(len_tmp);
-
     /* Canonicalize certain special cases, even if extract is supported.  */
     if (ofs + len == 64) {
         tcg_gen_shri_i64(ret, arg, 64 - len);
@@ -2437,6 +2435,13 @@ void tcg_gen_extract_i64(TCGv_i64 ret, TCGv_i64 arg,
 
     if (TCG_TARGET_HAS_extract_i64
         && TCG_TARGET_extract_i64_valid(ofs, len)) {
+        TCGv_i64 ofs_tmp, len_tmp;
+        ofs_tmp = tcg_const_i64(ofs);
+        len_tmp = tcg_const_i64(len);
+        gen_helper_sym_extract_i64(
+            tcgv_i64_expr(ret), arg, tcgv_i64_expr(arg), ofs_tmp, len_tmp);
+        tcg_temp_free_i64(ofs_tmp);
+        tcg_temp_free_i64(len_tmp);
         tcg_gen_op4ii_i64(INDEX_op_extract_i64, ret, arg, ofs, len);
         return;
     }
@@ -2543,6 +2548,13 @@ void tcg_gen_sextract_i64(TCGv_i64 ret, TCGv_i64 arg,
 
     if (TCG_TARGET_HAS_sextract_i64
         && TCG_TARGET_extract_i64_valid(ofs, len)) {
+        TCGv_i64 ofs_tmp, len_tmp;
+        ofs_tmp = tcg_const_i64(ofs);
+        len_tmp = tcg_const_i64(len);
+        gen_helper_sym_extract_i64(
+            tcgv_i64_expr(ret), arg, tcgv_i64_expr(arg), ofs_tmp, len_tmp);
+        tcg_temp_free_i64(ofs_tmp);
+        tcg_temp_free_i64(len_tmp);
         tcg_gen_op4ii_i64(INDEX_op_sextract_i64, ret, arg, ofs, len);
         return;
     }
