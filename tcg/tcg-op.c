@@ -380,6 +380,13 @@ void tcg_gen_setcond_i32(TCGCond cond, TCGv_i32 ret,
         tcg_gen_movi_i32(ret, 0);
     } else {
         tcg_gen_op4i_i32(INDEX_op_setcond_i32, ret, arg1, arg2, cond);
+        TCGv_i32 cond_temp = tcg_const_i32(cond);
+        gen_helper_sym_setcond_i32(
+            tcgv_i32_expr(ret),
+            arg1, tcgv_i32_expr(arg1),
+            arg2, tcgv_i32_expr(arg2),
+            cond_temp, ret);
+        tcg_temp_free_i32(cond_temp);
     }
 }
 
@@ -1683,6 +1690,14 @@ void tcg_gen_setcond_i64(TCGCond cond, TCGv_i64 ret,
         } else {
             tcg_gen_op4i_i64(INDEX_op_setcond_i64, ret, arg1, arg2, cond);
         }
+
+        TCGv_i32 cond_temp = tcg_const_i32(cond);
+        gen_helper_sym_setcond_i64(
+            tcgv_i64_expr(ret),
+            arg1, tcgv_i64_expr(arg1),
+            arg2, tcgv_i64_expr(arg2),
+            cond_temp, ret);
+        tcg_temp_free_i32(cond_temp);
     }
 }
 

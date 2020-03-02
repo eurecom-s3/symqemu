@@ -61,6 +61,10 @@ DEF_HELPER_FLAGS_5(sym_extract2_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr
 DEF_HELPER_FLAGS_4(sym_sextract_i32, TCG_CALL_NO_RWG_SE, ptr, i32, ptr, i32, i32)
 DEF_HELPER_FLAGS_4(sym_sextract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64)
 
+/* Conditionals */
+DEF_HELPER_FLAGS_6(sym_setcond_i32, TCG_CALL_NO_RWG_SE, ptr, i32, ptr, i32, ptr, s32, i32)
+DEF_HELPER_FLAGS_6(sym_setcond_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr, s32, i64)
+
 /* TODO In theory, host and guest address spaces could overlap. How do we
  * distinguish between the two? */
 
