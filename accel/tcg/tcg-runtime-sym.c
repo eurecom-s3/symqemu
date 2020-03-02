@@ -228,6 +228,12 @@ void *HELPER(sym_zext_or_trunc)(void *expr, uint64_t target_length)
     return NOT_IMPLEMENTED;
 }
 
+void *HELPER(sym_bswap)(void *expr, uint64_t length)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
 void *HELPER(sym_load_guest)(target_ulong addr, void *addr_expr, uint64_t length)
 {
     /* TODO */
