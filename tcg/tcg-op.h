@@ -29,6 +29,11 @@
 #include "exec/helper-proto.h"
 #include "exec/helper-gen.h"
 
+/* Slightly questionable macros to save typing and for (arguably) clearer code:
+ * SYM_HELPER_BINARY_32(add) generates a helper call to "sym_add_i32", expecting
+ * TCGv_i32 variables ret, arg1 and arg2 to exist in the environment.
+ * SYM_HELPER_BINARY_64 generates the analogous code for 64-bit helpers. */
+
 #define SYM_HELPER_BINARY_32(name)                                              \
     gen_helper_sym_ ## name ## _i32(tcgv_i32_expr(ret),                         \
                            arg1, tcgv_i32_expr(arg1),                           \

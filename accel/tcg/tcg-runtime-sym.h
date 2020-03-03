@@ -1,4 +1,22 @@
-#define SYM_HELPER_BINARY(name)                                                \
+/*
+ * Symbolic helpers
+ *
+ * The helpers in this file perform symbolic computations corresponding to TCG's
+ * instruction set. The TCG code-generation functions in tcg-op.h emit calls to
+ * the helpers where necessary, and the helpers call into the symbolic run-time
+ * library to create expressions or trigger the solver.
+ *
+ * For now, we assume a 64-bit host, running a 32-bit or 64-bit guest
+ * architecture. This saves us from having to implement symbolic handling for
+ * the special cases that arise when a 32-bit machine needs to deal with 64-bit
+ * values; we don't expect anyone to run on a 32-bit host anyway.
+ */
+
+/* A macro to save some typing: SYM_HELPER_BINARY(foo) creates two helpers
+ * "sym_foo_i32" and "sym_foo_i64", each taking two concrete arguments along
+ * with the corresponding symbolic expressions, and returning a symbolic
+ * expression. This covers a lot of instructions (e.g., add, sub, mul, div). */
+#define SYM_HELPER_BINARY(name)                                         \
   DEF_HELPER_FLAGS_4(sym_##name##_i32, TCG_CALL_NO_RWG_SE, ptr,                \
                      i32, ptr, i32, ptr)                                       \
   DEF_HELPER_FLAGS_4(sym_##name##_i64, TCG_CALL_NO_RWG_SE, ptr,                \
@@ -65,11 +83,12 @@ DEF_HELPER_FLAGS_4(sym_sextract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64
 DEF_HELPER_FLAGS_6(sym_setcond_i32, TCG_CALL_NO_RWG, ptr, i32, ptr, i32, ptr, s32, i32)
 DEF_HELPER_FLAGS_6(sym_setcond_i64, TCG_CALL_NO_RWG, ptr, i64, ptr, i64, ptr, s32, i64)
 
-/* TODO In theory, host and guest address spaces could overlap. How do we
- * distinguish between the two? */
+/* TODO In theory, host and guest address spaces could overlap, as well as
+ * different guest address spaces. How do we distinguish between them? */
 
 /* TODO call, brcond_i32/i64, neg, not, clz, ctz, deposit; immediate versions of
- * all instrumented instructions */
+ * all instrumented instructions; multi-word arithmetic */
 
 /* The extrl and extrh instructions aren't emitted on 64-bit hosts. If we ever
- * extend support to other host architectures, we need to implement them. */
+ * extend support to other host architectures, we need to implement them. The
+ * same applies to brcond2_i32 and setcond2_i32. */
