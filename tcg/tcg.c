@@ -1914,9 +1914,11 @@ static char *tcg_get_arg_str_ptr(TCGContext *s, char *buf, int buf_size,
     if (ts->temp_global) {
         pstrcpy(buf, buf_size, ts->name);
     } else if (ts->temp_local) {
-        snprintf(buf, buf_size, "loc%d", idx - s->nb_globals);
+        snprintf(buf, buf_size, "loc%d%s", (idx - s->nb_globals) / 2,
+                 ts->symbolic_expression ? "_expr" : "");
     } else {
-        snprintf(buf, buf_size, "tmp%d", idx - s->nb_globals);
+        snprintf(buf, buf_size, "tmp%d%s", (idx - s->nb_globals) / 2,
+                 ts->symbolic_expression ? "_expr" : "");
     }
     return buf;
 }
