@@ -73,6 +73,9 @@ DEF_HELPER_FLAGS_5(sym_store_host_i32, TCG_CALL_NO_RWG, void, i32, ptr, ptr,
 DEF_HELPER_FLAGS_5(sym_store_host_i64, TCG_CALL_NO_RWG, void, i64, ptr, ptr,
                    i64, i64)
 
+/* TODO In theory, host and guest address spaces could overlap, as well as
+ * different guest address spaces. How do we distinguish between them? */
+
 /* Bit fields */
 DEF_HELPER_FLAGS_4(sym_extract_i32, TCG_CALL_NO_RWG_SE, ptr, i32, ptr, i32, i32)
 DEF_HELPER_FLAGS_4(sym_extract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64)
@@ -86,9 +89,6 @@ DEF_HELPER_FLAGS_6(sym_deposit_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr,
 /* Conditionals */
 DEF_HELPER_FLAGS_6(sym_setcond_i32, TCG_CALL_NO_RWG, ptr, i32, ptr, i32, ptr, s32, i32)
 DEF_HELPER_FLAGS_6(sym_setcond_i64, TCG_CALL_NO_RWG, ptr, i64, ptr, i64, ptr, s32, i64)
-
-/* TODO In theory, host and guest address spaces could overlap, as well as
- * different guest address spaces. How do we distinguish between them? */
 
 /* TODO clz, ctz; immediate versions of all instrumented instructions;
  * multi-word arithmetic; vector operations. */

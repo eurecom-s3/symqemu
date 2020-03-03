@@ -815,7 +815,7 @@ void tcg_gen_deposit_z_i32(TCGv_i32 ret, TCGv_i32 arg,
         ofs_tmp = tcg_const_i32(ofs);
         len_tmp = tcg_const_i32(len);
         gen_helper_sym_deposit_i32(tcgv_i32_expr(ret),
-                                   zero, (TCGv_ptr)zero,
+                                   zero, tcgv_i32_expr(zero),
                                    arg, tcgv_i32_expr(arg),
                                    ofs_tmp, len_tmp);
         tcg_temp_free_i32(ofs_tmp);
@@ -1048,12 +1048,23 @@ void tcg_gen_movcond_i32(TCGCond cond, TCGv_i32 ret, TCGv_i32 c1,
         tcg_gen_setcond_i32(cond, cond_result_temp, c1, c2);
         tcg_temp_free_i32(cond_result_temp);
 
-        tcg_gen_op6i_i32(INDEX_op_movcond_i32,
-                         (TCGv_i32)tcgv_i32_expr(ret),
-                         c1, c2,
-                         (TCGv_i32)tcgv_i32_expr(v1),
-                         (TCGv_i32)tcgv_i32_expr(v2),
+        /* Perform a movcond on the symbolic expressions, using the same
+         * condition (but extended to 64 bits) */
+        TCGv_i64 c1_tmp = tcg_temp_new_i64();
+        TCGv_i64 c2_tmp = tcg_temp_new_i64();
+        tcg_gen_op2(INDEX_op_extu_i32_i64,
+                    tcgv_i64_arg(c1_tmp), tcgv_i32_arg(c1));
+        tcg_gen_op2(INDEX_op_extu_i32_i64,
+                    tcgv_i64_arg(c2_tmp), tcgv_i32_arg(c2));
+        tcg_gen_op6i_i64(INDEX_op_movcond_i64,
+                         tcgv_i32_expr_num(ret),
+                         c1_tmp, c2_tmp,
+                         tcgv_i32_expr_num(v1),
+                         tcgv_i32_expr_num(v2),
                          cond);
+        tcg_temp_free_i64(c1_tmp);
+        tcg_temp_free_i64(c2_tmp);
+
         tcg_gen_op6i_i32(INDEX_op_movcond_i32, ret, c1, c2, v1, v2, cond);
     } else {
         TCGv_i32 t0 = tcg_temp_new_i32();
@@ -2407,7 +2418,7 @@ void tcg_gen_deposit_z_i64(TCGv_i64 ret, TCGv_i64 arg,
         ofs_tmp = tcg_const_i64(ofs);
         len_tmp = tcg_const_i64(len);
         gen_helper_sym_deposit_i64(tcgv_i64_expr(ret),
-                                   zero, (TCGv_ptr)zero,
+                                   zero, tcgv_i64_expr(zero),
                                    arg, tcgv_i64_expr(arg),
                                    ofs_tmp, len_tmp);
         tcg_temp_free_i64(ofs_tmp);
@@ -2767,10 +2778,10 @@ void tcg_gen_movcond_i64(TCGCond cond, TCGv_i64 ret, TCGv_i64 c1,
         tcg_temp_free_i64(cond_result_temp);
 
         tcg_gen_op6i_i64(INDEX_op_movcond_i64,
-                         (TCGv_i64)tcgv_i64_expr(ret),
+                         tcgv_i64_expr_num(ret),
                          c1, c2,
-                         (TCGv_i64)tcgv_i64_expr(v1),
-                         (TCGv_i64)tcgv_i64_expr(v2),
+                         tcgv_i64_expr_num(v1),
+                         tcgv_i64_expr_num(v2),
                          cond);
         tcg_gen_op6i_i64(INDEX_op_movcond_i64, ret, c1, c2, v1, v2, cond);
     } else {
