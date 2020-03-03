@@ -754,6 +754,15 @@ void tcg_gen_deposit_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2,
         return;
     }
     if (TCG_TARGET_HAS_deposit_i32 && TCG_TARGET_deposit_i32_valid(ofs, len)) {
+        TCGv_i32 ofs_tmp, len_tmp;
+        ofs_tmp = tcg_const_i32(ofs);
+        len_tmp = tcg_const_i32(len);
+        gen_helper_sym_deposit_i32(tcgv_i32_expr(ret),
+                                   arg1, tcgv_i32_expr(arg1),
+                                   arg2, tcgv_i32_expr(arg2),
+                                   ofs_tmp, len_tmp);
+        tcg_temp_free_i32(ofs_tmp);
+        tcg_temp_free_i32(len_tmp);
         tcg_gen_op5ii_i32(INDEX_op_deposit_i32, ret, arg1, arg2, ofs, len);
         return;
     }
@@ -801,6 +810,17 @@ void tcg_gen_deposit_z_i32(TCGv_i32 ret, TCGv_i32 arg,
     } else if (TCG_TARGET_HAS_deposit_i32
                && TCG_TARGET_deposit_i32_valid(ofs, len)) {
         TCGv_i32 zero = tcg_const_i32(0);
+
+        TCGv_i32 ofs_tmp, len_tmp;
+        ofs_tmp = tcg_const_i32(ofs);
+        len_tmp = tcg_const_i32(len);
+        gen_helper_sym_deposit_i32(tcgv_i32_expr(ret),
+                                   zero, (TCGv_ptr)zero,
+                                   arg, tcgv_i32_expr(arg),
+                                   ofs_tmp, len_tmp);
+        tcg_temp_free_i32(ofs_tmp);
+        tcg_temp_free_i32(len_tmp);
+
         tcg_gen_op5ii_i32(INDEX_op_deposit_i32, ret, zero, arg, ofs, len);
         tcg_temp_free_i32(zero);
     } else {
@@ -2311,6 +2331,15 @@ void tcg_gen_deposit_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2,
         return;
     }
     if (TCG_TARGET_HAS_deposit_i64 && TCG_TARGET_deposit_i64_valid(ofs, len)) {
+        TCGv_i64 ofs_tmp, len_tmp;
+        ofs_tmp = tcg_const_i64(ofs);
+        len_tmp = tcg_const_i64(len);
+        gen_helper_sym_deposit_i64(tcgv_i64_expr(ret),
+                                   arg1, tcgv_i64_expr(arg1),
+                                   arg2, tcgv_i64_expr(arg2),
+                                   ofs_tmp, len_tmp);
+        tcg_temp_free_i64(ofs_tmp);
+        tcg_temp_free_i64(len_tmp);
         tcg_gen_op5ii_i64(INDEX_op_deposit_i64, ret, arg1, arg2, ofs, len);
         return;
     }
@@ -2373,6 +2402,17 @@ void tcg_gen_deposit_z_i64(TCGv_i64 ret, TCGv_i64 arg,
     } else if (TCG_TARGET_HAS_deposit_i64
                && TCG_TARGET_deposit_i64_valid(ofs, len)) {
         TCGv_i64 zero = tcg_const_i64(0);
+
+        TCGv_i64 ofs_tmp, len_tmp;
+        ofs_tmp = tcg_const_i64(ofs);
+        len_tmp = tcg_const_i64(len);
+        gen_helper_sym_deposit_i64(tcgv_i64_expr(ret),
+                                   zero, (TCGv_ptr)zero,
+                                   arg, tcgv_i64_expr(arg),
+                                   ofs_tmp, len_tmp);
+        tcg_temp_free_i64(ofs_tmp);
+        tcg_temp_free_i64(len_tmp);
+
         tcg_gen_op5ii_i64(INDEX_op_deposit_i64, ret, zero, arg, ofs, len);
         tcg_temp_free_i64(zero);
     } else {

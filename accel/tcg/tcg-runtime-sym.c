@@ -402,6 +402,22 @@ void *HELPER(sym_sextract_i64)(uint64_t arg, void *arg_expr,
     return NOT_IMPLEMENTED;
 }
 
+void *HELPER(sym_deposit_i32)(uint32_t arg1, void *arg1_expr,
+                              uint32_t arg2, void *arg2_expr,
+                              uint32_t ofs, uint32_t len)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
+void *HELPER(sym_deposit_i64)(uint64_t arg1, void *arg1_expr,
+                              uint64_t arg2, void *arg2_expr,
+                              uint64_t ofs, uint64_t len)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
 void *HELPER(sym_setcond_i32)(uint32_t arg1, void *arg1_expr,
                               uint32_t arg2, void *arg2_expr,
                               int32_t cond, uint32_t result)

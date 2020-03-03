@@ -80,6 +80,8 @@ DEF_HELPER_FLAGS_5(sym_extract2_i32, TCG_CALL_NO_RWG_SE, ptr, i32, ptr, i32, ptr
 DEF_HELPER_FLAGS_5(sym_extract2_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr, i64)
 DEF_HELPER_FLAGS_4(sym_sextract_i32, TCG_CALL_NO_RWG_SE, ptr, i32, ptr, i32, i32)
 DEF_HELPER_FLAGS_4(sym_sextract_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, i64)
+DEF_HELPER_FLAGS_6(sym_deposit_i32, TCG_CALL_NO_RWG_SE, ptr, i32, ptr, i32, ptr, i32, i32)
+DEF_HELPER_FLAGS_6(sym_deposit_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr, i64, i64)
 
 /* Conditionals */
 DEF_HELPER_FLAGS_6(sym_setcond_i32, TCG_CALL_NO_RWG, ptr, i32, ptr, i32, ptr, s32, i32)
@@ -88,7 +90,7 @@ DEF_HELPER_FLAGS_6(sym_setcond_i64, TCG_CALL_NO_RWG, ptr, i64, ptr, i64, ptr, s3
 /* TODO In theory, host and guest address spaces could overlap, as well as
  * different guest address spaces. How do we distinguish between them? */
 
-/* TODO clz, ctz, deposit; immediate versions of all instrumented instructions;
+/* TODO clz, ctz; immediate versions of all instrumented instructions;
  * multi-word arithmetic; vector operations. */
 
 /* The extrl and extrh instructions aren't emitted on 64-bit hosts. If we ever
