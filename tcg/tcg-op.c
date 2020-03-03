@@ -2908,6 +2908,10 @@ void tcg_gen_extu_i32_i64(TCGv_i64 ret, TCGv_i32 arg)
         tcg_gen_mov_i32(TCGV_LOW(ret), arg);
         tcg_gen_movi_i32(TCGV_HIGH(ret), 0);
     } else {
+        TCGv_i64 target_len = tcg_const_i64(8);
+        gen_helper_sym_zext_or_trunc(
+            tcgv_i64_expr(ret), tcgv_i32_expr(arg), target_len);
+        tcg_temp_free_i64(target_len);
         tcg_gen_op2(INDEX_op_extu_i32_i64,
                     tcgv_i64_arg(ret), tcgv_i32_arg(arg));
     }
