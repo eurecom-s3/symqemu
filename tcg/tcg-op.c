@@ -355,6 +355,11 @@ void tcg_gen_brcond_i32(TCGCond cond, TCGv_i32 arg1, TCGv_i32 arg2, TCGLabel *l)
     if (cond == TCG_COND_ALWAYS) {
         tcg_gen_br(l);
     } else if (cond != TCG_COND_NEVER) {
+        /* Generate a setcond for effects in the symbolic backend */
+        TCGv_i32 cond_result_temp = tcg_temp_new_i32();
+        tcg_gen_setcond_i32(cond, cond_result_temp, arg1, arg2);
+        tcg_temp_free_i32(cond_result_temp);
+
         l->refs++;
         tcg_gen_op4ii_i32(INDEX_op_brcond_i32, arg1, arg2, cond, label_arg(l));
     }
@@ -1018,11 +1023,11 @@ void tcg_gen_movcond_i32(TCGCond cond, TCGv_i32 ret, TCGv_i32 c1,
     } else if (cond == TCG_COND_NEVER) {
         tcg_gen_mov_i32(ret, v2);
     } else if (TCG_TARGET_HAS_movcond_i32) {
+        /* Generate a setcond for effects in the symbolic backend */
         TCGv_i32 cond_result_temp = tcg_temp_new_i32();
-        TCGv_i32 cond_temp = tcg_const_i32(cond);
         tcg_gen_setcond_i32(cond, cond_result_temp, c1, c2);
         tcg_temp_free_i32(cond_result_temp);
-        tcg_temp_free_i32(cond_temp);
+
         tcg_gen_op6i_i32(INDEX_op_movcond_i32,
                          (TCGv_i32)tcgv_i32_expr(ret),
                          c1, c2,
@@ -1662,6 +1667,11 @@ void tcg_gen_brcond_i64(TCGCond cond, TCGv_i64 arg1, TCGv_i64 arg2, TCGLabel *l)
     if (cond == TCG_COND_ALWAYS) {
         tcg_gen_br(l);
     } else if (cond != TCG_COND_NEVER) {
+        /* Generate a setcond for effects in the symbolic backend */
+        TCGv_i64 cond_result_temp = tcg_temp_new_i64();
+        tcg_gen_setcond_i64(cond, cond_result_temp, arg1, arg2);
+        tcg_temp_free_i64(cond_result_temp);
+
         l->refs++;
         if (TCG_TARGET_REG_BITS == 32) {
             tcg_gen_op6ii_i32(INDEX_op_brcond2_i32, TCGV_LOW(arg1),
@@ -2711,11 +2721,11 @@ void tcg_gen_movcond_i64(TCGCond cond, TCGv_i64 ret, TCGv_i64 c1,
         tcg_temp_free_i32(t0);
         tcg_temp_free_i32(t1);
     } else if (TCG_TARGET_HAS_movcond_i64) {
+        /* Generate a setcond for effects in the symbolic backend */
         TCGv_i64 cond_result_temp = tcg_temp_new_i64();
-        TCGv_i32 cond_temp = tcg_const_i32(cond);
         tcg_gen_setcond_i64(cond, cond_result_temp, c1, c2);
         tcg_temp_free_i64(cond_result_temp);
-        tcg_temp_free_i32(cond_temp);
+
         tcg_gen_op6i_i64(INDEX_op_movcond_i64,
                          (TCGv_i64)tcgv_i64_expr(ret),
                          c1, c2,
