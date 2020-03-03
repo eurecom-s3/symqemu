@@ -1719,6 +1719,12 @@ void tcg_gen_callN(void *func, TCGTemp *ret, int nargs, TCGTemp **args)
     TCGHelperInfo *info;
     TCGOp *op;
 
+    if (ret != NULL && ret->symbolic_expression == 0) {
+        /* This is an unhandled helper; we concretize, i.e., the expression for
+         * the result is NULL */
+        tcg_gen_op2i_i64(INDEX_op_movi_i64, temp_tcgv_i64(temp_expr(ret)), 0);
+    }
+
     info = g_hash_table_lookup(helper_table, (gpointer)func);
     flags = info->flags;
     sizemask = info->sizemask;
