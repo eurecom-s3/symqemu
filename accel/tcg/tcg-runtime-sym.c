@@ -104,6 +104,12 @@ void *HELPER(sym_remu_i64)(uint64_t arg1, void *arg1_expr,
     return NOT_IMPLEMENTED;
 }
 
+void *HELPER(sym_neg)(void *expr)
+{
+    /* TODO */
+    return NOT_IMPLEMENTED;
+}
+
 void *HELPER(sym_and_i64)(uint64_t arg1, void *arg1_expr,
                           uint64_t arg2, void *arg2_expr)
 {

@@ -470,6 +470,7 @@ static inline void tcg_gen_mul_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
 
 static inline void tcg_gen_neg_i32(TCGv_i32 ret, TCGv_i32 arg)
 {
+    gen_helper_sym_neg(tcgv_i32_expr(ret), tcgv_i32_expr(arg));
     if (TCG_TARGET_HAS_neg_i32) {
         tcg_gen_op2_i32(INDEX_op_neg_i32, ret, arg);
     } else {
@@ -752,6 +753,7 @@ void tcg_gen_mul_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2);
 
 static inline void tcg_gen_neg_i64(TCGv_i64 ret, TCGv_i64 arg)
 {
+    gen_helper_sym_neg(tcgv_i64_expr(ret), tcgv_i64_expr(arg));
     if (TCG_TARGET_HAS_neg_i64) {
         tcg_gen_op2_i64(INDEX_op_neg_i64, ret, arg);
     } else {
