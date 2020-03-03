@@ -90,8 +90,8 @@ DEF_HELPER_FLAGS_6(sym_deposit_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr,
 DEF_HELPER_FLAGS_6(sym_setcond_i32, TCG_CALL_NO_RWG, ptr, i32, ptr, i32, ptr, s32, i32)
 DEF_HELPER_FLAGS_6(sym_setcond_i64, TCG_CALL_NO_RWG, ptr, i64, ptr, i64, ptr, s32, i64)
 
-/* TODO clz, ctz; immediate versions of all instrumented instructions;
- * multi-word arithmetic; vector operations. */
+/* TODO clz, ctz, clrsb, ctpop; multi-word arithmetic; vector operations;
+ * helpers for atomic operations (?) */
 
 /* The extrl and extrh instructions aren't emitted on 64-bit hosts. If we ever
  * extend support to other host architectures, we need to implement them. The
