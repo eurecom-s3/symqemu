@@ -48,6 +48,7 @@ SYM_HELPER_BINARY(eqv)
 SYM_HELPER_BINARY(nand)
 SYM_HELPER_BINARY(nor)
 SYM_HELPER_BINARY(orc)
+DEF_HELPER_FLAGS_1(sym_not, TCG_CALL_NO_RWG_SE, ptr, ptr)
 
 #undef SYM_HELPER_BINARY
 
@@ -87,8 +88,8 @@ DEF_HELPER_FLAGS_6(sym_setcond_i64, TCG_CALL_NO_RWG, ptr, i64, ptr, i64, ptr, s3
 /* TODO In theory, host and guest address spaces could overlap, as well as
  * different guest address spaces. How do we distinguish between them? */
 
-/* TODO call, brcond_i32/i64, not, clz, ctz, deposit; immediate versions of
- * all instrumented instructions; multi-word arithmetic; vector operations. */
+/* TODO call, brcond_i32/i64, clz, ctz, deposit; immediate versions of all
+ * instrumented instructions; multi-word arithmetic; vector operations. */
 
 /* The extrl and extrh instructions aren't emitted on 64-bit hosts. If we ever
  * extend support to other host architectures, we need to implement them. The
