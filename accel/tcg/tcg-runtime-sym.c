@@ -3,150 +3,72 @@
 #include "exec/helper-proto.h"
 #include "qemu/qemu-print.h"
 
-/* This should make it easy to spot bogus expressions in the debugger. */
-#define NOT_IMPLEMENTED ((void*)0xAAAAAAAAAAAAAAAA)
+/* Include the symbolic backend, using void* as expression type. */
 
-void *HELPER(sym_add_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
+#define SymExpr void*
+#include "RuntimeCommon.h"
 
-void *HELPER(sym_add_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
+/* Returning NULL for unimplemented functions is equivalent to concretizing and
+ * allows us to run without all symbolic handlers fully implemented. */
 
-void *HELPER(sym_sub_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
+#define NOT_IMPLEMENTED NULL
 
-void *HELPER(sym_sub_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
+/* To save implementation effort, the macro below defines handlers following the
+ * standard scheme of binary operations:
+ *
+ * 1. Return NULL if both operands are concrete.
+ * 2. Create any missing expression.
+ * 3. Create an expression representing the operation.
+ *
+ * For example, DEF_HELPER_BINARY(divu, unsigned_div) defines helpers
+ * "helper_sym_divu_i32/i64" backed by the run-time function
+ * "_sym_build_unsigned_div". */
 
-void *HELPER(sym_mul_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
+/* TODO Probably we only need a single helper per operation, independent of the
+ * argument width. This would, however, complicate the instrumentation because
+ * we would need to extend the concrete values in the 32-bit case before calling
+ * the helper. */
 
-void *HELPER(sym_mul_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
+#define BINARY_HELPER_BODY(symcc_name)                                         \
+    if (arg1_expr == NULL && arg2_expr == NULL) {                              \
+        return NULL;                                                           \
+    }                                                                          \
+                                                                               \
+    if (arg1_expr == NULL) {                                                   \
+        arg1_expr = _sym_build_integer(arg1, _sym_bits_helper(arg2_expr));     \
+    }                                                                          \
+                                                                               \
+    if (arg2_expr == NULL) {                                                   \
+        arg2_expr = _sym_build_integer(arg2, _sym_bits_helper(arg1_expr));     \
+    }                                                                          \
+                                                                               \
+    return _sym_build_##symcc_name(arg1_expr, arg2_expr);
 
-void *HELPER(sym_div_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
+#define DEF_HELPER_BINARY(qemu_name, symcc_name)                               \
+    void *HELPER(sym_##qemu_name##_i64)(uint64_t arg1, void *arg1_expr,        \
+                                        uint64_t arg2, void *arg2_expr) {      \
+        BINARY_HELPER_BODY(symcc_name)                                         \
+    }                                                                          \
+                                                                               \
+    void *HELPER(sym_##qemu_name##_i32)(uint32_t arg1, void *arg1_expr,        \
+                                        uint32_t arg2, void *arg2_expr) {      \
+        BINARY_HELPER_BODY(symcc_name)                                         \
+    }
 
-void *HELPER(sym_div_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
+/* The binary helpers */
 
-void *HELPER(sym_divu_i32)(uint32_t arg1, void *arg1_expr,
-                           uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_divu_i64)(uint64_t arg1, void *arg1_expr,
-                           uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_rem_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_rem_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_remu_i32)(uint32_t arg1, void *arg1_expr,
-                           uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_remu_i64)(uint64_t arg1, void *arg1_expr,
-                           uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
+DEF_HELPER_BINARY(add, add)
+DEF_HELPER_BINARY(sub, sub)
+DEF_HELPER_BINARY(mul, mul)
+DEF_HELPER_BINARY(div, signed_div)
+DEF_HELPER_BINARY(divu, unsigned_div)
+DEF_HELPER_BINARY(rem, signed_rem)
+DEF_HELPER_BINARY(remu, unsigned_rem)
+DEF_HELPER_BINARY(and, and)
+DEF_HELPER_BINARY(or, or)
+DEF_HELPER_BINARY(xor, xor)
 
 void *HELPER(sym_neg)(void *expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_and_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_and_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_or_i64)(uint64_t arg1, void *arg1_expr,
-                         uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_or_i32)(uint32_t arg1, void *arg1_expr,
-                         uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_xor_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_xor_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
 {
     /* TODO */
     return NOT_IMPLEMENTED;
