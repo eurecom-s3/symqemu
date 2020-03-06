@@ -45,6 +45,9 @@
 #include "cpu_loop-common.h"
 #include "crypto/init.h"
 
+#define SymExpr void*
+#include "RuntimeCommon.h"
+
 char *exec_path;
 
 int singlestep;
@@ -640,6 +643,9 @@ int main(int argc, char **argv, char **envp)
         exit(1);
     }
     trace_init_file(trace_file);
+
+    /* Initialize the symbolic backend */
+    _sym_initialize();
 
     /* Zero out regs */
     memset(regs, 0, sizeof(struct target_pt_regs));
