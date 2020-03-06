@@ -7215,6 +7215,10 @@ static int host_to_target_cpu_mask(const unsigned long *host_mask,
     return 0;
 }
 
+/* For simplicity, we declare the symbolic version of the read function here; it
+ * is defined in the C++ internals of the symbolic backend. */
+ssize_t read_symbolized(int fildes, void *buf, size_t nbyte);
+
 /* This is an internal helper for do_syscall so that it is easier
  * to have a single return point, so that actions, such as logging
  * of syscall results, can be performed.
@@ -7283,7 +7287,14 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         } else {
             if (!(p = lock_user(VERIFY_WRITE, arg2, arg3, 0)))
                 return -TARGET_EFAULT;
-            ret = get_errno(safe_read(arg1, p, arg3));
+
+            /* TODO respect the configured input file instead of hard-coding
+             * standard input */
+            if (arg1 != 0)
+                ret = get_errno(safe_read(arg1, p, arg3));
+            else
+                ret = get_errno(read_symbolized(0, p, arg3));
+
             if (ret >= 0 &&
                 fd_trans_host_to_target_data(arg1)) {
                 ret = fd_trans_host_to_target_data(arg1)(p, ret);
