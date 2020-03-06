@@ -178,44 +178,57 @@ void *HELPER(sym_bswap)(void *expr, uint64_t length)
 
 void *HELPER(sym_load_guest)(target_ulong addr, void *addr_expr, uint64_t length)
 {
-    /* TODO */
     /* TODO try an alternative address; cast the address to uint64_t */
-    return NOT_IMPLEMENTED;
+    return _sym_read_memory((uint8_t*)addr, length, true);
 }
 
 void HELPER(sym_store_guest_i32)(uint32_t value, void *value_expr,
                                  target_ulong addr, void *addr_expr,
                                  uint64_t length)
 {
-    /* TODO */
+    /* TODO try alternative address */
+
+    if (value_expr == NULL)
+        value_expr = _sym_build_integer(value, 32);
+
+    _sym_write_memory((uint8_t*)addr, length, value_expr, true);
 }
 
 void HELPER(sym_store_guest_i64)(uint64_t value, void *value_expr,
                                  target_ulong addr, void *addr_expr,
                                  uint64_t length)
 {
-    /* TODO */
+    /* TODO try alternative address */
+
+    if (value_expr == NULL)
+        value_expr = _sym_build_integer(value, 64);
+
+    _sym_write_memory((uint8_t*)addr, length, value_expr, true);
 }
 
 void *HELPER(sym_load_host)(void *addr, uint64_t offset, uint64_t length)
 {
-    /* TODO use addr + offset for the address and NULL for the address
-     * expression */
-    return NOT_IMPLEMENTED;
+    return _sym_read_memory((uint8_t*)addr + offset, length, true);
 }
 
 void HELPER(sym_store_host_i32)(uint32_t value, void *value_expr,
                                 void *addr,
                                 uint64_t offset, uint64_t length)
 {
-    /* TODO */
+    if (value_expr == NULL)
+        value_expr = _sym_build_integer(value, 32);
+
+    _sym_write_memory((uint8_t*)addr + offset, length, value_expr, true);
 }
 
 void HELPER(sym_store_host_i64)(uint64_t value, void *value_expr,
                                 void *addr,
                                 uint64_t offset, uint64_t length)
 {
-    /* TODO */
+    if (value_expr == NULL)
+        value_expr = _sym_build_integer(value, 64);
+
+    _sym_write_memory((uint8_t*)addr + offset, length, value_expr, true);
 }
 
 void *HELPER(sym_shift_right_i32)(uint32_t arg1, void *arg1_expr,
