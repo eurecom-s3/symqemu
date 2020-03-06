@@ -2,6 +2,7 @@
 #include "cpu.h"
 #include "exec/helper-proto.h"
 #include "qemu/qemu-print.h"
+#include "tcg.h"
 
 /* Include the symbolic backend, using void* as expression type. */
 
@@ -365,14 +366,58 @@ void *HELPER(sym_setcond_i32)(uint32_t arg1, void *arg1_expr,
                               uint32_t arg2, void *arg2_expr,
                               int32_t cond, uint32_t result)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    /* The 64-bit version is identical except for the wider arguments, so we
+     * just delegate. (Doing the same in TCG would be tedious because we would
+     * have to expand the arguments "manually".) */
+    return helper_sym_setcond_i64(
+        arg1, arg1_expr, arg2, arg2_expr, cond, result);
 }
 
 void *HELPER(sym_setcond_i64)(uint64_t arg1, void *arg1_expr,
                               uint64_t arg2, void *arg2_expr,
                               int32_t cond, uint64_t result)
 {
+    BINARY_HELPER_ENSURE_EXPRESSIONS
+
+    void *(*handler)(void *, void*);
+    switch (cond) {
+    case TCG_COND_EQ:
+        handler = _sym_build_equal;
+        break;
+    case TCG_COND_NE:
+        handler = _sym_build_not_equal;
+        break;
+    case TCG_COND_LT:
+        handler = _sym_build_signed_less_than;
+        break;
+    case TCG_COND_GE:
+        handler = _sym_build_signed_greater_equal;
+        break;
+    case TCG_COND_LE:
+        handler = _sym_build_signed_less_equal;
+        break;
+    case TCG_COND_GT:
+        handler = _sym_build_signed_greater_than;
+        break;
+    case TCG_COND_LTU:
+        handler = _sym_build_unsigned_less_than;
+        break;
+    case TCG_COND_GEU:
+        handler = _sym_build_unsigned_greater_equal;
+        break;
+    case TCG_COND_LEU:
+        handler = _sym_build_unsigned_less_equal;
+        break;
+    case TCG_COND_GTU:
+        handler = _sym_build_unsigned_greater_than;
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    void *condition = handler(arg1_expr, arg2_expr);
     /* TODO */
+    _sym_push_path_constraint(condition, result, 42);
+
     return NOT_IMPLEMENTED;
 }
