@@ -13,6 +13,29 @@
 
 #define NOT_IMPLEMENTED NULL
 
+/* A slightly questionable macro to help with the repetitive parts of
+ * implementing the symbolic handlers: assuming the existence of concrete
+ * arguments "arg1" and "arg2" along with variables "arg1_expr" and "arg2_expr"
+ * for the corresponding expressions, it expands into code that returns early if
+ * both expressions are NULL and otherwise creates the missing expression.*/
+
+#define BINARY_HELPER_ENSURE_EXPRESSIONS                                       \
+    if (arg1_expr == NULL && arg2_expr == NULL) {                              \
+        return NULL;                                                           \
+    }                                                                          \
+                                                                               \
+    if (arg1_expr == NULL) {                                                   \
+        arg1_expr = _sym_build_integer(arg1, _sym_bits_helper(arg2_expr));     \
+    }                                                                          \
+                                                                               \
+    if (arg2_expr == NULL) {                                                   \
+        arg2_expr = _sym_build_integer(arg2, _sym_bits_helper(arg1_expr));     \
+    }
+
+#define BINARY_HELPER_BODY(symcc_name)                                         \
+    BINARY_HELPER_ENSURE_EXPRESSIONS                                           \
+    return _sym_build_##symcc_name(arg1_expr, arg2_expr);
+
 /* To save implementation effort, the macro below defines handlers following the
  * standard scheme of binary operations:
  *
@@ -28,21 +51,6 @@
  * argument width. This would, however, complicate the instrumentation because
  * we would need to extend the concrete values in the 32-bit case before calling
  * the helper. */
-
-#define BINARY_HELPER_BODY(symcc_name)                                         \
-    if (arg1_expr == NULL && arg2_expr == NULL) {                              \
-        return NULL;                                                           \
-    }                                                                          \
-                                                                               \
-    if (arg1_expr == NULL) {                                                   \
-        arg1_expr = _sym_build_integer(arg1, _sym_bits_helper(arg2_expr));     \
-    }                                                                          \
-                                                                               \
-    if (arg2_expr == NULL) {                                                   \
-        arg2_expr = _sym_build_integer(arg2, _sym_bits_helper(arg1_expr));     \
-    }                                                                          \
-                                                                               \
-    return _sym_build_##symcc_name(arg1_expr, arg2_expr);
 
 #define DEF_HELPER_BINARY(qemu_name, symcc_name)                               \
     void *HELPER(sym_##qemu_name##_i64)(uint64_t arg1, void *arg1_expr,        \
