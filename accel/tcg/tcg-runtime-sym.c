@@ -161,14 +161,38 @@ void *HELPER(sym_not)(void *expr)
 
 void *HELPER(sym_sext_or_trunc)(void *expr, uint64_t target_length)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    if (expr == NULL)
+        return NULL;
+
+    size_t current_bits = _sym_bits_helper(expr);
+    size_t desired_bits = target_length * 8;
+
+    if (current_bits == desired_bits)
+        return expr;
+    if (current_bits > desired_bits)
+        return _sym_build_trunc(expr, desired_bits);
+    if (current_bits < desired_bits)
+        return _sym_build_sext(expr, desired_bits);
+
+    g_assert_not_reached();
 }
 
 void *HELPER(sym_zext_or_trunc)(void *expr, uint64_t target_length)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    if (expr == NULL)
+        return NULL;
+
+    size_t current_bits = _sym_bits_helper(expr);
+    size_t desired_bits = target_length * 8;
+
+    if (current_bits == desired_bits)
+        return expr;
+    if (current_bits > desired_bits)
+        return _sym_build_trunc(expr, desired_bits);
+    if (current_bits < desired_bits)
+        return _sym_build_zext(expr, desired_bits);
+
+    g_assert_not_reached();
 }
 
 void *HELPER(sym_bswap)(void *expr, uint64_t length)
