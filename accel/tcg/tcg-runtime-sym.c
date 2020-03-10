@@ -374,20 +374,10 @@ void *HELPER(sym_deposit_i64)(uint64_t arg1, void *arg1_expr,
     return NOT_IMPLEMENTED;
 }
 
-void *HELPER(sym_setcond_i32)(uint32_t arg1, void *arg1_expr,
-                              uint32_t arg2, void *arg2_expr,
-                              int32_t cond, uint32_t result)
-{
-    /* The 64-bit version is identical except for the wider arguments, so we
-     * just delegate. (Doing the same in TCG would be tedious because we would
-     * have to expand the arguments "manually".) */
-    return helper_sym_setcond_i64(
-        arg1, arg1_expr, arg2, arg2_expr, cond, result);
-}
-
-void *HELPER(sym_setcond_i64)(uint64_t arg1, void *arg1_expr,
-                              uint64_t arg2, void *arg2_expr,
-                              int32_t cond, uint64_t result)
+static void *sym_setcond_internal(uint64_t arg1, void *arg1_expr,
+                                  uint64_t arg2, void *arg2_expr,
+                                  int32_t cond, uint64_t result,
+                                  uint8_t result_bits)
 {
     BINARY_HELPER_ENSURE_EXPRESSIONS
 
@@ -431,5 +421,21 @@ void *HELPER(sym_setcond_i64)(uint64_t arg1, void *arg1_expr,
     /* TODO */
     _sym_push_path_constraint(condition, result, 42);
 
-    return NOT_IMPLEMENTED;
+    return _sym_build_bool_to_bits(condition, result_bits);
+}
+
+void *HELPER(sym_setcond_i32)(uint32_t arg1, void *arg1_expr,
+                              uint32_t arg2, void *arg2_expr,
+                              int32_t cond, uint32_t result)
+{
+    return sym_setcond_internal(
+        arg1, arg1_expr, arg2, arg2_expr, cond, result, 32);
+}
+
+void *HELPER(sym_setcond_i64)(uint64_t arg1, void *arg1_expr,
+                              uint64_t arg2, void *arg2_expr,
+                              int32_t cond, uint64_t result)
+{
+    return sym_setcond_internal(
+        arg1, arg1_expr, arg2, arg2_expr, cond, result, 64);
 }
