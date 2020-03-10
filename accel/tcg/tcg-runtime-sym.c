@@ -213,9 +213,6 @@ void HELPER(sym_store_guest_i32)(uint32_t value, void *value_expr,
 {
     /* TODO try alternative address */
 
-    if (value_expr == NULL)
-        value_expr = _sym_build_integer(value, 32);
-
     _sym_write_memory((uint8_t*)addr, length, value_expr, true);
 }
 
@@ -224,9 +221,6 @@ void HELPER(sym_store_guest_i64)(uint64_t value, void *value_expr,
                                  uint64_t length)
 {
     /* TODO try alternative address */
-
-    if (value_expr == NULL)
-        value_expr = _sym_build_integer(value, 64);
 
     _sym_write_memory((uint8_t*)addr, length, value_expr, true);
 }
@@ -240,9 +234,6 @@ void HELPER(sym_store_host_i32)(uint32_t value, void *value_expr,
                                 void *addr,
                                 uint64_t offset, uint64_t length)
 {
-    if (value_expr == NULL)
-        value_expr = _sym_build_integer(value, 32);
-
     _sym_write_memory((uint8_t*)addr + offset, length, value_expr, true);
 }
 
@@ -250,9 +241,6 @@ void HELPER(sym_store_host_i64)(uint64_t value, void *value_expr,
                                 void *addr,
                                 uint64_t offset, uint64_t length)
 {
-    if (value_expr == NULL)
-        value_expr = _sym_build_integer(value, 64);
-
     _sym_write_memory((uint8_t*)addr + offset, length, value_expr, true);
 }
 
