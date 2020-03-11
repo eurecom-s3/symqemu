@@ -127,25 +127,22 @@ void *HELPER(sym_not)(void *expr)
     return _sym_build_neg(expr);
 }
 
-void *HELPER(sym_sext_or_trunc)(void *expr, uint64_t target_length)
+void *HELPER(sym_sext)(void *expr, uint64_t target_length)
 {
     if (expr == NULL)
         return NULL;
 
     size_t current_bits = _sym_bits_helper(expr);
-    size_t desired_bits = target_length * 8;
+    size_t bits_to_keep = target_length * 8;
+    void *shift_distance_expr = _sym_build_integer(
+        current_bits - bits_to_keep, current_bits);
 
-    if (current_bits == desired_bits)
-        return expr;
-    if (current_bits > desired_bits)
-        return _sym_build_trunc(expr, desired_bits);
-    if (current_bits < desired_bits)
-        return _sym_build_sext(expr, desired_bits);
-
-    g_assert_not_reached();
+    return _sym_build_arithmetic_shift_right(
+        _sym_build_shift_left(expr, shift_distance_expr),
+        shift_distance_expr);
 }
 
-void *HELPER(sym_zext_or_trunc)(void *expr, uint64_t target_length)
+void *HELPER(sym_zext)(void *expr, uint64_t target_length)
 {
     if (expr == NULL)
         return NULL;
@@ -153,14 +150,25 @@ void *HELPER(sym_zext_or_trunc)(void *expr, uint64_t target_length)
     size_t current_bits = _sym_bits_helper(expr);
     size_t desired_bits = target_length * 8;
 
-    if (current_bits == desired_bits)
-        return expr;
-    if (current_bits > desired_bits)
-        return _sym_build_trunc(expr, desired_bits);
-    if (current_bits < desired_bits)
-        return _sym_build_zext(expr, desired_bits);
+    return _sym_build_and(
+        expr,
+        _sym_build_integer((1ull << desired_bits) - 1, current_bits));
+}
 
-    g_assert_not_reached();
+void *HELPER(sym_sext_i32_i64)(void *expr, uint64_t target_length)
+{
+    if (expr == NULL)
+        return NULL;
+
+    return _sym_build_sext(expr, 64);
+}
+
+void *HELPER(sym_zext_i32_i64)(void *expr, uint64_t target_length)
+{
+    if (expr == NULL)
+        return NULL;
+
+    return _sym_build_zext(expr, 64);
 }
 
 void *HELPER(sym_bswap)(void *expr, uint64_t length)
@@ -169,10 +177,29 @@ void *HELPER(sym_bswap)(void *expr, uint64_t length)
     return NOT_IMPLEMENTED;
 }
 
-void *HELPER(sym_load_guest)(target_ulong addr, void *addr_expr, uint64_t length)
+static void *sym_load_guest_internal(target_ulong addr, void *addr_expr,
+                                     uint64_t load_length, uint8_t result_length)
 {
     /* TODO try an alternative address; cast the address to uint64_t */
-    return _sym_read_memory((uint8_t*)addr, length, true);
+
+    void *memory_expr = _sym_read_memory((uint8_t*)addr, load_length, true);
+
+    if (load_length == result_length || memory_expr == NULL)
+        return memory_expr;
+    else
+        return _sym_build_zext(memory_expr, result_length * 8);
+}
+
+void *HELPER(sym_load_guest_i32)(target_ulong addr, void *addr_expr,
+                                 uint64_t length)
+{
+    return sym_load_guest_internal(addr, addr_expr, length, 4);
+}
+
+void *HELPER(sym_load_guest_i64)(target_ulong addr, void *addr_expr,
+                                 uint64_t length)
+{
+    return sym_load_guest_internal(addr, addr_expr, length, 8);
 }
 
 void HELPER(sym_store_guest_i32)(uint32_t value, void *value_expr,
@@ -193,9 +220,26 @@ void HELPER(sym_store_guest_i64)(uint64_t value, void *value_expr,
     _sym_write_memory((uint8_t*)addr, length, value_expr, true);
 }
 
-void *HELPER(sym_load_host)(void *addr, uint64_t offset, uint64_t length)
+static void *sym_load_host_internal(void *addr, uint64_t offset,
+                                    uint64_t load_length, uint64_t result_length)
 {
-    return _sym_read_memory((uint8_t*)addr + offset, length, true);
+    void *memory_expr = _sym_read_memory(
+        (uint8_t*)addr + offset, load_length, true);
+
+    if (load_length == result_length || memory_expr == NULL)
+        return memory_expr;
+    else
+        return _sym_build_zext(memory_expr, result_length * 8);
+}
+
+void *HELPER(sym_load_host_i32)(void *addr, uint64_t offset, uint64_t length)
+{
+    return sym_load_host_internal(addr, offset, length, 4);
+}
+
+void *HELPER(sym_load_host_i64)(void *addr, uint64_t offset, uint64_t length)
+{
+    return sym_load_host_internal(addr, offset, length, 8);
 }
 
 void HELPER(sym_store_host_i32)(uint32_t value, void *value_expr,

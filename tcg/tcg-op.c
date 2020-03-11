@@ -128,7 +128,7 @@ void tcg_gen_ldst_op_i32(TCGOpcode opc, TCGv_i32 val,
     case INDEX_op_ld16u_i32:
     case INDEX_op_ld16s_i32:
     case INDEX_op_ld_i32:
-        gen_helper_sym_load_host(
+        gen_helper_sym_load_host_i32(
             tcgv_i32_expr(val), base, offset_temp, data_size_temp);
         break;
     case INDEX_op_st8_i32:
@@ -189,7 +189,7 @@ void tcg_gen_ldst_op_i64(TCGOpcode opc, TCGv_i64 val,
     case INDEX_op_ld32u_i64:
     case INDEX_op_ld32s_i64:
     case INDEX_op_ld_i64:
-        gen_helper_sym_load_host(
+        gen_helper_sym_load_host_i64(
             tcgv_i64_expr(val), base, offset_temp, data_size_temp);
         break;
     case INDEX_op_st8_i64:
@@ -1209,7 +1209,7 @@ void tcg_gen_ext8s_i32(TCGv_i32 ret, TCGv_i32 arg)
 {
     if (TCG_TARGET_HAS_ext8s_i32) {
         TCGv_i64 target_len = tcg_const_i64(1);
-        gen_helper_sym_sext_or_trunc(
+        gen_helper_sym_sext(
             tcgv_i32_expr(ret), tcgv_i32_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i32(INDEX_op_ext8s_i32, ret, arg);
@@ -1223,7 +1223,7 @@ void tcg_gen_ext16s_i32(TCGv_i32 ret, TCGv_i32 arg)
 {
     if (TCG_TARGET_HAS_ext16s_i32) {
         TCGv_i64 target_len = tcg_const_i64(2);
-        gen_helper_sym_sext_or_trunc(
+        gen_helper_sym_sext(
             tcgv_i32_expr(ret), tcgv_i32_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i32(INDEX_op_ext16s_i32, ret, arg);
@@ -1237,7 +1237,7 @@ void tcg_gen_ext8u_i32(TCGv_i32 ret, TCGv_i32 arg)
 {
     if (TCG_TARGET_HAS_ext8u_i32) {
         TCGv_i64 target_len = tcg_const_i64(1);
-        gen_helper_sym_zext_or_trunc(
+        gen_helper_sym_zext(
             tcgv_i32_expr(ret), tcgv_i32_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i32(INDEX_op_ext8u_i32, ret, arg);
@@ -1250,7 +1250,7 @@ void tcg_gen_ext16u_i32(TCGv_i32 ret, TCGv_i32 arg)
 {
     if (TCG_TARGET_HAS_ext16u_i32) {
         TCGv_i64 target_len = tcg_const_i64(2);
-        gen_helper_sym_zext_or_trunc(
+        gen_helper_sym_zext(
             tcgv_i32_expr(ret), tcgv_i32_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i32(INDEX_op_ext16u_i32, ret, arg);
@@ -1862,7 +1862,7 @@ void tcg_gen_ext8s_i64(TCGv_i64 ret, TCGv_i64 arg)
         tcg_gen_sari_i32(TCGV_HIGH(ret), TCGV_LOW(ret), 31);
     } else if (TCG_TARGET_HAS_ext8s_i64) {
         TCGv_i64 target_len = tcg_const_i64(1);
-        gen_helper_sym_sext_or_trunc(
+        gen_helper_sym_sext(
             tcgv_i64_expr(ret), tcgv_i64_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i64(INDEX_op_ext8s_i64, ret, arg);
@@ -1879,7 +1879,7 @@ void tcg_gen_ext16s_i64(TCGv_i64 ret, TCGv_i64 arg)
         tcg_gen_sari_i32(TCGV_HIGH(ret), TCGV_LOW(ret), 31);
     } else if (TCG_TARGET_HAS_ext16s_i64) {
         TCGv_i64 target_len = tcg_const_i64(2);
-        gen_helper_sym_sext_or_trunc(
+        gen_helper_sym_sext(
             tcgv_i64_expr(ret), tcgv_i64_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i64(INDEX_op_ext16s_i64, ret, arg);
@@ -1896,7 +1896,7 @@ void tcg_gen_ext32s_i64(TCGv_i64 ret, TCGv_i64 arg)
         tcg_gen_sari_i32(TCGV_HIGH(ret), TCGV_LOW(ret), 31);
     } else if (TCG_TARGET_HAS_ext32s_i64) {
         TCGv_i64 target_len = tcg_const_i64(4);
-        gen_helper_sym_sext_or_trunc(
+        gen_helper_sym_sext(
             tcgv_i64_expr(ret), tcgv_i64_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i64(INDEX_op_ext32s_i64, ret, arg);
@@ -1913,7 +1913,7 @@ void tcg_gen_ext8u_i64(TCGv_i64 ret, TCGv_i64 arg)
         tcg_gen_movi_i32(TCGV_HIGH(ret), 0);
     } else if (TCG_TARGET_HAS_ext8u_i64) {
         TCGv_i64 target_len = tcg_const_i64(1);
-        gen_helper_sym_zext_or_trunc(
+        gen_helper_sym_zext(
             tcgv_i64_expr(ret), tcgv_i64_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i64(INDEX_op_ext8u_i64, ret, arg);
@@ -1929,7 +1929,7 @@ void tcg_gen_ext16u_i64(TCGv_i64 ret, TCGv_i64 arg)
         tcg_gen_movi_i32(TCGV_HIGH(ret), 0);
     } else if (TCG_TARGET_HAS_ext16u_i64) {
         TCGv_i64 target_len = tcg_const_i64(2);
-        gen_helper_sym_zext_or_trunc(
+        gen_helper_sym_zext(
             tcgv_i64_expr(ret), tcgv_i64_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i64(INDEX_op_ext16u_i64, ret, arg);
@@ -1945,7 +1945,7 @@ void tcg_gen_ext32u_i64(TCGv_i64 ret, TCGv_i64 arg)
         tcg_gen_movi_i32(TCGV_HIGH(ret), 0);
     } else if (TCG_TARGET_HAS_ext32u_i64) {
         TCGv_i64 target_len = tcg_const_i64(4);
-        gen_helper_sym_zext_or_trunc(
+        gen_helper_sym_zext(
             tcgv_i64_expr(ret), tcgv_i64_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2_i64(INDEX_op_ext32u_i64, ret, arg);
@@ -2976,7 +2976,7 @@ void tcg_gen_extu_i32_i64(TCGv_i64 ret, TCGv_i32 arg)
         tcg_gen_movi_i32(TCGV_HIGH(ret), 0);
     } else {
         TCGv_i64 target_len = tcg_const_i64(8);
-        gen_helper_sym_zext_or_trunc(
+        gen_helper_sym_zext_i32_i64(
             tcgv_i64_expr(ret), tcgv_i32_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2(INDEX_op_extu_i32_i64,
@@ -2991,7 +2991,7 @@ void tcg_gen_ext_i32_i64(TCGv_i64 ret, TCGv_i32 arg)
         tcg_gen_sari_i32(TCGV_HIGH(ret), TCGV_LOW(ret), 31);
     } else {
         TCGv_i64 target_len = tcg_const_i64(8);
-        gen_helper_sym_sext_or_trunc(
+        gen_helper_sym_sext_i32_i64(
             tcgv_i64_expr(ret), tcgv_i32_expr(arg), target_len);
         tcg_temp_free_i64(target_len);
         tcg_gen_op2(INDEX_op_ext_i32_i64,
@@ -3182,9 +3182,9 @@ void tcg_gen_qemu_ld_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     /* For now, we only handle loads that don't change endianness */
     tcg_debug_assert(!(memop & MO_BSWAP));
     load_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_load_guest(tcgv_i32_expr(val),
-                              addr, tcgv_i64_expr(addr),
-                              load_size);
+    gen_helper_sym_load_guest_i32(tcgv_i32_expr(val),
+                                  addr, tcgv_i64_expr(addr),
+                                  load_size);
     tcg_temp_free_i64(load_size);
 
     orig_memop = memop;
@@ -3280,9 +3280,9 @@ void tcg_gen_qemu_ld_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     /* For now, we only handle loads that don't change endianness */
     tcg_debug_assert(!(memop & MO_BSWAP));
     load_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_load_guest(tcgv_i64_expr(val),
-                              addr, tcgv_i64_expr(addr),
-                              load_size);
+    gen_helper_sym_load_guest_i64(tcgv_i64_expr(val),
+                                  addr, tcgv_i64_expr(addr),
+                                  load_size);
     tcg_temp_free_i64(load_size);
 
     orig_memop = memop;
