@@ -243,16 +243,64 @@ void *HELPER(sym_extract2_i32)(uint32_t ah, void *ah_expr,
                                uint32_t al, void *al_expr,
                                uint64_t ofs)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    if (ah_expr == NULL && al_expr == NULL)
+        return NULL;
+
+    if (ah_expr == NULL)
+        ah_expr = _sym_build_integer(ah, 32);
+
+    if (al_expr == NULL)
+        al_expr = _sym_build_integer(al, 32);
+
+    /* The implementation follows the alternative implementation of
+     * tcg_gen_extract2_i32 in tcg-op.c (which handles architectures that don't
+     * support extract2 directly). */
+
+    if (ofs == 0)
+        return al_expr;
+    if (ofs == 32)
+        return ah_expr;
+
+    return HELPER(sym_deposit_i32)(
+        al >> ofs,
+        _sym_build_logical_shift_right(
+            al_expr,
+            _sym_build_integer(ofs, 32)),
+        ah, ah_expr,
+        32 - ofs,
+        ofs);
 }
 
 void *HELPER(sym_extract2_i64)(uint64_t ah, void *ah_expr,
                                uint64_t al, void *al_expr,
                                uint64_t ofs)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    if (ah_expr == NULL && al_expr == NULL)
+        return NULL;
+
+    if (ah_expr == NULL)
+        ah_expr = _sym_build_integer(ah, 64);
+
+    if (al_expr == NULL)
+        al_expr = _sym_build_integer(al, 64);
+
+    /* The implementation follows the alternative implementation of
+     * tcg_gen_extract2_i64 in tcg-op.c (which handles architectures that don't
+     * support extract2 directly). */
+
+    if (ofs == 0)
+        return al_expr;
+    if (ofs == 64)
+        return ah_expr;
+
+    return HELPER(sym_deposit_i64)(
+        al >> ofs,
+        _sym_build_logical_shift_right(
+            al_expr,
+            _sym_build_integer(ofs, 64)),
+        ah, ah_expr,
+        64 - ofs,
+        ofs);
 }
 
 void *HELPER(sym_sextract_i32)(void *expr, uint32_t ofs, uint32_t len)
