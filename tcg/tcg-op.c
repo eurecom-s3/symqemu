@@ -961,7 +961,7 @@ void tcg_gen_sextract_i32(TCGv_i32 ret, TCGv_i32 arg,
         ofs_tmp = tcg_const_i32(ofs);
         len_tmp = tcg_const_i32(len);
         gen_helper_sym_sextract_i32(
-            tcgv_i32_expr(ret), arg, tcgv_i32_expr(arg), ofs_tmp, len_tmp);
+            tcgv_i32_expr(ret), tcgv_i32_expr(arg), ofs_tmp, len_tmp);
         tcg_temp_free_i32(ofs_tmp);
         tcg_temp_free_i32(len_tmp);
         tcg_gen_op4ii_i32(INDEX_op_sextract_i32, ret, arg, ofs, len);
