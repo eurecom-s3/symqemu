@@ -224,18 +224,19 @@ DECL_HELPER_BINARY(rotate_right)
     return NOT_IMPLEMENTED;
 }
 
-void *HELPER(sym_extract_i32)(uint32_t arg, void *arg_expr,
-                              uint32_t ofs, uint32_t len)
+void *HELPER(sym_extract_i32)(void *expr, uint32_t ofs, uint32_t len)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    return HELPER(sym_extract_i64)(expr, ofs, len);
 }
 
-void *HELPER(sym_extract_i64)(uint64_t arg, void *arg_expr,
-                              uint64_t ofs, uint64_t len)
+void *HELPER(sym_extract_i64)(void *expr, uint64_t ofs, uint64_t len)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    if (expr == NULL)
+        return NULL;
+
+    return _sym_build_zext(
+        _sym_extract_helper(expr, ofs + len - 1, ofs),
+        _sym_bits_helper(expr));
 }
 
 void *HELPER(sym_extract2_i32)(uint32_t ah, void *ah_expr,
