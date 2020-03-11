@@ -98,52 +98,30 @@ DECL_HELPER_BINARY(eqv)
     return _sym_build_neg(_sym_build_xor(arg1_expr, arg2_expr));
 }
 
-void *HELPER(sym_nand_i32)(uint32_t arg1, void *arg1_expr,
-                           uint32_t arg2, void *arg2_expr)
+DECL_HELPER_BINARY(nand)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
+    return _sym_build_neg(_sym_build_and(arg1_expr, arg2_expr));
 }
 
-void *HELPER(sym_nand_i64)(uint64_t arg1, void *arg1_expr,
-                           uint64_t arg2, void *arg2_expr)
+DECL_HELPER_BINARY(nor)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
+    return _sym_build_neg(_sym_build_or(arg1_expr, arg2_expr));
 }
 
-void *HELPER(sym_nor_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
+DECL_HELPER_BINARY(orc)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_nor_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_orc_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_orc_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
+    return _sym_build_or(arg1_expr, _sym_build_neg(arg2_expr));
 }
 
 void *HELPER(sym_not)(void *expr)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    if (expr == NULL)
+        return NULL;
+
+    return _sym_build_neg(expr);
 }
 
 void *HELPER(sym_sext_or_trunc)(void *expr, uint64_t target_length)
