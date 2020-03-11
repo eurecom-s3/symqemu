@@ -33,9 +33,18 @@
         arg2_expr = _sym_build_integer(arg2, _sym_bits_helper(arg1_expr));     \
     }
 
-#define BINARY_HELPER_BODY(symcc_name)                                         \
-    BINARY_HELPER_ENSURE_EXPRESSIONS                                           \
-    return _sym_build_##symcc_name(arg1_expr, arg2_expr);
+/* This macro declares a binary helper function with 64-bit arguments and
+ * defines a 32-bit helper function that delegates to it. Use it instead of the
+ * function prototype in helper definitions. */
+
+#define DECL_HELPER_BINARY(name)                                               \
+    void *HELPER(sym_##name##_i32)(uint32_t arg1, void *arg1_expr,             \
+                                   uint32_t arg2, void *arg2_expr) {           \
+        return HELPER(sym_##name##_i64)(arg1, arg1_expr, arg2, arg2_expr);     \
+    }                                                                          \
+                                                                               \
+    void *HELPER(sym_##name##_i64)(uint64_t arg1, void *arg1_expr,             \
+                                   uint64_t arg2, void *arg2_expr)
 
 /* To save implementation effort, the macro below defines handlers following the
  * standard scheme of binary operations:
@@ -46,22 +55,13 @@
  *
  * For example, DEF_HELPER_BINARY(divu, unsigned_div) defines helpers
  * "helper_sym_divu_i32/i64" backed by the run-time function
- * "_sym_build_unsigned_div". */
-
-/* TODO Probably we only need a single helper per operation, independent of the
- * argument width. This would, however, complicate the instrumentation because
- * we would need to extend the concrete values in the 32-bit case before calling
- * the helper. */
+ * "_sym_build_unsigned_div". The 32-bit helper just extends the arguments and
+ * calls the 64-bit helper. */
 
 #define DEF_HELPER_BINARY(qemu_name, symcc_name)                               \
-    void *HELPER(sym_##qemu_name##_i64)(uint64_t arg1, void *arg1_expr,        \
-                                        uint64_t arg2, void *arg2_expr) {      \
-        BINARY_HELPER_BODY(symcc_name)                                         \
-    }                                                                          \
-                                                                               \
-    void *HELPER(sym_##qemu_name##_i32)(uint32_t arg1, void *arg1_expr,        \
-                                        uint32_t arg2, void *arg2_expr) {      \
-        BINARY_HELPER_BODY(symcc_name)                                         \
+    DECL_HELPER_BINARY(qemu_name) {                                            \
+        BINARY_HELPER_ENSURE_EXPRESSIONS;                                      \
+        return _sym_build_##symcc_name(arg1_expr, arg2_expr);                  \
     }
 
 /* The binary helpers */
