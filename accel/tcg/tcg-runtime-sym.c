@@ -214,14 +214,34 @@ void HELPER(sym_store_host_i64)(uint64_t value, void *value_expr,
 
 DECL_HELPER_BINARY(rotate_left)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
+
+    /* The implementation follows the alternative implementation of
+     * tcg_gen_rotl_i64 in tcg-op.c (which handles architectures that don't
+     * support rotl directly). */
+
+    uint8_t bits = _sym_bits_helper(arg1_expr);
+    return _sym_build_or(
+        _sym_build_shift_left(arg1_expr, arg2_expr),
+        _sym_build_logical_shift_right(
+            arg1_expr,
+            _sym_build_sub(_sym_build_integer(bits, bits), arg2_expr)));
 }
 
 DECL_HELPER_BINARY(rotate_right)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
+
+    /* The implementation follows the alternative implementation of
+     * tcg_gen_rotr_i64 in tcg-op.c (which handles architectures that don't
+     * support rotr directly). */
+
+    uint8_t bits = _sym_bits_helper(arg1_expr);
+    return _sym_build_or(
+        _sym_build_logical_shift_right(arg1_expr, arg2_expr),
+        _sym_build_shift_left(
+            arg1_expr,
+            _sym_build_sub(_sym_build_integer(bits, bits), arg2_expr)));
 }
 
 void *HELPER(sym_extract_i32)(void *expr, uint32_t ofs, uint32_t len)
