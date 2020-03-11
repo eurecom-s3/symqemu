@@ -173,8 +173,70 @@ void *HELPER(sym_zext_i32_i64)(void *expr, uint64_t target_length)
 
 void *HELPER(sym_bswap)(void *expr, uint64_t length)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    if (expr == NULL)
+        return NULL;
+
+    /* The implementation follows the alternative implementations of
+     * tcg_gen_bswap* in tcg-op.c (which handle architectures that don't support
+     * bswap directly). */
+
+    size_t bits = _sym_bits_helper(expr);
+    void *eight = _sym_build_integer(8, bits);
+    void *sixteen = _sym_build_integer(16, bits);
+    void *thirty_two = _sym_build_integer(32, bits);
+    void *forty_eight = _sym_build_integer(48, bits);
+
+    switch (length) {
+    case 2:
+        return _sym_build_or(
+            _sym_build_shift_left(HELPER(sym_zext)(expr, 1), eight),
+            _sym_build_logical_shift_right(expr, eight));
+    case 4: {
+        void *mask = _sym_build_integer(0x00ff00ff, bits);
+
+        /* This is equivalent to the temporary "ret" after the first block. */
+        void *first_block = _sym_build_or(
+            _sym_build_and(
+                _sym_build_logical_shift_right(expr, eight),
+                mask),
+            _sym_build_shift_left(_sym_build_and(expr, mask), eight));
+
+        /* This is the second block. */
+        if (bits == 32)
+            return _sym_build_or(
+                _sym_build_logical_shift_right(first_block, sixteen),
+                _sym_build_shift_left(first_block, sixteen));
+        else
+            return _sym_build_or(
+                _sym_build_logical_shift_right(first_block, sixteen),
+                _sym_build_logical_shift_right(
+                    _sym_build_shift_left(first_block, forty_eight),
+                    thirty_two));
+    }
+    case 8: {
+        void *mask1 = _sym_build_integer(0x00ff00ff00ff00ffull, 64);
+        void *mask2 = _sym_build_integer(0x0000ffff0000ffffull, 64);
+
+        /* This is equivalent to the temporary "ret" after the first block. */
+        void *first_block = _sym_build_or(
+            _sym_build_and(_sym_build_logical_shift_right(expr, eight), mask1),
+            _sym_build_shift_left(_sym_build_and(expr, mask1), eight));
+
+        /* Here we replicate the second block. */
+        void *second_block = _sym_build_or(
+            _sym_build_and(
+                _sym_build_logical_shift_right(first_block, sixteen),
+                mask2),
+            _sym_build_shift_left(_sym_build_and(first_block, mask2), sixteen));
+
+        /* And finally the third block. */
+        return _sym_build_or(
+            _sym_build_logical_shift_right(second_block, thirty_two),
+            _sym_build_shift_left(second_block, thirty_two));
+    }
+    default:
+        g_assert_not_reached();
+    }
 }
 
 static void *sym_load_guest_internal(target_ulong addr, void *addr_expr,
