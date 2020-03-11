@@ -76,6 +76,9 @@ DEF_HELPER_BINARY(remu, unsigned_rem)
 DEF_HELPER_BINARY(and, and)
 DEF_HELPER_BINARY(or, or)
 DEF_HELPER_BINARY(xor, xor)
+DEF_HELPER_BINARY(shift_right, logical_shift_right)
+DEF_HELPER_BINARY(arithmetic_shift_right, arithmetic_shift_right)
+DEF_HELPER_BINARY(shift_left, shift_left)
 
 void *HELPER(sym_neg)(void *expr)
 {
@@ -209,71 +212,13 @@ void HELPER(sym_store_host_i64)(uint64_t value, void *value_expr,
     _sym_write_memory((uint8_t*)addr + offset, length, value_expr, true);
 }
 
-void *HELPER(sym_shift_right_i32)(uint32_t arg1, void *arg1_expr,
-                                  uint32_t arg2, void *arg2_expr)
+DECL_HELPER_BINARY(rotate_left)
 {
     /* TODO */
     return NOT_IMPLEMENTED;
 }
 
-void *HELPER(sym_shift_right_i64)(uint64_t arg1, void *arg1_expr,
-                                  uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_arithmetic_shift_right_i32)(uint32_t arg1, void *arg1_expr,
-                                             uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_arithmetic_shift_right_i64)(uint64_t arg1, void *arg1_expr,
-                                             uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_shift_left_i32)(uint32_t arg1, void *arg1_expr,
-                                 uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_shift_left_i64)(uint64_t arg1, void *arg1_expr,
-                                 uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_rotate_left_i32)(uint32_t arg1, void *arg1_expr,
-                                  uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_rotate_left_i64)(uint64_t arg1, void *arg1_expr,
-                                  uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_rotate_right_i32)(uint32_t arg1, void *arg1_expr,
-                                   uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_rotate_right_i64)(uint64_t arg1, void *arg1_expr,
-                                   uint64_t arg2, void *arg2_expr)
+DECL_HELPER_BINARY(rotate_right)
 {
     /* TODO */
     return NOT_IMPLEMENTED;
