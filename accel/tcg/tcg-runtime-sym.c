@@ -79,36 +79,23 @@ DEF_HELPER_BINARY(xor, xor)
 
 void *HELPER(sym_neg)(void *expr)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    if (expr == NULL)
+        return NULL;
+
+    return _sym_build_sub(
+        _sym_build_integer(0, _sym_bits_helper(expr)), expr);
 }
 
-void *HELPER(sym_andc_i32)(uint32_t arg1, void *arg1_expr,
-                           uint32_t arg2, void *arg2_expr)
+DECL_HELPER_BINARY(andc)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
+    return _sym_build_and(arg1_expr, _sym_build_neg(arg2_expr));
 }
 
-void *HELPER(sym_andc_i64)(uint64_t arg1, void *arg1_expr,
-                           uint64_t arg2, void *arg2_expr)
+DECL_HELPER_BINARY(eqv)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_eqv_i32)(uint32_t arg1, void *arg1_expr,
-                          uint32_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
-}
-
-void *HELPER(sym_eqv_i64)(uint64_t arg1, void *arg1_expr,
-                          uint64_t arg2, void *arg2_expr)
-{
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
+    return _sym_build_neg(_sym_build_xor(arg1_expr, arg2_expr));
 }
 
 void *HELPER(sym_nand_i32)(uint32_t arg1, void *arg1_expr,
