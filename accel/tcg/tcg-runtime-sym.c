@@ -274,16 +274,40 @@ void *HELPER(sym_deposit_i32)(uint32_t arg1, void *arg1_expr,
                               uint32_t arg2, void *arg2_expr,
                               uint32_t ofs, uint32_t len)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
+
+    /* The symbolic implementation follows the alternative concrete
+     * implementation of tcg_gen_deposit_i32 in tcg-op.c (which handles
+     * architectures that don't support deposit directly). */
+
+    uint32_t mask = (1u << len) - 1;
+    return _sym_build_or(
+        _sym_build_and(
+            arg1_expr,
+            _sym_build_integer(~(mask << ofs), 32)),
+        _sym_build_shift_left(
+            _sym_build_and(arg2_expr, _sym_build_integer(mask, 32)),
+            _sym_build_integer(ofs, 32)));
 }
 
 void *HELPER(sym_deposit_i64)(uint64_t arg1, void *arg1_expr,
                               uint64_t arg2, void *arg2_expr,
                               uint64_t ofs, uint64_t len)
 {
-    /* TODO */
-    return NOT_IMPLEMENTED;
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
+
+    /* The symbolic implementation follows the alternative concrete
+     * implementation of tcg_gen_deposit_i64 in tcg-op.c (which handles
+     * architectures that don't support deposit directly). */
+
+    uint64_t mask = (1ull << len) - 1;
+    return _sym_build_or(
+        _sym_build_and(
+            arg1_expr,
+            _sym_build_integer(~(mask << ofs), 64)),
+        _sym_build_shift_left(
+            _sym_build_and(arg2_expr, _sym_build_integer(mask, 64)),
+            _sym_build_integer(ofs, 64)));
 }
 
 static void *sym_setcond_internal(uint64_t arg1, void *arg1_expr,
