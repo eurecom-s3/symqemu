@@ -484,7 +484,8 @@ void *HELPER(sym_deposit_i64)(uint64_t arg1, void *arg1_expr,
             _sym_build_integer(ofs, 64)));
 }
 
-static void *sym_setcond_internal(uint64_t arg1, void *arg1_expr,
+static void *sym_setcond_internal(target_ulong pc,
+                                  uint64_t arg1, void *arg1_expr,
                                   uint64_t arg2, void *arg2_expr,
                                   int32_t cond, uint64_t result,
                                   uint8_t result_bits)
@@ -528,24 +529,25 @@ static void *sym_setcond_internal(uint64_t arg1, void *arg1_expr,
     }
 
     void *condition = handler(arg1_expr, arg2_expr);
-    /* TODO */
-    _sym_push_path_constraint(condition, result, 42);
+    _sym_push_path_constraint(condition, result, pc);
 
     return _sym_build_bool_to_bits(condition, result_bits);
 }
 
-void *HELPER(sym_setcond_i32)(uint32_t arg1, void *arg1_expr,
+void *HELPER(sym_setcond_i32)(CPUArchState *env,
+                              uint32_t arg1, void *arg1_expr,
                               uint32_t arg2, void *arg2_expr,
                               int32_t cond, uint32_t result)
 {
     return sym_setcond_internal(
-        arg1, arg1_expr, arg2, arg2_expr, cond, result, 32);
+        env->eip, arg1, arg1_expr, arg2, arg2_expr, cond, result, 32);
 }
 
-void *HELPER(sym_setcond_i64)(uint64_t arg1, void *arg1_expr,
+void *HELPER(sym_setcond_i64)(CPUArchState *env,
+                              uint64_t arg1, void *arg1_expr,
                               uint64_t arg2, void *arg2_expr,
                               int32_t cond, uint64_t result)
 {
     return sym_setcond_internal(
-        arg1, arg1_expr, arg2, arg2_expr, cond, result, 64);
+        env->eip, arg1, arg1_expr, arg2, arg2_expr, cond, result, 64);
 }
