@@ -3182,7 +3182,7 @@ void tcg_gen_qemu_ld_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     /* For now, we only handle loads that don't change endianness */
     tcg_debug_assert(!(memop & MO_BSWAP));
     load_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_load_guest_i32(tcgv_i32_expr(val),
+    gen_helper_sym_load_guest_i32(tcgv_i32_expr(val), cpu_env,
                                   addr, tcgv_i64_expr(addr),
                                   load_size);
     tcg_temp_free_i64(load_size);
@@ -3228,7 +3228,8 @@ void tcg_gen_qemu_st_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     /* For now, we only handle stores that don't change endianness */
     tcg_debug_assert(!(memop & MO_BSWAP));
     store_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_store_guest_i32(val, tcgv_i32_expr(val),
+    gen_helper_sym_store_guest_i32(cpu_env,
+                                   val, tcgv_i32_expr(val),
                                    addr, tcgv_i64_expr(addr),
                                    store_size);
     tcg_temp_free_i64(store_size);
@@ -3280,7 +3281,7 @@ void tcg_gen_qemu_ld_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     /* For now, we only handle loads that don't change endianness */
     tcg_debug_assert(!(memop & MO_BSWAP));
     load_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_load_guest_i64(tcgv_i64_expr(val),
+    gen_helper_sym_load_guest_i64(tcgv_i64_expr(val), cpu_env,
                                   addr, tcgv_i64_expr(addr),
                                   load_size);
     tcg_temp_free_i64(load_size);
@@ -3336,7 +3337,8 @@ void tcg_gen_qemu_st_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     /* For now, we only handle stores that don't change endianness */
     tcg_debug_assert(!(memop & MO_BSWAP));
     store_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_store_guest_i64(val, tcgv_i64_expr(val),
+    gen_helper_sym_store_guest_i64(cpu_env,
+                                   val, tcgv_i64_expr(val),
                                    addr, tcgv_i64_expr(addr),
                                    store_size);
     tcg_temp_free_i64(store_size);

@@ -239,10 +239,16 @@ void *HELPER(sym_bswap)(void *expr, uint64_t length)
     }
 }
 
-static void *sym_load_guest_internal(target_ulong addr, void *addr_expr,
+static void *sym_load_guest_internal(CPUArchState *env,
+                                     target_ulong addr, void *addr_expr,
                                      uint64_t load_length, uint8_t result_length)
 {
-    /* TODO try an alternative address; cast the address to uint64_t */
+    /* Try an alternative address */
+    if (addr_expr != NULL)
+        _sym_push_path_constraint(
+            _sym_build_equal(
+                addr_expr, _sym_build_integer(addr, sizeof(addr) * 8)),
+            true, env->eip);
 
     void *memory_expr = _sym_read_memory((uint8_t*)addr, load_length, true);
 
@@ -252,34 +258,51 @@ static void *sym_load_guest_internal(target_ulong addr, void *addr_expr,
         return _sym_build_zext(memory_expr, result_length * 8);
 }
 
-void *HELPER(sym_load_guest_i32)(target_ulong addr, void *addr_expr,
-                                 uint64_t length)
-{
-    return sym_load_guest_internal(addr, addr_expr, length, 4);
-}
-
-void *HELPER(sym_load_guest_i64)(target_ulong addr, void *addr_expr,
-                                 uint64_t length)
-{
-    return sym_load_guest_internal(addr, addr_expr, length, 8);
-}
-
-void HELPER(sym_store_guest_i32)(uint32_t value, void *value_expr,
+void *HELPER(sym_load_guest_i32)(CPUArchState *env,
                                  target_ulong addr, void *addr_expr,
                                  uint64_t length)
 {
-    /* TODO try alternative address */
+    return sym_load_guest_internal(env, addr, addr_expr, length, 4);
+}
+
+void *HELPER(sym_load_guest_i64)(CPUArchState *env,
+                                 target_ulong addr, void *addr_expr,
+                                 uint64_t length)
+{
+    return sym_load_guest_internal(env, addr, addr_expr, length, 8);
+}
+
+static void sym_store_guest_internal(CPUArchState *env,
+                                     uint64_t value, void *value_expr,
+                                     target_ulong addr, void *addr_expr,
+                                     uint64_t length)
+{
+    /* Try an alternative address */
+    if (addr_expr != NULL)
+        _sym_push_path_constraint(
+            _sym_build_equal(
+                addr_expr, _sym_build_integer(addr, sizeof(addr) * 8)),
+            true, env->eip);
 
     _sym_write_memory((uint8_t*)addr, length, value_expr, true);
 }
 
-void HELPER(sym_store_guest_i64)(uint64_t value, void *value_expr,
+void HELPER(sym_store_guest_i32)(CPUArchState *env,
+                                 uint32_t value, void *value_expr,
                                  target_ulong addr, void *addr_expr,
                                  uint64_t length)
 {
-    /* TODO try alternative address */
+    return sym_store_guest_internal(
+        env, value, value_expr, addr, addr_expr, length);
+}
 
-    _sym_write_memory((uint8_t*)addr, length, value_expr, true);
+void HELPER(sym_store_guest_i64)(CPUArchState *env,
+                                 uint64_t value, void *value_expr,
+                                 target_ulong addr, void *addr_expr,
+                                 uint64_t length)
+{
+    return sym_store_guest_internal(
+        env, value, value_expr, addr, addr_expr, length);
 }
 
 static void *sym_load_host_internal(void *addr, uint64_t offset,
