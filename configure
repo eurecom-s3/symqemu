@@ -407,6 +407,8 @@ prefix="/usr/local"
 mandir="\${prefix}/share/man"
 datadir="\${prefix}/share"
 firmwarepath="\${prefix}/share/qemu-firmware"
+symcc_source=""
+symcc_build=""
 qemu_docdir="\${prefix}/share/doc/qemu"
 bindir="\${prefix}/bin"
 libdir="\${prefix}/lib"
@@ -1065,6 +1067,10 @@ for opt do
   ;;
   --firmwarepath=*) firmwarepath="$optarg"
   ;;
+  --symcc-source=*) symcc_source="$optarg"
+  ;;
+  --symcc-build=*) symcc_build="$optarg"
+  ;;
   --host=*|--build=*|\
   --disable-dependency-tracking|\
   --sbindir=*|--sharedstatedir=*|\
@@ -1703,6 +1709,8 @@ Advanced options (experts only):
   --sysconfdir=PATH        install config in PATH$confsuffix
   --localstatedir=PATH     install local state in PATH (set at runtime on win32)
   --firmwarepath=PATH      search PATH for firmware files
+  --symcc-source=PATH      PATH to SymCC source code
+  --symcc-build=PATH       PATH to the build directory of SymCC with Qsym backend
   --with-confsuffix=SUFFIX suffix for QEMU data inside datadir/libdir/sysconfdir [$confsuffix]
   --with-pkgversion=VERS   use specified string as sub-version of the package
   --enable-debug           enable common debug build options
@@ -5064,6 +5072,23 @@ case "$capstone" in
 esac
 
 ##########################################
+# SymCC
+
+if test -e "${symcc_source}/runtime/RuntimeCommon.h"; then
+    QEMU_CFLAGS="$QEMU_CFLAGS -I${symcc_source}/runtime"
+else
+    feature_not_found "SymCC (source)" "Point --symcc-source to the SymCC source code"
+fi
+
+symcc_runtime_dir="${symcc_build}/runtime/qsym_backend"
+if test -e "${symcc_runtime_dir}/libSymRuntime.so"; then
+    libs_cpu="-L${symcc_runtime_dir} -lSymRuntime $libs_cpu"
+    libs_cpu="-Wl,-rpath,${symcc_runtime_dir} $libs_cpu"
+else
+    feature_not_found "SymCC (runtime)" "Point --symcc-build to the SymCC build directory"
+fi
+
+##########################################
 # check if we have fdatasync
 
 fdatasync=no
@@ -6309,6 +6334,8 @@ QEMU_CFLAGS="$pixman_cflags $fdt_cflags $QEMU_CFLAGS"
 QEMU_LDFLAGS="$fdt_ldflags $QEMU_LDFLAGS"
 libs_softmmu="$pixman_libs $libs_softmmu"
 
+echo "SymCC source path $(eval echo $symcc_source)"
+echo "SymCC build path  $(eval echo $symcc_build)"
 echo "Install prefix    $prefix"
 echo "BIOS directory    $(eval echo $qemu_datadir)"
 echo "firmware path     $(eval echo $firmwarepath)"
