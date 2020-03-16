@@ -64,6 +64,19 @@
         return _sym_build_##symcc_name(arg1_expr, arg2_expr);                  \
     }
 
+
+/* Architecture-independent way to get the program counter */
+static target_ulong get_pc(CPUArchState *env)
+{
+    target_ulong pc, cs_base;
+    uint32_t flags;
+
+    cpu_get_tb_cpu_state(env, &pc, &cs_base, &flags);
+
+    return pc;
+}
+
+
 /* The binary helpers */
 
 DEF_HELPER_BINARY(add, add)
@@ -248,7 +261,7 @@ static void *sym_load_guest_internal(CPUArchState *env,
         _sym_push_path_constraint(
             _sym_build_equal(
                 addr_expr, _sym_build_integer(addr, sizeof(addr) * 8)),
-            true, env->eip);
+            true, get_pc(env));
 
     void *memory_expr = _sym_read_memory((uint8_t*)addr, load_length, true);
 
@@ -282,7 +295,7 @@ static void sym_store_guest_internal(CPUArchState *env,
         _sym_push_path_constraint(
             _sym_build_equal(
                 addr_expr, _sym_build_integer(addr, sizeof(addr) * 8)),
-            true, env->eip);
+            true, get_pc(env));
 
     _sym_write_memory((uint8_t*)addr, length, value_expr, true);
 }
@@ -507,13 +520,13 @@ void *HELPER(sym_deposit_i64)(uint64_t arg1, void *arg1_expr,
             _sym_build_integer(ofs, 64)));
 }
 
-static void *sym_setcond_internal(target_ulong pc,
+static void *sym_setcond_internal(CPUArchState *env,
                                   uint64_t arg1, void *arg1_expr,
                                   uint64_t arg2, void *arg2_expr,
                                   int32_t cond, uint64_t result,
                                   uint8_t result_bits)
 {
-    BINARY_HELPER_ENSURE_EXPRESSIONS
+    BINARY_HELPER_ENSURE_EXPRESSIONS;
 
     void *(*handler)(void *, void*);
     switch (cond) {
@@ -552,7 +565,7 @@ static void *sym_setcond_internal(target_ulong pc,
     }
 
     void *condition = handler(arg1_expr, arg2_expr);
-    _sym_push_path_constraint(condition, result, pc);
+    _sym_push_path_constraint(condition, result, get_pc(env));
 
     return _sym_build_bool_to_bits(condition, result_bits);
 }
@@ -563,7 +576,7 @@ void *HELPER(sym_setcond_i32)(CPUArchState *env,
                               int32_t cond, uint32_t result)
 {
     return sym_setcond_internal(
-        env->eip, arg1, arg1_expr, arg2, arg2_expr, cond, result, 32);
+        env, arg1, arg1_expr, arg2, arg2_expr, cond, result, 32);
 }
 
 void *HELPER(sym_setcond_i64)(CPUArchState *env,
@@ -572,5 +585,5 @@ void *HELPER(sym_setcond_i64)(CPUArchState *env,
                               int32_t cond, uint64_t result)
 {
     return sym_setcond_internal(
-        env->eip, arg1, arg1_expr, arg2, arg2_expr, cond, result, 64);
+        env, arg1, arg1_expr, arg2, arg2_expr, cond, result, 64);
 }

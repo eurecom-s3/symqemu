@@ -77,9 +77,6 @@ DEF_HELPER_FLAGS_5(sym_store_host_i32, TCG_CALL_NO_RWG, void, i32, ptr, ptr,
 DEF_HELPER_FLAGS_5(sym_store_host_i64, TCG_CALL_NO_RWG, void, i64, ptr, ptr,
                    i64, i64)
 
-/* TODO In theory, host and guest address spaces could overlap, as well as
- * different guest address spaces. How do we distinguish between them? */
-
 /* Bit fields */
 DEF_HELPER_FLAGS_3(sym_extract_i32, TCG_CALL_NO_RWG_SE, ptr, ptr, i32, i32)
 DEF_HELPER_FLAGS_3(sym_extract_i64, TCG_CALL_NO_RWG_SE, ptr, ptr, i64, i64)
