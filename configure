@@ -5080,10 +5080,12 @@ else
     feature_not_found "SymCC (source)" "Point --symcc-source to the SymCC source code"
 fi
 
-symcc_runtime_dir="${symcc_build}/runtime/qsym_backend"
-if test -e "${symcc_runtime_dir}/libSymRuntime.so"; then
-    libs_cpu="-L${symcc_runtime_dir} -lSymRuntime $libs_cpu"
-    libs_cpu="-Wl,-rpath,${symcc_runtime_dir} $libs_cpu"
+if test -e "${symcc_build}/runtime/qsym_backend/libSymRuntime.so"; then
+    libs_cpu="-L${symcc_build}/runtime/qsym_backend -lSymRuntime $libs_cpu"
+    libs_cpu="-Wl,-rpath,${symcc_build}/runtime/qsym_backend $libs_cpu"
+elif test -e "${symcc_build}/runtime/simple_backend/libSymRuntime.so"; then
+    libs_cpu="-L${symcc_build}/runtime/simple_backend -lSymRuntime $libs_cpu"
+    libs_cpu="-Wl,-rpath,${symcc_build}/runtime/simple_backend $libs_cpu"
 else
     feature_not_found "SymCC (runtime)" "Point --symcc-build to the SymCC build directory"
 fi
