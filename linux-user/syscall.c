@@ -326,6 +326,12 @@ _syscall5(int, sys_statx, int, dirfd, const char *, pathname, int, flags,
           unsigned int, mask, struct target_statx *, statxbuf)
 #endif
 
+/* For simplicity, we declare the symbolic versions of the read and open
+ * functions here; they are defined in the C++ internals of the symbolic
+ * backend. */
+int open_symbolized(const char *ptah, int oflag, mode_t mode);
+ssize_t read_symbolized(int fildes, void *buf, size_t nbyte);
+
 static bitmask_transtbl fcntl_flags_tbl[] = {
   { TARGET_O_ACCMODE,   TARGET_O_WRONLY,    O_ACCMODE,   O_WRONLY,    },
   { TARGET_O_ACCMODE,   TARGET_O_RDWR,      O_ACCMODE,   O_RDWR,      },
@@ -7124,7 +7130,10 @@ static int do_openat(void *cpu_env, int dirfd, const char *pathname, int flags, 
         return fd;
     }
 
-    return safe_openat(dirfd, path(pathname), flags, mode);
+    if (dirfd == AT_FDCWD)
+        return open_symbolized(path(pathname), flags, mode);
+    else
+        return safe_openat(dirfd, path(pathname), flags, mode);
 }
 
 #define TIMER_MAGIC 0x0caf0000
@@ -7215,10 +7224,6 @@ static int host_to_target_cpu_mask(const unsigned long *host_mask,
     return 0;
 }
 
-/* For simplicity, we declare the symbolic version of the read function here; it
- * is defined in the C++ internals of the symbolic backend. */
-ssize_t read_symbolized(int fildes, void *buf, size_t nbyte);
-
 /* This is an internal helper for do_syscall so that it is easier
  * to have a single return point, so that actions, such as logging
  * of syscall results, can be performed.
@@ -7287,14 +7292,7 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         } else {
             if (!(p = lock_user(VERIFY_WRITE, arg2, arg3, 0)))
                 return -TARGET_EFAULT;
-
-            /* TODO respect the configured input file instead of hard-coding
-             * standard input */
-            if (arg1 != 0)
-                ret = get_errno(safe_read(arg1, p, arg3));
-            else
-                ret = get_errno(read_symbolized(0, p, arg3));
-
+            ret = get_errno(read_symbolized(arg1, p, arg3));
             if (ret >= 0 &&
                 fd_trans_host_to_target_data(arg1)) {
                 ret = fd_trans_host_to_target_data(arg1)(p, ret);
