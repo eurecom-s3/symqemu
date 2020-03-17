@@ -31,7 +31,12 @@
                                                                                \
     if (arg2_expr == NULL) {                                                   \
         arg2_expr = _sym_build_integer(arg2, _sym_bits_helper(arg1_expr));     \
-    }
+    }                                                                          \
+                                                                               \
+    assert(_sym_bits_helper(arg1_expr) == 32 ||                                \
+           _sym_bits_helper(arg1_expr) == 64);                                 \
+    assert(_sym_bits_helper(arg2_expr) == 32 ||                                \
+           _sym_bits_helper(arg2_expr) == 64);
 
 /* This macro declares a binary helper function with 64-bit arguments and
  * defines a 32-bit helper function that delegates to it. Use it instead of the
@@ -173,7 +178,7 @@ void *HELPER(sym_sext_i32_i64)(void *expr, uint64_t target_length)
     if (expr == NULL)
         return NULL;
 
-    return _sym_build_sext(expr, 64);
+    return _sym_build_sext(expr, 32); /* extend by 32 */
 }
 
 void *HELPER(sym_zext_i32_i64)(void *expr, uint64_t target_length)
@@ -181,7 +186,7 @@ void *HELPER(sym_zext_i32_i64)(void *expr, uint64_t target_length)
     if (expr == NULL)
         return NULL;
 
-    return _sym_build_zext(expr, 64);
+    return _sym_build_zext(expr, 32); /* extend by 32 */
 }
 
 void *HELPER(sym_bswap)(void *expr, uint64_t length)
@@ -268,7 +273,7 @@ static void *sym_load_guest_internal(CPUArchState *env,
     if (load_length == result_length || memory_expr == NULL)
         return memory_expr;
     else
-        return _sym_build_zext(memory_expr, result_length * 8);
+        return _sym_build_zext(memory_expr, (result_length - load_length) * 8);
 }
 
 void *HELPER(sym_load_guest_i32)(CPUArchState *env,
@@ -327,7 +332,7 @@ static void *sym_load_host_internal(void *addr, uint64_t offset,
     if (load_length == result_length || memory_expr == NULL)
         return memory_expr;
     else
-        return _sym_build_zext(memory_expr, result_length * 8);
+        return _sym_build_zext(memory_expr, (result_length - load_length) * 8);
 }
 
 void *HELPER(sym_load_host_i32)(void *addr, uint64_t offset, uint64_t length)
@@ -398,7 +403,7 @@ void *HELPER(sym_extract_i64)(void *expr, uint64_t ofs, uint64_t len)
 
     return _sym_build_zext(
         _sym_extract_helper(expr, ofs + len - 1, ofs),
-        _sym_bits_helper(expr));
+        _sym_bits_helper(expr) - len);
 }
 
 void *HELPER(sym_extract2_i32)(uint32_t ah, void *ah_expr,
@@ -477,7 +482,7 @@ void *HELPER(sym_sextract_i64)(void *expr, uint64_t ofs, uint64_t len)
 
     return _sym_build_sext(
         _sym_extract_helper(expr, ofs + len - 1, ofs),
-        _sym_bits_helper(expr));
+        _sym_bits_helper(expr) - len);
 }
 
 void *HELPER(sym_deposit_i32)(uint32_t arg1, void *arg1_expr,
