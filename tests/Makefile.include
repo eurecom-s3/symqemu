@@ -44,6 +44,7 @@ $(SRC_PATH)/scripts/qapi-gen.py
 SYSEMU_TARGET_LIST := $(subst -softmmu.mak,,$(notdir \
    $(wildcard $(SRC_PATH)/default-configs/*-softmmu.mak)))
 
+check-unit-y += tests/check-sym-runtime$(EXESUF)
 check-unit-y += tests/check-qdict$(EXESUF)
 check-unit-y += tests/check-block-qdict$(EXESUF)
 check-unit-$(CONFIG_SOFTMMU) += tests/test-char$(EXESUF)
@@ -511,6 +512,15 @@ test-crypto-obj-$(CONFIG_BLOCK) = $(authz-obj-y) $(crypto-obj-y) $(test-qom-obj-
 test-io-obj-$(CONFIG_BLOCK) = $(io-obj-y) $(test-crypto-obj-y)
 test-authz-obj-$(CONFIG_BLOCK) = $(test-qom-obj-y) $(authz-obj-y)
 test-block-obj-$(CONFIG_BLOCK) = $(block-obj-y) $(test-io-obj-y) tests/iothread.o
+
+# This is a bit of a hack: we run the unit tests of the symbolic runtime with
+# the configuration of the x86_64 linux-user emulator. There is a dedicated
+# directory for target-specific TCG tests, but it expects to run everything
+# inside the emulator and therefore lacks the unit-test setup.
+tests/check-sym-runtime.o-cflags := -I$(SRC_PATH)/target/i386 -Ix86_64-linux-user -DNEED_CPU_H
+tests/check-sym-runtime$(EXESUF): LDFLAGS += $(libs_cpu)
+tests/check-sym-runtime$(EXESUF): tests/check-sym-runtime.o \
+	x86_64-linux-user/accel/tcg/tcg-runtime-sym.o
 
 tests/check-qnum$(EXESUF): tests/check-qnum.o $(test-util-obj-y)
 tests/check-qstring$(EXESUF): tests/check-qstring.o $(test-util-obj-y)
