@@ -55,8 +55,8 @@ DEF_HELPER_FLAGS_1(sym_not, TCG_CALL_NO_RWG_SE, ptr, ptr)
 /* Extension and truncation */
 DEF_HELPER_FLAGS_2(sym_sext, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)
 DEF_HELPER_FLAGS_2(sym_zext, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)
-DEF_HELPER_FLAGS_2(sym_sext_i32_i64, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)
-DEF_HELPER_FLAGS_2(sym_zext_i32_i64, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)
+DEF_HELPER_FLAGS_1(sym_sext_i32_i64, TCG_CALL_NO_RWG_SE, ptr, ptr)
+DEF_HELPER_FLAGS_1(sym_zext_i32_i64, TCG_CALL_NO_RWG_SE, ptr, ptr)
 
 /* Byte swapping */
 DEF_HELPER_FLAGS_2(sym_bswap, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)

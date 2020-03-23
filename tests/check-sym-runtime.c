@@ -125,6 +125,22 @@ static void zext_test(void)
                  0xf0f0f0f0, 64);
 }
 
+static void sext_i32_i64_test(void)
+{
+    assert_equal(helper_sym_sext_i32_i64(_sym_build_integer(0x55555555, 32)),
+                 0x55555555, 64);
+    assert_equal(helper_sym_sext_i32_i64(_sym_build_integer(0xa5555555, 32)),
+                 0xffffffffa5555555, 64);
+}
+
+static void zext_i32_i64_test(void)
+{
+    assert_equal(helper_sym_zext_i32_i64(_sym_build_integer(0x55555555, 32)),
+                 0x55555555, 64);
+    assert_equal(helper_sym_zext_i32_i64(_sym_build_integer(0xa5555555, 32)),
+                 0xa5555555, 64);
+}
+
 int main(int argc, char* argv[])
 {
     g_test_init(&argc, &argv, NULL);
@@ -155,6 +171,8 @@ int main(int argc, char* argv[])
     REGISTER_TEST(neg);
     REGISTER_TEST(sext);
     REGISTER_TEST(zext);
+    REGISTER_TEST(sext_i32_i64);
+    REGISTER_TEST(zext_i32_i64);
 
 #undef REGISTER_TEST
 

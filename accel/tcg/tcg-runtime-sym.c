@@ -173,7 +173,7 @@ void *HELPER(sym_zext)(void *expr, uint64_t target_length)
         _sym_build_integer((1ull << desired_bits) - 1, current_bits));
 }
 
-void *HELPER(sym_sext_i32_i64)(void *expr, uint64_t target_length)
+void *HELPER(sym_sext_i32_i64)(void *expr)
 {
     if (expr == NULL)
         return NULL;
@@ -181,7 +181,7 @@ void *HELPER(sym_sext_i32_i64)(void *expr, uint64_t target_length)
     return _sym_build_sext(expr, 32); /* extend by 32 */
 }
 
-void *HELPER(sym_zext_i32_i64)(void *expr, uint64_t target_length)
+void *HELPER(sym_zext_i32_i64)(void *expr)
 {
     if (expr == NULL)
         return NULL;
