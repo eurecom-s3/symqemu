@@ -141,6 +141,95 @@ static void zext_i32_i64_test(void)
                  0xa5555555, 64);
 }
 
+static void bswap_test(void)
+{
+    /* 32-bit input */
+    assert_equal(helper_sym_bswap(_sym_build_integer(0xAABB, 32), 2),
+                 0xBBAA, 32);
+    assert_equal(helper_sym_bswap(_sym_build_integer(0xAABBCCDD, 32), 4),
+                 0xDDCCBBAA, 32);
+
+    /* 64-bit input */
+    assert_equal(helper_sym_bswap(_sym_build_integer(0xAABB, 64), 2),
+                 0xBBAA, 64);
+    assert_equal(helper_sym_bswap(_sym_build_integer(0xAABBCCDD, 64), 4),
+                 0xDDCCBBAA, 64);
+    assert_equal(helper_sym_bswap(_sym_build_integer(0xAABBCCDD00112233, 64), 8),
+                 0x33221100DDCCBBAA, 64);
+}
+
+static void rotate_left_test(void)
+{
+    assert_equal(helper_sym_rotate_left_i32(
+                     0xAABBCCDD, _sym_build_integer(0xAABBCCDD, 32),
+                     4, _sym_build_integer(4, 32)),
+                 0xABBCCDDA, 32);
+    assert_equal(helper_sym_rotate_left_i64(
+                     0xAABBCCDD00112233, NULL,
+                     4, _sym_build_integer(4, 64)),
+                 0xABBCCDD00112233A, 64);
+}
+
+static void rotate_right_test(void)
+{
+    assert_equal(helper_sym_rotate_right_i32(
+                     0xAABBCCDD, _sym_build_integer(0xAABBCCDD, 32),
+                     4, _sym_build_integer(4, 32)),
+                 0xDAABBCCD, 32);
+    assert_equal(helper_sym_rotate_right_i64(
+                     0xAABBCCDD00112233, NULL,
+                     4, _sym_build_integer(4, 64)),
+                 0x3AABBCCDD0011223, 64);
+}
+
+static void extract_test(void)
+{
+    assert_equal(helper_sym_extract_i32(
+                     _sym_build_integer(0xAABBCCDD, 32), 4, 8),
+                 0xCD, 32);
+    assert_equal(helper_sym_extract_i64(
+                     _sym_build_integer(0xAABBCCDD00112233, 64), 24, 28),
+                 0xBCCDD00, 64);
+}
+
+static void sextract_test(void)
+{
+    assert_equal(helper_sym_sextract_i32(
+                     _sym_build_integer(0xAABBCCDD, 32), 4, 8),
+                 0xFFFFFFCD, 32);
+    assert_equal(helper_sym_sextract_i64(
+                     _sym_build_integer(0xAABBCCDD00112233, 64), 24, 31),
+                 0x3BCCDD00, 64);
+}
+
+static void extract2_test(void)
+{
+    assert_equal(helper_sym_extract2_i32(
+                     0xAABBCCDD, _sym_build_integer(0xAABBCCDD, 32),
+                     0x00112233, NULL,
+                     16),
+                 0xCCDD0011, 32);
+    assert_equal(helper_sym_extract2_i64(
+                     0xAABBCCDD00112233, _sym_build_integer(0xAABBCCDD00112233, 64),
+                     0x445566778899ABCD, NULL,
+                     12),
+                 0x233445566778899A, 64);
+}
+
+static void deposit_test(void)
+{
+    assert_equal(helper_sym_deposit_i32(
+                     0xAAB00CDD, _sym_build_integer(0xAAB00CDD, 32),
+                     0xBC, NULL,
+                     12, 8),
+                 0xAABBCCDD, 32);
+    assert_equal(helper_sym_deposit_i64(
+                     0xAABBCCDD00112233, _sym_build_integer(0xAABBCCDD00112233, 64),
+                     0xEEFF, NULL,
+                     16, 16),
+                 0xAABBCCDDEEFF2233, 64);
+}
+
 int main(int argc, char* argv[])
 {
     g_test_init(&argc, &argv, NULL);
@@ -148,7 +237,6 @@ int main(int argc, char* argv[])
     _sym_initialize();
 
 #define REGISTER_TEST(name) g_test_add_func("/sym/" #name, name##_test)
-
     REGISTER_TEST(add);
     REGISTER_TEST(sub);
     REGISTER_TEST(mul);
@@ -173,7 +261,13 @@ int main(int argc, char* argv[])
     REGISTER_TEST(zext);
     REGISTER_TEST(sext_i32_i64);
     REGISTER_TEST(zext_i32_i64);
-
+    REGISTER_TEST(bswap);
+    REGISTER_TEST(rotate_left);
+    REGISTER_TEST(rotate_right);
+    REGISTER_TEST(extract);
+    REGISTER_TEST(sextract);
+    REGISTER_TEST(extract2);
+    REGISTER_TEST(deposit);
 #undef REGISTER_TEST
 
     return g_test_run();
