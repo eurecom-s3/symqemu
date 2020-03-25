@@ -230,6 +230,69 @@ static void deposit_test(void)
                  0xAABBCCDDEEFF2233, 64);
 }
 
+static void load_store_guest_test(void)
+{
+    uint8_t memory[32];
+    CPUArchState dummy_state;
+
+    memset(memory, 0xAA, 16);
+    memset(&memory[16], 0xBB, 16);
+
+    /* Loading concrete memory should give us a null expression. */
+    g_assert_true(helper_sym_load_guest_i64(
+                      &dummy_state, (target_ulong)&memory[16], NULL, 8)
+                  == NULL);
+
+    /* Store some symbolic data in the middle of the buffer. */
+    *((uint32_t*)&memory[16]) = 0x11223344;
+    helper_sym_store_guest_i64(
+        &dummy_state,
+        0x11223344, _sym_build_integer(0x11223344, 64),
+        (target_ulong)&memory[16], NULL,
+        4);
+
+    *((uint16_t*)&memory[20]) = 0x5566;
+    helper_sym_store_guest_i32(
+        &dummy_state,
+        0x5566, _sym_build_integer(0x5566, 32),
+        (target_ulong)&memory[20], NULL,
+        2);
+
+    /* Buffer: [AA...AA 44 33 22 11 66 55 BB...BB] */
+
+    /* Make sure that only the four bytes are symbolic, and that reading partly
+     * symbolic data takes the concrete data into account. */
+    assert_equal(helper_sym_load_guest_i64(
+                     &dummy_state, (target_ulong)&memory[16], NULL, 1),
+                 0x44, 64);
+    assert_equal(helper_sym_load_guest_i64(
+                     &dummy_state, (target_ulong)&memory[16], NULL, 2),
+                 0x3344, 64);
+    assert_equal(helper_sym_load_guest_i64(
+                     &dummy_state, (target_ulong)&memory[16], NULL, 4),
+                 0x11223344, 64);
+    assert_equal(helper_sym_load_guest_i64(
+                     &dummy_state, (target_ulong)&memory[16], NULL, 8),
+                 0xBBBB556611223344, 64);
+
+    assert_equal(helper_sym_load_guest_i32(
+                     &dummy_state, (target_ulong)&memory[16], NULL, 1),
+                 0x44, 32);
+    assert_equal(helper_sym_load_guest_i32(
+                     &dummy_state, (target_ulong)&memory[16], NULL, 2),
+                 0x3344, 32);
+    assert_equal(helper_sym_load_guest_i32(
+                     &dummy_state, (target_ulong)&memory[16], NULL, 4),
+                 0x11223344, 32);
+
+    assert_equal(helper_sym_load_guest_i32(
+                     &dummy_state, (target_ulong)&memory[14], NULL, 4),
+                 0x3344AAAA, 32);
+
+    /* Make the backend forget about the symbolic data (just in case). */
+    _sym_write_memory(memory, sizeof(memory), NULL, false);
+}
+
 int main(int argc, char* argv[])
 {
     g_test_init(&argc, &argv, NULL);
@@ -268,6 +331,7 @@ int main(int argc, char* argv[])
     REGISTER_TEST(sextract);
     REGISTER_TEST(extract2);
     REGISTER_TEST(deposit);
+    REGISTER_TEST(load_store_guest);
 #undef REGISTER_TEST
 
     return g_test_run();
