@@ -52,6 +52,14 @@ DEF_HELPER_FLAGS_1(sym_not, TCG_CALL_NO_RWG_SE, ptr, ptr)
 
 #undef SYM_HELPER_BINARY
 
+/* Multi-word arithmetic: in most cases, we force TCG to fall back to the less
+ * efficient implementations of these instructions in terms of single-word
+ * arithmetic. We can handle those symbolically, and this way we don't have to
+ * work around problems related to the large number of inputs and outputs
+ * required by multi-word arithmetic. Multiplication, however, needs a
+ * helper. */
+DEF_HELPER_FLAGS_4(sym_muluh_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr)
+
 /* Extension and truncation */
 DEF_HELPER_FLAGS_2(sym_sext, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)
 DEF_HELPER_FLAGS_2(sym_zext, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)
@@ -92,8 +100,7 @@ DEF_HELPER_FLAGS_6(sym_deposit_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr,
 DEF_HELPER_FLAGS_7(sym_setcond_i32, TCG_CALL_NO_RWG, ptr, env, i32, ptr, i32, ptr, s32, i32)
 DEF_HELPER_FLAGS_7(sym_setcond_i64, TCG_CALL_NO_RWG, ptr, env, i64, ptr, i64, ptr, s32, i64)
 
-/* TODO clz, ctz, clrsb, ctpop; multi-word arithmetic; vector operations;
- * helpers for atomic operations (?) */
+/* TODO clz, ctz, clrsb, ctpop; vector operations; helpers for atomic operations (?) */
 
 /* The extrl and extrh instructions aren't emitted on 64-bit hosts. If we ever
  * extend support to other host architectures, we need to implement them. The
