@@ -36,7 +36,8 @@
     assert(_sym_bits_helper(arg1_expr) == 32 ||                                \
            _sym_bits_helper(arg1_expr) == 64);                                 \
     assert(_sym_bits_helper(arg2_expr) == 32 ||                                \
-           _sym_bits_helper(arg2_expr) == 64);
+           _sym_bits_helper(arg2_expr) == 64);                                 \
+    assert(_sym_bits_helper(arg1_expr) == _sym_bits_helper(arg2_expr));
 
 /* This macro declares a binary helper function with 64-bit arguments and
  * defines a 32-bit helper function that delegates to it. Use it instead of the
@@ -178,6 +179,7 @@ void *HELPER(sym_sext_i32_i64)(void *expr)
     if (expr == NULL)
         return NULL;
 
+    assert(_sym_bits_helper(expr) == 32);
     return _sym_build_sext(expr, 32); /* extend by 32 */
 }
 
@@ -186,7 +188,17 @@ void *HELPER(sym_zext_i32_i64)(void *expr)
     if (expr == NULL)
         return NULL;
 
+    assert(_sym_bits_helper(expr) == 32);
     return _sym_build_zext(expr, 32); /* extend by 32 */
+}
+
+void *HELPER(sym_trunc_i64_i32)(void *expr)
+{
+    if (expr == NULL)
+        return NULL;
+
+    assert(_sym_bits_helper(expr) == 64);
+    return _sym_build_trunc(expr, 32);
 }
 
 void *HELPER(sym_bswap)(void *expr, uint64_t length)
