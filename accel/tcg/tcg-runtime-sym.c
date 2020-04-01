@@ -153,8 +153,9 @@ void *HELPER(sym_muluh_i64)(uint64_t arg1, void *arg1_expr,
 
     assert(_sym_bits_helper(arg1_expr) == 64 &&
            _sym_bits_helper(arg2_expr) == 64);
-    void *full_result = _sym_build_mul(arg1_expr, arg2_expr);
-    return _sym_extract_helper(full_result, 63, 0);
+    void *full_result = _sym_build_mul(_sym_build_zext(arg1_expr, 64),
+                                       _sym_build_zext(arg2_expr, 64));
+    return _sym_extract_helper(full_result, 127, 64);
 }
 
 void *HELPER(sym_sext)(void *expr, uint64_t target_length)
