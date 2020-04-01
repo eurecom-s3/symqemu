@@ -5062,6 +5062,7 @@ static target_ulong disas_insn(DisasContext *s, CPUState *cpu)
             }
             next_eip = s->pc - s->cs_base;
             tcg_gen_movi_tl(s->T1, next_eip);
+            gen_helper_sym_notify_call(s->T1);
             gen_push_v(s, s->T1);
             gen_op_jmp_v(s->T0);
             gen_bnd_jmp(s);
@@ -6513,6 +6514,7 @@ static target_ulong disas_insn(DisasContext *s, CPUState *cpu)
         val = x86_ldsw_code(env, s);
         ot = gen_pop_T0(s);
         gen_stack_update(s, val + (1 << ot));
+        gen_helper_sym_notify_return(s->T0);
         /* Note that gen_pop_T0 uses a zero-extending load.  */
         gen_op_jmp_v(s->T0);
         gen_bnd_jmp(s);
@@ -6521,6 +6523,7 @@ static target_ulong disas_insn(DisasContext *s, CPUState *cpu)
     case 0xc3: /* ret */
         ot = gen_pop_T0(s);
         gen_pop_update(s, ot);
+        gen_helper_sym_notify_return(s->T0);
         /* Note that gen_pop_T0 uses a zero-extending load.  */
         gen_op_jmp_v(s->T0);
         gen_bnd_jmp(s);
@@ -6588,6 +6591,7 @@ static target_ulong disas_insn(DisasContext *s, CPUState *cpu)
                 tval &= 0xffffffff;
             }
             tcg_gen_movi_tl(s->T0, next_eip);
+            gen_helper_sym_notify_call(s->T0);
             gen_push_v(s, s->T0);
             gen_bnd_jmp(s);
             gen_jmp(s, tval);

@@ -616,3 +616,18 @@ void *HELPER(sym_setcond_i64)(CPUArchState *env,
     return sym_setcond_internal(
         env, arg1, arg1_expr, arg2, arg2_expr, cond, result, 64);
 }
+
+void HELPER(sym_notify_call)(uint64_t return_address)
+{
+    _sym_notify_call(return_address);
+}
+
+void HELPER(sym_notify_return)(uint64_t return_address)
+{
+    _sym_notify_ret(return_address);
+}
+
+void HELPER(sym_notify_block)(uint64_t block_id)
+{
+    _sym_notify_basic_block(block_id);
+}
