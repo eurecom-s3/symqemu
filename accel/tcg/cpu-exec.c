@@ -141,7 +141,6 @@ static void init_delay_params(SyncClocks *sc, const CPUState *cpu)
 static inline tcg_target_ulong cpu_tb_exec(CPUState *cpu, TranslationBlock *itb)
 {
     CPUArchState *env = cpu->env_ptr;
-    void *env_exprs = cpu->env_exprs;
     uintptr_t ret;
     TranslationBlock *last_tb;
     int tb_exit;
@@ -171,7 +170,7 @@ static inline tcg_target_ulong cpu_tb_exec(CPUState *cpu, TranslationBlock *itb)
 #endif /* DEBUG_DISAS */
 
     cpu->can_do_io = !use_icount;
-    ret = tcg_qemu_tb_exec(env, env_exprs, tb_ptr);
+    ret = tcg_qemu_tb_exec(env, tb_ptr);
     cpu->can_do_io = 1;
     last_tb = (TranslationBlock *)(ret & ~TB_EXIT_MASK);
     tb_exit = ret & TB_EXIT_MASK;

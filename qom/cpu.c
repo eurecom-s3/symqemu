@@ -374,8 +374,6 @@ static void cpu_common_initfn(Object *obj)
     QTAILQ_INIT(&cpu->breakpoints);
     QTAILQ_INIT(&cpu->watchpoints);
 
-    memset(cpu->env_exprs, 0, sizeof(cpu->env_exprs));
-
     cpu_exec_initfn(cpu);
 }
 

@@ -5590,6 +5590,8 @@ static void x86_cpu_initfn(Object *obj)
     CPUX86State *env = &cpu->env;
     FeatureWord w;
 
+    memset(cpu->env_exprs, 0, sizeof(cpu->env_exprs));
+
     env->nr_dies = 1;
     cpu_set_cpustate_pointers(cpu);
 

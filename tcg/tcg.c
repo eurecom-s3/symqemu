@@ -161,7 +161,6 @@ static int tcg_out_ldst_finalize(TCGContext *s);
 static TCGContext **tcg_ctxs;
 static unsigned int n_tcg_ctxs;
 TCGv_env cpu_env = 0;
-TCGv_ptr cpu_env_exprs = 0;
 
 struct tcg_region_tree {
     QemuMutex lock;
@@ -917,7 +916,8 @@ static GHashTable *helper_table;
 static int indirect_reg_alloc_order[ARRAY_SIZE(tcg_target_reg_alloc_order)];
 static void process_op_defs(TCGContext *s);
 static TCGTemp *tcg_global_reg_new_internal(TCGContext *s, TCGType type,
-                                            TCGReg reg, const char *name);
+                                            TCGReg reg, intptr_t sym_offset,
+                                            const char *name);
 
 void tcg_context_init(TCGContext *s)
 {
@@ -925,7 +925,7 @@ void tcg_context_init(TCGContext *s)
     TCGOpDef *def;
     TCGArgConstraint *args_ct;
     int *sorted_args;
-    TCGTemp *ts, *ts_expr;
+    TCGTemp *ts;
 
     memset(s, 0, sizeof(*s));
     s->nb_globals = 0;
@@ -995,12 +995,10 @@ void tcg_context_init(TCGContext *s)
 #endif
 
     tcg_debug_assert(!tcg_regset_test_reg(s->reserved_regs, TCG_AREG0));
-    tcg_debug_assert(!tcg_regset_test_reg(s->reserved_regs, TCG_AREG1));
-    ts = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, TCG_AREG0, "env");
+    ts = tcg_global_reg_new_internal(
+        s, TCG_TYPE_PTR, TCG_AREG0,
+        offsetof(ArchCPU, env_exprs) - offsetof(ArchCPU, env), "env");
     cpu_env = temp_tcgv_ptr(ts);
-    ts_expr = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, TCG_AREG1, "env_exprs");
-    ts_expr->symbolic_expression = 1;
-    cpu_env_exprs = temp_tcgv_ptr(ts_expr);
 }
 
 /*
@@ -1152,9 +1150,11 @@ static inline TCGTemp *tcg_global_alloc(TCGContext *s)
 }
 
 static TCGTemp *tcg_global_reg_new_internal(TCGContext *s, TCGType type,
-                                            TCGReg reg, const char *name)
+                                            TCGReg reg, intptr_t sym_offset,
+                                            const char *name)
 {
-    TCGTemp *ts;
+    TCGTemp *ts, *ts_expr;
+    char buf[64];
 
     if (TCG_TARGET_REG_BITS == 32 && type != TCG_TYPE_I32) {
         tcg_abort();
@@ -1165,8 +1165,21 @@ static TCGTemp *tcg_global_reg_new_internal(TCGContext *s, TCGType type,
     ts->type = type;
     ts->fixed_reg = 1;
     ts->reg = reg;
+    ts->sym_offset = sym_offset;
     ts->name = name;
     tcg_regset_set_reg(s->reserved_regs, reg);
+
+    ts_expr = tcg_global_alloc(s);
+    ts_expr->base_type = TCG_TYPE_PTR;
+    ts_expr->type = TCG_TYPE_PTR;
+    ts_expr->symbolic_expression = 1;
+    ts_expr->indirect_reg = 0;
+    ts_expr->mem_allocated = 1;
+    ts_expr->mem_base = ts;
+    ts_expr->mem_offset = sym_offset;
+    pstrcpy(buf, sizeof(buf), name);
+    pstrcat(buf, sizeof(buf), "_expr");
+    ts_expr->name = strdup(buf);
 
     return ts;
 }
@@ -1175,18 +1188,20 @@ void tcg_set_frame(TCGContext *s, TCGReg reg, intptr_t start, intptr_t size)
 {
     s->frame_start = start;
     s->frame_end = start + size;
+    /* The frame temporary is never used as a base in regular temporary
+     * creation, nor is it the argument to any computations; it serves for sync
+     * only. Therefore, we can provide a fake sym_offset without having to worry
+     * about it. */
     s->frame_temp
-        = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, reg, "_frame");
+        = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, reg, 0, "_frame");
 }
 
 TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
-                                     intptr_t offset, TCGv_ptr exprs_base,
-                                     const char *name)
+                                     intptr_t offset, const char *name)
 {
     TCGContext *s = tcg_ctx;
     int expr_idx = s->nb_globals / 2;
-    TCGTemp *base_ts = tcgv_ptr_temp(base),
-        *exprs_base_ts = tcgv_ptr_temp(exprs_base);
+    TCGTemp *base_ts = tcgv_ptr_temp(base);
     TCGTemp *ts = tcg_global_alloc(s), *ts_expr = tcg_global_alloc(s);
     char buf[64];
     int indirect_reg = 0, bigendian = 0;
@@ -1199,9 +1214,7 @@ TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
     if (!base_ts->fixed_reg) {
         /* We do not support double-indirect registers.  */
         tcg_debug_assert(!base_ts->indirect_reg);
-        tcg_debug_assert(!exprs_base_ts->indirect_reg);
         base_ts->indirect_base = 1;
-        exprs_base_ts->indirect_base = 1;
         s->nb_indirects += (TCG_TARGET_REG_BITS == 32 && type == TCG_TYPE_I64
                             ? 4 : 2);
         indirect_reg = 1;
@@ -1245,8 +1258,8 @@ TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
     ts_expr->symbolic_expression = 1;
     ts_expr->indirect_reg = indirect_reg;
     ts_expr->mem_allocated = 1;
-    ts_expr->mem_base = exprs_base_ts;
-    ts_expr->mem_offset = expr_idx * sizeof(void *);
+    ts_expr->mem_base = base_ts;
+    ts_expr->mem_offset = base_ts->sym_offset + expr_idx * sizeof(void *);
     pstrcpy(buf, sizeof(buf), name);
     pstrcat(buf, sizeof(buf), "_expr");
     ts_expr->name = strdup(buf);

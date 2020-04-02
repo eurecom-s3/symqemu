@@ -8431,37 +8431,37 @@ void tcg_x86_init(void)
     };
     int i;
 
-    cpu_cc_op = tcg_global_mem_new_i32(
-        cpu_env, offsetof(CPUX86State, cc_op), cpu_env_exprs, "cc_op");
+    cpu_cc_op = tcg_global_mem_new_i32(cpu_env,
+                                       offsetof(CPUX86State, cc_op), "cc_op");
     cpu_cc_dst = tcg_global_mem_new(cpu_env, offsetof(CPUX86State, cc_dst),
-                                    cpu_env_exprs, "cc_dst");
+                                    "cc_dst");
     cpu_cc_src = tcg_global_mem_new(cpu_env, offsetof(CPUX86State, cc_src),
-                                    cpu_env_exprs, "cc_src");
+                                    "cc_src");
     cpu_cc_src2 = tcg_global_mem_new(cpu_env, offsetof(CPUX86State, cc_src2),
-                                     cpu_env_exprs, "cc_src2");
+                                     "cc_src2");
 
     for (i = 0; i < CPU_NB_REGS; ++i) {
         cpu_regs[i] = tcg_global_mem_new(cpu_env,
                                          offsetof(CPUX86State, regs[i]),
-                                         cpu_env_exprs, reg_names[i]);
+                                         reg_names[i]);
     }
 
     for (i = 0; i < 6; ++i) {
         cpu_seg_base[i]
             = tcg_global_mem_new(cpu_env,
                                  offsetof(CPUX86State, segs[i].base),
-                                 cpu_env_exprs, seg_base_names[i]);
+                                 seg_base_names[i]);
     }
 
     for (i = 0; i < 4; ++i) {
         cpu_bndl[i]
             = tcg_global_mem_new_i64(cpu_env,
                                      offsetof(CPUX86State, bnd_regs[i].lb),
-                                     cpu_env_exprs, bnd_regl_names[i]);
+                                     bnd_regl_names[i]);
         cpu_bndu[i]
             = tcg_global_mem_new_i64(cpu_env,
                                      offsetof(CPUX86State, bnd_regs[i].ub),
-                                     cpu_env_exprs, bnd_regu_names[i]);
+                                     bnd_regu_names[i]);
     }
 }
 

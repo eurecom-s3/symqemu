@@ -3714,12 +3714,10 @@ static void tcg_target_qemu_prologue(TCGContext *s)
 #if TCG_TARGET_REG_BITS == 32
     tcg_out_ld(s, TCG_TYPE_PTR, TCG_AREG0, TCG_REG_ESP,
                (ARRAY_SIZE(tcg_target_callee_save_regs) + 1) * 4);
-    tcg_out_ld(s, TCG_TYPE_PTR, TCG_AREG1, TCG_REG_ESP,
-               (ARRAY_SIZE(tcg_target_callee_save_regs) + 2) * 4);
     tcg_out_addi(s, TCG_REG_ESP, -stack_addend);
     /* jmp *tb.  */
     tcg_out_modrm_offset(s, OPC_GRP5, EXT5_JMPN_Ev, TCG_REG_ESP,
-                         (ARRAY_SIZE(tcg_target_callee_save_regs) + 3) * 4
+                         (ARRAY_SIZE(tcg_target_callee_save_regs) + 2) * 4
                          + stack_addend);
 #else
 # if !defined(CONFIG_SOFTMMU) && TCG_TARGET_REG_BITS == 64
@@ -3738,10 +3736,9 @@ static void tcg_target_qemu_prologue(TCGContext *s)
     }
 # endif
     tcg_out_mov(s, TCG_TYPE_PTR, TCG_AREG0, tcg_target_call_iarg_regs[0]);
-    tcg_out_mov(s, TCG_TYPE_PTR, TCG_AREG1, tcg_target_call_iarg_regs[1]);
     tcg_out_addi(s, TCG_REG_ESP, -stack_addend);
     /* jmp *tb.  */
-    tcg_out_modrm(s, OPC_GRP5, EXT5_JMPN_Ev, tcg_target_call_iarg_regs[2]);
+    tcg_out_modrm(s, OPC_GRP5, EXT5_JMPN_Ev, tcg_target_call_iarg_regs[1]);
 #endif
 
     /*
