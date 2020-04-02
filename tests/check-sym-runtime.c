@@ -331,6 +331,15 @@ static void load_store_host_test(void)
     _sym_write_memory(memory, sizeof(memory), NULL, false);
 }
 
+static void muluh_test(void)
+{
+    void *result = helper_sym_muluh_i64(
+        0xAABBCCDDEEFF0011, _sym_build_integer(0xAABBCCDDEEFF0011, 64),
+        0x0000000100000000, NULL);
+
+    assert_equal(result, 0xAABBCCDD, 64);
+}
+
 int main(int argc, char* argv[])
 {
     g_test_init(&argc, &argv, NULL);
@@ -371,6 +380,7 @@ int main(int argc, char* argv[])
     REGISTER_TEST(deposit);
     REGISTER_TEST(load_store_guest);
     REGISTER_TEST(load_store_host);
+    REGISTER_TEST(muluh);
 #undef REGISTER_TEST
 
     return g_test_run();
