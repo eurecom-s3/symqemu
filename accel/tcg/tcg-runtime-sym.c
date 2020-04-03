@@ -1,6 +1,7 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/helper-proto.h"
+#include "exec/cpu_ldst.h"
 #include "qemu/qemu-print.h"
 #include "tcg.h"
 
@@ -283,7 +284,8 @@ void *HELPER(sym_bswap)(void *expr, uint64_t length)
 
 static void *sym_load_guest_internal(CPUArchState *env,
                                      target_ulong addr, void *addr_expr,
-                                     uint64_t load_length, uint8_t result_length)
+                                     uint64_t load_length, uint8_t result_length,
+                                     target_ulong mmu_idx)
 {
     /* Try an alternative address */
     if (addr_expr != NULL)
@@ -292,7 +294,8 @@ static void *sym_load_guest_internal(CPUArchState *env,
                 addr_expr, _sym_build_integer(addr, sizeof(addr) * 8)),
             true, get_pc(env));
 
-    void *memory_expr = _sym_read_memory((uint8_t*)addr, load_length, true);
+    void *host_addr = tlb_vaddr_to_host(env, addr, MMU_DATA_LOAD, mmu_idx);
+    void *memory_expr = _sym_read_memory((uint8_t*)host_addr, load_length, true);
 
     if (load_length == result_length || memory_expr == NULL)
         return memory_expr;
@@ -302,22 +305,22 @@ static void *sym_load_guest_internal(CPUArchState *env,
 
 void *HELPER(sym_load_guest_i32)(CPUArchState *env,
                                  target_ulong addr, void *addr_expr,
-                                 uint64_t length)
+                                 uint64_t length, target_ulong mmu_idx)
 {
-    return sym_load_guest_internal(env, addr, addr_expr, length, 4);
+    return sym_load_guest_internal(env, addr, addr_expr, length, 4, mmu_idx);
 }
 
 void *HELPER(sym_load_guest_i64)(CPUArchState *env,
                                  target_ulong addr, void *addr_expr,
-                                 uint64_t length)
+                                 uint64_t length, target_ulong mmu_idx)
 {
-    return sym_load_guest_internal(env, addr, addr_expr, length, 8);
+    return sym_load_guest_internal(env, addr, addr_expr, length, 8, mmu_idx);
 }
 
 static void sym_store_guest_internal(CPUArchState *env,
                                      uint64_t value, void *value_expr,
                                      target_ulong addr, void *addr_expr,
-                                     uint64_t length)
+                                     uint64_t length, target_ulong mmu_idx)
 {
     /* Try an alternative address */
     if (addr_expr != NULL)
@@ -326,25 +329,26 @@ static void sym_store_guest_internal(CPUArchState *env,
                 addr_expr, _sym_build_integer(addr, sizeof(addr) * 8)),
             true, get_pc(env));
 
-    _sym_write_memory((uint8_t*)addr, length, value_expr, true);
+    void *host_addr = tlb_vaddr_to_host(env, addr, MMU_DATA_STORE, mmu_idx);
+    _sym_write_memory((uint8_t*)host_addr, length, value_expr, true);
 }
 
 void HELPER(sym_store_guest_i32)(CPUArchState *env,
                                  uint32_t value, void *value_expr,
                                  target_ulong addr, void *addr_expr,
-                                 uint64_t length)
+                                 uint64_t length, target_ulong mmu_idx)
 {
     return sym_store_guest_internal(
-        env, value, value_expr, addr, addr_expr, length);
+        env, value, value_expr, addr, addr_expr, length, mmu_idx);
 }
 
 void HELPER(sym_store_guest_i64)(CPUArchState *env,
                                  uint64_t value, void *value_expr,
                                  target_ulong addr, void *addr_expr,
-                                 uint64_t length)
+                                 uint64_t length, target_ulong mmu_idx)
 {
     return sym_store_guest_internal(
-        env, value, value_expr, addr, addr_expr, length);
+        env, value, value_expr, addr, addr_expr, length, mmu_idx);
 }
 
 static void *sym_load_host_internal(void *addr, uint64_t offset,

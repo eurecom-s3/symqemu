@@ -71,12 +71,12 @@ DEF_HELPER_FLAGS_1(sym_trunc_i64_i32, TCG_CALL_NO_RWG_SE, ptr, ptr)
 DEF_HELPER_FLAGS_2(sym_bswap, TCG_CALL_NO_RWG_SE, ptr, ptr, i64)
 
 /* Guest memory */
-DEF_HELPER_FLAGS_4(sym_load_guest_i32, TCG_CALL_NO_RWG, ptr, env, dh_alias_tl, ptr, i64)
-DEF_HELPER_FLAGS_4(sym_load_guest_i64, TCG_CALL_NO_RWG, ptr, env, dh_alias_tl, ptr, i64)
-DEF_HELPER_FLAGS_6(sym_store_guest_i32, TCG_CALL_NO_RWG, void, env, i32, ptr,
-                   dh_alias_tl, ptr, i64)
-DEF_HELPER_FLAGS_6(sym_store_guest_i64, TCG_CALL_NO_RWG, void, env, i64, ptr,
-                   dh_alias_tl, ptr, i64)
+DEF_HELPER_FLAGS_5(sym_load_guest_i32, TCG_CALL_NO_RWG, ptr, env, dh_alias_tl, ptr, i64, dh_alias_tl)
+DEF_HELPER_FLAGS_5(sym_load_guest_i64, TCG_CALL_NO_RWG, ptr, env, dh_alias_tl, ptr, i64, dh_alias_tl)
+DEF_HELPER_FLAGS_7(sym_store_guest_i32, TCG_CALL_NO_RWG, void, env, i32, ptr,
+                   dh_alias_tl, ptr, i64, dh_alias_tl)
+DEF_HELPER_FLAGS_7(sym_store_guest_i64, TCG_CALL_NO_RWG, void, env, i64, ptr,
+                   dh_alias_tl, ptr, i64, dh_alias_tl)
 
 /* Host memory */
 DEF_HELPER_FLAGS_3(sym_load_host_i32, TCG_CALL_NO_RWG_SE, ptr, ptr, i64, i64)

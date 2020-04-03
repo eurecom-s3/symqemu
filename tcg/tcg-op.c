@@ -3179,20 +3179,12 @@ static void tcg_gen_req_mo(TCGBar type)
 void tcg_gen_qemu_ld_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 {
     TCGMemOp orig_memop;
-    TCGv_i64 load_size;
+    TCGv_i64 load_size, mmu_idx;
 
     tcg_gen_req_mo(TCG_MO_LD_LD | TCG_MO_ST_LD);
     memop = tcg_canonicalize_memop(memop, 0, 0);
     trace_guest_mem_before_tcg(tcg_ctx->cpu, cpu_env,
                                addr, trace_mem_get_info(memop, 0));
-
-    /* For now, we only handle loads that don't change endianness */
-    tcg_debug_assert(!(memop & MO_BSWAP));
-    load_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_load_guest_i32(tcgv_i32_expr(val), cpu_env,
-                                  addr, tcgv_i64_expr(addr),
-                                  load_size);
-    tcg_temp_free_i64(load_size);
 
     orig_memop = memop;
     if (!TCG_TARGET_HAS_MEMORY_BSWAP && (memop & MO_BSWAP)) {
@@ -3204,6 +3196,16 @@ void tcg_gen_qemu_ld_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     }
 
     gen_ldst_i32(INDEX_op_qemu_ld_i32, val, addr, memop, idx);
+
+    /* Perform the symbolic memory access. Doing so _after_ the concrete
+     * operation ensures that the target address is in the TLB. */
+    load_size = tcg_const_i64(1 << (memop & MO_SIZE));
+    mmu_idx = tcg_const_i64(idx);
+    gen_helper_sym_load_guest_i32(tcgv_i32_expr(val), cpu_env,
+                                  addr, tcgv_i64_expr(addr),
+                                  load_size, mmu_idx);
+    tcg_temp_free_i64(load_size);
+    tcg_temp_free_i64(mmu_idx);
 
     if ((orig_memop ^ memop) & MO_BSWAP) {
         switch (orig_memop & MO_SIZE) {
@@ -3225,21 +3227,12 @@ void tcg_gen_qemu_ld_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 void tcg_gen_qemu_st_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 {
     TCGv_i32 swap = NULL;
-    TCGv_i64 store_size = NULL;
+    TCGv_i64 store_size = NULL, mmu_idx = NULL;
 
     tcg_gen_req_mo(TCG_MO_LD_ST | TCG_MO_ST_ST);
     memop = tcg_canonicalize_memop(memop, 0, 1);
     trace_guest_mem_before_tcg(tcg_ctx->cpu, cpu_env,
                                addr, trace_mem_get_info(memop, 1));
-
-    /* For now, we only handle stores that don't change endianness */
-    tcg_debug_assert(!(memop & MO_BSWAP));
-    store_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_store_guest_i32(cpu_env,
-                                   val, tcgv_i32_expr(val),
-                                   addr, tcgv_i64_expr(addr),
-                                   store_size);
-    tcg_temp_free_i64(store_size);
 
     if (!TCG_TARGET_HAS_MEMORY_BSWAP && (memop & MO_BSWAP)) {
         swap = tcg_temp_new_i32();
@@ -3260,6 +3253,17 @@ void tcg_gen_qemu_st_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 
     gen_ldst_i32(INDEX_op_qemu_st_i32, val, addr, memop, idx);
 
+    /* Perform the symbolic memory access. Doing so _after_ the concrete
+     * operation ensures that the target address is in the TLB. */
+    store_size = tcg_const_i64(1 << (memop & MO_SIZE));
+    mmu_idx = tcg_const_i64(idx);
+    gen_helper_sym_store_guest_i32(cpu_env,
+                                   val, tcgv_i32_expr(val),
+                                   addr, tcgv_i64_expr(addr),
+                                   store_size, mmu_idx);
+    tcg_temp_free_i64(store_size);
+    tcg_temp_free_i64(mmu_idx);
+
     if (swap) {
         tcg_temp_free_i32(swap);
     }
@@ -3268,7 +3272,7 @@ void tcg_gen_qemu_st_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 void tcg_gen_qemu_ld_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 {
     TCGMemOp orig_memop;
-    TCGv_i64 load_size;
+    TCGv_i64 load_size, mmu_idx;
 
     if (TCG_TARGET_REG_BITS == 32 && (memop & MO_SIZE) < MO_64) {
         tcg_gen_qemu_ld_i32(TCGV_LOW(val), addr, idx, memop);
@@ -3285,14 +3289,6 @@ void tcg_gen_qemu_ld_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     trace_guest_mem_before_tcg(tcg_ctx->cpu, cpu_env,
                                addr, trace_mem_get_info(memop, 0));
 
-    /* For now, we only handle loads that don't change endianness */
-    tcg_debug_assert(!(memop & MO_BSWAP));
-    load_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_load_guest_i64(tcgv_i64_expr(val), cpu_env,
-                                  addr, tcgv_i64_expr(addr),
-                                  load_size);
-    tcg_temp_free_i64(load_size);
-
     orig_memop = memop;
     if (!TCG_TARGET_HAS_MEMORY_BSWAP && (memop & MO_BSWAP)) {
         memop &= ~MO_BSWAP;
@@ -3303,6 +3299,16 @@ void tcg_gen_qemu_ld_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     }
 
     gen_ldst_i64(INDEX_op_qemu_ld_i64, val, addr, memop, idx);
+
+    /* Perform the symbolic memory access. Doing so _after_ the concrete
+     * operation ensures that the target address is in the TLB. */
+    mmu_idx = tcg_const_i64(idx);
+    load_size = tcg_const_i64(1 << (memop & MO_SIZE));
+    gen_helper_sym_load_guest_i64(tcgv_i64_expr(val), cpu_env,
+                                  addr, tcgv_i64_expr(addr),
+                                  load_size, mmu_idx);
+    tcg_temp_free_i64(load_size);
+    tcg_temp_free_i64(mmu_idx);
 
     if ((orig_memop ^ memop) & MO_BSWAP) {
         switch (orig_memop & MO_SIZE) {
@@ -3329,7 +3335,7 @@ void tcg_gen_qemu_ld_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 
 void tcg_gen_qemu_st_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 {
-    TCGv_i64 swap = NULL, store_size = NULL;
+    TCGv_i64 swap = NULL, store_size = NULL, mmu_idx = NULL;
 
     if (TCG_TARGET_REG_BITS == 32 && (memop & MO_SIZE) < MO_64) {
         tcg_gen_qemu_st_i32(TCGV_LOW(val), addr, idx, memop);
@@ -3340,15 +3346,6 @@ void tcg_gen_qemu_st_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     memop = tcg_canonicalize_memop(memop, 1, 1);
     trace_guest_mem_before_tcg(tcg_ctx->cpu, cpu_env,
                                addr, trace_mem_get_info(memop, 1));
-
-    /* For now, we only handle stores that don't change endianness */
-    tcg_debug_assert(!(memop & MO_BSWAP));
-    store_size = tcg_const_i64(1 << (memop & MO_SIZE));
-    gen_helper_sym_store_guest_i64(cpu_env,
-                                   val, tcgv_i64_expr(val),
-                                   addr, tcgv_i64_expr(addr),
-                                   store_size);
-    tcg_temp_free_i64(store_size);
 
     if (!TCG_TARGET_HAS_MEMORY_BSWAP && (memop & MO_BSWAP)) {
         swap = tcg_temp_new_i64();
@@ -3372,6 +3369,17 @@ void tcg_gen_qemu_st_i64(TCGv_i64 val, TCGv addr, TCGArg idx, TCGMemOp memop)
     }
 
     gen_ldst_i64(INDEX_op_qemu_st_i64, val, addr, memop, idx);
+
+    /* Perform the symbolic memory access. Doing so _after_ the concrete
+     * operation ensures that the target address is in the TLB. */
+    mmu_idx = tcg_const_i64(idx);
+    store_size = tcg_const_i64(1 << (memop & MO_SIZE));
+    gen_helper_sym_store_guest_i64(cpu_env,
+                                   val, tcgv_i64_expr(val),
+                                   addr, tcgv_i64_expr(addr),
+                                   store_size, mmu_idx);
+    tcg_temp_free_i64(store_size);
+    tcg_temp_free_i64(mmu_idx);
 
     if (swap) {
         tcg_temp_free_i64(swap);
