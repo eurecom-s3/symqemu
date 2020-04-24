@@ -105,38 +105,37 @@ void *HELPER(sym_neg)(void *expr)
     if (expr == NULL)
         return NULL;
 
-    return _sym_build_sub(
-        _sym_build_integer(0, _sym_bits_helper(expr)), expr);
+    return _sym_build_neg(expr);
 }
 
 DECL_HELPER_BINARY(andc)
 {
     BINARY_HELPER_ENSURE_EXPRESSIONS;
-    return _sym_build_and(arg1_expr, _sym_build_neg(arg2_expr));
+    return _sym_build_and(arg1_expr, _sym_build_not(arg2_expr));
 }
 
 DECL_HELPER_BINARY(eqv)
 {
     BINARY_HELPER_ENSURE_EXPRESSIONS;
-    return _sym_build_neg(_sym_build_xor(arg1_expr, arg2_expr));
+    return _sym_build_not(_sym_build_xor(arg1_expr, arg2_expr));
 }
 
 DECL_HELPER_BINARY(nand)
 {
     BINARY_HELPER_ENSURE_EXPRESSIONS;
-    return _sym_build_neg(_sym_build_and(arg1_expr, arg2_expr));
+    return _sym_build_not(_sym_build_and(arg1_expr, arg2_expr));
 }
 
 DECL_HELPER_BINARY(nor)
 {
     BINARY_HELPER_ENSURE_EXPRESSIONS;
-    return _sym_build_neg(_sym_build_or(arg1_expr, arg2_expr));
+    return _sym_build_not(_sym_build_or(arg1_expr, arg2_expr));
 }
 
 DECL_HELPER_BINARY(orc)
 {
     BINARY_HELPER_ENSURE_EXPRESSIONS;
-    return _sym_build_or(arg1_expr, _sym_build_neg(arg2_expr));
+    return _sym_build_or(arg1_expr, _sym_build_not(arg2_expr));
 }
 
 void *HELPER(sym_not)(void *expr)
@@ -144,7 +143,7 @@ void *HELPER(sym_not)(void *expr)
     if (expr == NULL)
         return NULL;
 
-    return _sym_build_neg(expr);
+    return _sym_build_not(expr);
 }
 
 void *HELPER(sym_muluh_i64)(uint64_t arg1, void *arg1_expr,
