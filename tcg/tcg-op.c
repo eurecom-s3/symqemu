@@ -3072,6 +3072,7 @@ void tcg_gen_exit_tb(TranslationBlock *tb, unsigned idx)
         tcg_debug_assert(idx == TB_EXIT_REQUESTED);
     }
 
+    gen_helper_sym_collect_garbage();
     tcg_gen_op1i(INDEX_op_exit_tb, val);
 }
 
@@ -3086,6 +3087,7 @@ void tcg_gen_goto_tb(unsigned idx)
 #endif
     /* When not chaining, we simply fall through to the "fallback" exit.  */
     if (!qemu_loglevel_mask(CPU_LOG_TB_NOCHAIN)) {
+        gen_helper_sym_collect_garbage();
         tcg_gen_op1i(INDEX_op_goto_tb, idx);
     }
 }
@@ -3095,6 +3097,7 @@ void tcg_gen_lookup_and_goto_ptr(void)
     if (TCG_TARGET_HAS_goto_ptr && !qemu_loglevel_mask(CPU_LOG_TB_NOCHAIN)) {
         TCGv_ptr ptr = tcg_temp_new_ptr();
         gen_helper_lookup_tb_ptr(ptr, cpu_env);
+        gen_helper_sym_collect_garbage();
         tcg_gen_op1i(INDEX_op_goto_ptr, tcgv_ptr_arg(ptr));
         tcg_temp_free_ptr(ptr);
     } else {

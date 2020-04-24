@@ -61,6 +61,9 @@
 
 #include "disas/capstone.h"
 
+#define SymExpr void*
+#include "RuntimeCommon.h"
+
 /* Helpers for building CPUID[2] descriptors: */
 
 struct CPUID2CacheDescriptorInfo {
@@ -5591,6 +5594,7 @@ static void x86_cpu_initfn(Object *obj)
     FeatureWord w;
 
     memset(cpu->env_exprs, 0, sizeof(cpu->env_exprs));
+    _sym_register_expression_region(cpu->env_exprs, sizeof(cpu->env_exprs));
 
     env->nr_dies = 1;
     cpu_set_cpustate_pointers(cpu);

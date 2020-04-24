@@ -635,3 +635,8 @@ void HELPER(sym_notify_block)(uint64_t block_id)
 {
     _sym_notify_basic_block(block_id);
 }
+
+void HELPER(sym_collect_garbage)(void)
+{
+    _sym_collect_garbage();
+}
