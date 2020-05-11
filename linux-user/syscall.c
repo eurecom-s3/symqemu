@@ -331,6 +331,7 @@ _syscall5(int, sys_statx, int, dirfd, const char *, pathname, int, flags,
  * backend. */
 int open_symbolized(const char *ptah, int oflag, mode_t mode);
 ssize_t read_symbolized(int fildes, void *buf, size_t nbyte);
+uint64_t lseek64_symbolized(int fd, uint64_t offset, int whence);
 
 static bitmask_transtbl fcntl_flags_tbl[] = {
   { TARGET_O_ACCMODE,   TARGET_O_WRONLY,    O_ACCMODE,   O_WRONLY,    },
@@ -7585,7 +7586,7 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
 #endif
 #ifdef TARGET_NR_lseek
     case TARGET_NR_lseek:
-        return get_errno(lseek(arg1, arg2, arg3));
+        return get_errno(lseek64_symbolized(arg1, arg2, arg3));
 #endif
 #if defined(TARGET_NR_getxpid) && defined(TARGET_ALPHA)
     /* Alpha specific */
@@ -9342,7 +9343,7 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         {
             int64_t res;
 #if !defined(__NR_llseek)
-            res = lseek(arg1, ((uint64_t)arg2 << 32) | (abi_ulong)arg3, arg5);
+            res = lseek64_symbolized(arg1, ((uint64_t)arg2 << 32) | (abi_ulong)arg3, arg5);
             if (res == -1) {
                 ret = get_errno(res);
             } else {
