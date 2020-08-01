@@ -720,6 +720,8 @@ struct ARMCPU {
 
     CPUNegativeOffsetState neg;
     CPUARMState env;
+    /* space for symbolic expressions corresponding to env */
+    void *env_exprs[512 + 1];   /* TCG_MAX_TEMPS + 1 (for NULL) */
 
     /* Coprocessor information */
     GHashTable *cp_regs;
