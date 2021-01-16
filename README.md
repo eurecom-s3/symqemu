@@ -6,10 +6,10 @@ currently extends QEMU 4.1.1 and works with the most recent version of SymCC.
 
 ## How to build
 
-SymQEMU requires [SymCC](https://github.com/eurecom-s3/symcc), so please build
-it first. For best results, configure it with the QSYM backend as explained in
-its README. For the impatient, here is a quick summary of the required steps
-that may or may not work on your system:
+SymQEMU requires [SymCC](https://github.com/eurecom-s3/symcc), so please
+download and build SymCC first. For best results, configure it with the QSYM
+backend as explained in the README. For the impatient, here's a quick summary of
+the required steps that may or may not work on your system:
 
 ``` shell
 $ git clone https://github.com/eurecom-s3/symcc.git
@@ -20,9 +20,9 @@ $ cmake -G Ninja -DQSYM_BACKEND=ON ..
 $ ninja
 ```
 
-Next, make sure that QEMU's build dependencies are installed on your system.
-Most package managers provide a command to get them, e.g., `apt build-dep qemu`
-on Debian and Ubuntu, or `dnf builddep qemu` on Fedora.
+Next, make sure that QEMU's build dependencies are installed. Most package
+managers provide a command to get them, e.g., `apt build-dep qemu` on Debian and
+Ubuntu, or `dnf builddep qemu` on Fedora and CentOS.
 
 We've extended QEMU's configuration script to accept pointers to SymCC's source
 and binaries. The following invocation is known to work on Debian 10, Arch and
@@ -60,7 +60,6 @@ $ mkdir /tmp/output
 $ echo test | x86_64-linux-user/symqemu-x86_64 /bin/cat -t -
 This is SymCC running with the QSYM backend
 Reading program input until EOF (use Ctrl+D in a terminal)...
-enter some input here, terminated by newline and Ctrl+D
 [STAT] SMT: { "solving_time": 0, "total_time": 93207 }
 [STAT] SMT: { "solving_time": 480 }
 [INFO] New testcase: /tmp/output/000000
@@ -79,8 +78,8 @@ same
 [settings](https://github.com/eurecom-s3/symcc/blob/master/docs/Configuration.txt),
 and you can even run SymQEMU with `symcc_fuzzing_helper` for [hybrid fuzzing](https://github.com/eurecom-s3/symcc/blob/master/docs/Fuzzing.txt): just
 prefix the target command with `x86_64-linux-user/symqemu-x86_64`. (Note that
-you'll have to run AFL in QEMU mode by adding `-Q` to its command line if you
-don't have the source code of the program you're analyzing.)
+you'll have to run AFL in QEMU mode by adding `-Q` to its command line; the
+fuzzing helper will automatically pick up the setting and use QEMU mode too.)
 
 ## Documentation
 
