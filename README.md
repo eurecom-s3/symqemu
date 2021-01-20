@@ -96,5 +96,5 @@ are tests for the symbolic run-time support in `tests/check-sym-runtime.c`.
 SymQEMU extends the QEMU emulator, and our contributions to previously existing
 files adopt those files' respective licenses; the files that we have added are
 made available under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or (at your
+the Free Software Foundation, either version 2 of the License, or (at your
 option) any later version.
