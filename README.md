@@ -37,6 +37,7 @@ $ ../configure                                                    \
       --disable-vte                                               \
       --disable-opengl                                            \
       --disable-virglrenderer                                     \
+      --disable-werror                                            \
       --target-list=x86_64-linux-user                             \
       --enable-capstone=git                                       \
       --symcc-source=/path/to/symcc/sources                       \
