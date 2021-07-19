@@ -13,6 +13,7 @@ the required steps that may or may not work on your system:
 
 ``` shell
 $ git clone https://github.com/eurecom-s3/symcc.git
+$ cd symcc
 $ git submodule update --init
 $ mkdir build
 $ cd build
