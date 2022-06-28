@@ -41,8 +41,8 @@ $ ../configure                                                    \
       --disable-werror                                            \
       --target-list=x86_64-linux-user                             \
       --enable-capstone=git                                       \
-      --symcc-source=/path/to/symcc/sources                       \
-      --symcc-build=/path/to/symcc/build
+      --symcc-source=</path/to/symcc>/sources                     \
+      --symcc-build=</path/to/symcc>/build
 $ make
 ```
 
