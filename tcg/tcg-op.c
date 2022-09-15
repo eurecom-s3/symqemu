@@ -3182,12 +3182,19 @@ static void tcg_gen_req_mo(TCGBar type)
 void tcg_gen_qemu_ld_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
 {
     TCGMemOp orig_memop;
-    TCGv_i64 load_size, mmu_idx;
+    TCGv_i64 load_size, mmu_idx, addr_loc;
+
+    /* Temporary bugfix
+     * On some architectures, the addr and val(ret) params are, for some reasons, 
+     * getting optimized after the concrete load operation (ret => addr)
+     * This trick ensure that the addr value is preseved */
+    addr_loc = tcg_temp_new_i64();
+    tcg_gen_mov_i64(addr_loc, addr);
 
     tcg_gen_req_mo(TCG_MO_LD_LD | TCG_MO_ST_LD);
     memop = tcg_canonicalize_memop(memop, 0, 0);
     trace_guest_mem_before_tcg(tcg_ctx->cpu, cpu_env,
-                               addr, trace_mem_get_info(memop, 0));
+                               addr_loc, trace_mem_get_info(memop, 0));
 
     orig_memop = memop;
     if (!TCG_TARGET_HAS_MEMORY_BSWAP && (memop & MO_BSWAP)) {
@@ -3198,17 +3205,19 @@ void tcg_gen_qemu_ld_i32(TCGv_i32 val, TCGv addr, TCGArg idx, TCGMemOp memop)
         }
     }
 
-    gen_ldst_i32(INDEX_op_qemu_ld_i32, val, addr, memop, idx);
+    gen_ldst_i32(INDEX_op_qemu_ld_i32, val, addr_loc, memop, idx);
 
     /* Perform the symbolic memory access. Doing so _after_ the concrete
      * operation ensures that the target address is in the TLB. */
     load_size = tcg_const_i64(1 << (memop & MO_SIZE));
     mmu_idx = tcg_const_i64(idx);
+
     gen_helper_sym_load_guest_i32(tcgv_i32_expr(val), cpu_env,
-                                  addr, tcgv_i64_expr(addr),
+                                  addr_loc, tcgv_i64_expr(addr_loc),
                                   load_size, mmu_idx);
     tcg_temp_free_i64(load_size);
     tcg_temp_free_i64(mmu_idx);
+    tcg_temp_free_i64(addr_loc);
 
     if ((orig_memop ^ memop) & MO_BSWAP) {
         switch (orig_memop & MO_SIZE) {
