@@ -518,7 +518,7 @@ test-block-obj-$(CONFIG_BLOCK) = $(block-obj-y) $(test-io-obj-y) tests/iothread.
 # directory for target-specific TCG tests, but it expects to run everything
 # inside the emulator and therefore lacks the unit-test setup.
 tests/check-sym-runtime.o-cflags := -I$(SRC_PATH)/target/i386 -Ix86_64-linux-user -DNEED_CPU_H
-tests/check-sym-runtime$(EXESUF): LDFLAGS += $(libs_cpu)
+tests/check-sym-runtime$(EXESUF): LIBS += $(libs_cpu)
 tests/check-sym-runtime$(EXESUF): tests/check-sym-runtime.o \
 	x86_64-linux-user/accel/tcg/tcg-runtime-sym.o
 
