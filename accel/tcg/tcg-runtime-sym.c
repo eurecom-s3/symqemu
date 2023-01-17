@@ -615,7 +615,9 @@ static void *sym_setcond_internal(CPUArchState *env,
     void *condition = handler(arg1_expr, arg2_expr);
     _sym_push_path_constraint(condition, result, get_pc(env));
 
-    return _sym_build_bool_to_bits(condition, result_bits);
+    assert(result_bits > 1);
+    return _sym_build_zext(_sym_build_bool_to_bit(condition),
+                           result_bits - 1);
 }
 
 void *HELPER(sym_setcond_i32)(CPUArchState *env,
