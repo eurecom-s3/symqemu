@@ -1117,7 +1117,7 @@ TCGTemp *tcg_constant_internal(TCGType type, int64_t val)
 {
     TCGContext *s = tcg_ctx;
     GHashTable *h = s->const_table[type];
-    TCGTemp *ts;
+    TCGTemp *ts, *ts_expr;
 
     if (h == NULL) {
         h = g_hash_table_new(g_int64_hash, g_int64_equal);
@@ -1155,6 +1155,14 @@ TCGTemp *tcg_constant_internal(TCGType type, int64_t val)
             ts->temp_allocated = 1;
             ts->val = val;
         }
+        ts_expr = tcg_temp_alloc(s);
+        ts_expr->base_type = TCG_TYPE_PTR;
+        ts_expr->type = TCG_TYPE_PTR;
+        ts_expr->kind = TEMP_CONST;
+        ts_expr->temp_allocated = 1;
+        ts_expr->symbolic_expression = 1;
+        ts_expr->val = 0;
+
         g_hash_table_insert(h, &ts->val, ts);
     }
 
