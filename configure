@@ -2483,6 +2483,19 @@ if test "$safe_stack" = "yes"; then
   echo "CONFIG_SAFESTACK=y" >> $config_host_mak
 fi
 
+echo "# SymQEMU config" >> $config_host_mak
+if test -e "$symcc_source/runtime/RuntimeCommon.h"; then
+  echo "SYMCC_INC=$symcc_source/runtime" >> $config_host_mak
+else
+  error_exit "SymCC (source)" "Point --symcc-source to the SymCC source code"
+fi
+if test -e "$symcc_build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so"; then
+  echo "SYMCC_BUILD=$symcc_build/SymRuntime-prefix/src/SymRuntime-build" >> $config_host_mak
+  echo "SYMCC_LIBS=$symcc_build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so" >> $config_host_mak
+else
+  error_exit "SymCC (runtime)" "Point --symcc-build to the SymCC build directory"
+fi
+
 # tests/tcg configuration
 (config_host_mak=tests/tcg/config-host.mak
 mkdir -p tests/tcg

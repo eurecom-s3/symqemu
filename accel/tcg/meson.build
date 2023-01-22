@@ -6,6 +6,7 @@ tcg_ss.add(files(
   'tb-maint.c',
   'tcg-runtime-gvec.c',
   'tcg-runtime.c',
+  'tcg-runtime-sym.c',
   'translate-all.c',
   'translator.c',
 ))
