@@ -457,9 +457,14 @@ typedef struct TCGTemp {
     unsigned int mem_allocated:1;
     unsigned int temp_allocated:1;
 
+    /* If true, this temp contains a symbolic expression. */
+    unsigned int symbolic_expression:1;
+
     int64_t val;
     struct TCGTemp *mem_base;
     intptr_t mem_offset;
+    /* Indirect bases use this to store the offset to the symbolic shadow. */
+    intptr_t sym_offset;
     const char *name;
 
     /* Pass-specific information that can be stored for a temporary.
@@ -670,6 +675,13 @@ static inline TCGTemp *arg_temp(TCGArg a)
     return (TCGTemp *)(uintptr_t)a;
 }
 
+static inline TCGTemp *temp_expr(TCGTemp *ts) {
+    tcg_debug_assert(temp_idx(ts) + 1 < tcg_ctx->nb_temps);
+    tcg_debug_assert(!ts->symbolic_expression);
+    tcg_debug_assert((ts + 1)->symbolic_expression);
+    return ts + 1;
+}
+
 /* Using the offset of a temporary, relative to TCGContext, rather than
    its index means that we don't use 0.  That leaves offset 0 free for
    a NULL representation without having to leave index 0 unused.  */
@@ -735,6 +747,29 @@ static inline TCGv_ptr temp_tcgv_ptr(TCGTemp *t)
 static inline TCGv_vec temp_tcgv_vec(TCGTemp *t)
 {
     return (TCGv_vec)temp_tcgv_i32(t);
+}
+
+static inline TCGv_ptr tcgv_i32_expr(TCGv_i32 v)
+{
+    return temp_tcgv_ptr(temp_expr(tcgv_i32_temp(v)));
+}
+
+static inline TCGv_ptr tcgv_i64_expr(TCGv_i64 v)
+{
+    return temp_tcgv_ptr(temp_expr(tcgv_i64_temp(v)));
+}
+
+/* Expression pointers as (64-bit) numbers for code simplification. This assumes
+ * that we're running on a 64-bit architecture! */
+
+static inline TCGv tcgv_i32_expr_num(TCGv_i32 v)
+{
+    return temp_tcgv_i64(temp_expr(tcgv_i32_temp(v)));
+}
+
+static inline TCGv tcgv_i64_expr_num(TCGv_i64 v)
+{
+    return temp_tcgv_i64(temp_expr(tcgv_i64_temp(v)));
 }
 
 #if TCG_TARGET_REG_BITS == 32
@@ -844,8 +879,8 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, target_ulong pc_start);
 
 void tcg_set_frame(TCGContext *s, TCGReg reg, intptr_t start, intptr_t size);
 
-TCGTemp *tcg_global_mem_new_internal(TCGType, TCGv_ptr,
-                                     intptr_t, const char *);
+TCGTemp *tcg_global_mem_new_internal(
+    TCGType, TCGv_ptr, intptr_t, const char *);
 TCGTemp *tcg_temp_new_internal(TCGType, bool);
 void tcg_temp_free_internal(TCGTemp *);
 TCGv_vec tcg_temp_new_vec(TCGType type);
@@ -871,10 +906,11 @@ static inline void tcg_temp_free_vec(TCGv_vec arg)
     tcg_temp_free_internal(tcgv_vec_temp(arg));
 }
 
-static inline TCGv_i32 tcg_global_mem_new_i32(TCGv_ptr reg, intptr_t offset,
-                                              const char *name)
+static inline TCGv_i32 tcg_global_mem_new_i32(
+    TCGv_ptr reg, intptr_t offset, const char *name)
 {
-    TCGTemp *t = tcg_global_mem_new_internal(TCG_TYPE_I32, reg, offset, name);
+    TCGTemp *t = tcg_global_mem_new_internal(
+        TCG_TYPE_I32, reg, offset, name);
     return temp_tcgv_i32(t);
 }
 
@@ -890,10 +926,11 @@ static inline TCGv_i32 tcg_temp_local_new_i32(void)
     return temp_tcgv_i32(t);
 }
 
-static inline TCGv_i64 tcg_global_mem_new_i64(TCGv_ptr reg, intptr_t offset,
-                                              const char *name)
+static inline TCGv_i64 tcg_global_mem_new_i64(
+    TCGv_ptr reg, intptr_t offset, const char *name)
 {
-    TCGTemp *t = tcg_global_mem_new_internal(TCG_TYPE_I64, reg, offset, name);
+    TCGTemp *t = tcg_global_mem_new_internal(
+        TCG_TYPE_I64, reg, offset, name);
     return temp_tcgv_i64(t);
 }
 
@@ -909,10 +946,11 @@ static inline TCGv_i64 tcg_temp_local_new_i64(void)
     return temp_tcgv_i64(t);
 }
 
-static inline TCGv_ptr tcg_global_mem_new_ptr(TCGv_ptr reg, intptr_t offset,
-                                              const char *name)
+static inline TCGv_ptr tcg_global_mem_new_ptr(
+    TCGv_ptr reg, intptr_t offset, const char *name)
 {
-    TCGTemp *t = tcg_global_mem_new_internal(TCG_TYPE_PTR, reg, offset, name);
+    TCGTemp *t = tcg_global_mem_new_internal(
+        TCG_TYPE_PTR, reg, offset, name);
     return temp_tcgv_ptr(t);
 }
 

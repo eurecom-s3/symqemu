@@ -3548,6 +3548,7 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
             if (dflag == MO_16) {
                 tcg_gen_ext16u_tl(s->T0, s->T0);
             }
+            gen_helper_sym_notify_call(eip_next_tl(s));
             gen_push_v(s, eip_next_tl(s));
             gen_op_jmp_v(s, s->T0);
             gen_bnd_jmp(s);
@@ -5022,6 +5023,7 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
         val = x86_ldsw_code(env, s);
         ot = gen_pop_T0(s);
         gen_stack_update(s, val + (1 << ot));
+        gen_helper_sym_notify_return(s->T0);
         /* Note that gen_pop_T0 uses a zero-extending load.  */
         gen_op_jmp_v(s, s->T0);
         gen_bnd_jmp(s);
@@ -5030,6 +5032,7 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
     case 0xc3: /* ret */
         ot = gen_pop_T0(s);
         gen_pop_update(s, ot);
+        gen_helper_sym_notify_return(s->T0);
         /* Note that gen_pop_T0 uses a zero-extending load.  */
         gen_op_jmp_v(s, s->T0);
         gen_bnd_jmp(s);
@@ -5082,6 +5085,7 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
             int diff = (dflag != MO_16
                         ? (int32_t)insn_get(env, s, MO_32)
                         : (int16_t)insn_get(env, s, MO_16));
+            gen_helper_sym_notify_call(eip_next_tl(s));
             gen_push_v(s, eip_next_tl(s));
             gen_bnd_jmp(s);
             gen_jmp_rel(s, dflag, diff, 0);

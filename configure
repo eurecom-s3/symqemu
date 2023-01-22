@@ -280,6 +280,8 @@ EXESUF=""
 modules="no"
 prefix="/usr/local"
 qemu_suffix="qemu"
+symcc_source=""
+symcc_build=""
 softmmu="yes"
 linux_user=""
 bsd_user=""
@@ -770,6 +772,10 @@ for opt do
   ;;
   --with-suffix=*) qemu_suffix="$optarg"
   ;;
+  --symcc-source=*) symcc_source="$optarg"
+  ;;
+  --symcc-build=*) symcc_build="$optarg"
+  ;;
   --host=*|--build=*|\
   --disable-dependency-tracking|\
   --sbindir=*|--sharedstatedir=*|\
@@ -1024,6 +1030,8 @@ Advanced options (experts only):
                            start the emulator (only use if you are including
                            desired devices in configs/devices/)
   --with-devices-ARCH=NAME override default configs/devices
+  --symcc-source=PATH      PATH to SymCC source code
+  --symcc-build=PATH       PATH to the build directory of SymCC with Qsym backend
   --enable-debug           enable common debug build options
   --enable-sanitizers      enable default sanitizers
   --enable-tsan            enable thread sanitizer

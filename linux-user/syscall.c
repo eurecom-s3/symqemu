@@ -459,6 +459,13 @@ _syscall5(int, sys_statx, int, dirfd, const char *, pathname, int, flags,
 _syscall2(int, membarrier, int, cmd, int, flags)
 #endif
 
+/* For simplicity, we declare the symbolic versions of the read and open
+ * functions here; they are defined in the C++ internals of the symbolic
+ * backend. */
+int open_symbolized(const char *ptah, int oflag, mode_t mode);
+ssize_t read_symbolized(int fildes, void *buf, size_t nbyte);
+uint64_t lseek64_symbolized(int fd, uint64_t offset, int whence);
+
 static const bitmask_transtbl fcntl_flags_tbl[] = {
   { TARGET_O_ACCMODE,   TARGET_O_WRONLY,    O_ACCMODE,   O_WRONLY,    },
   { TARGET_O_ACCMODE,   TARGET_O_RDWR,      O_ACCMODE,   O_RDWR,      },
@@ -8354,7 +8361,10 @@ static int do_openat(CPUArchState *cpu_env, int dirfd, const char *pathname, int
         return fd;
     }
 
-    return safe_openat(dirfd, path(pathname), flags, mode);
+    if (dirfd == AT_FDCWD)
+        return open_symbolized(path(pathname), flags, mode);
+    else
+        return safe_openat(dirfd, path(pathname), flags, mode);
 }
 
 #define TIMER_MAGIC 0x0caf0000
@@ -8673,7 +8683,7 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
         } else {
             if (!(p = lock_user(VERIFY_WRITE, arg2, arg3, 0)))
                 return -TARGET_EFAULT;
-            ret = get_errno(safe_read(arg1, p, arg3));
+            ret = get_errno(read_symbolized(arg1, p, arg3));
             if (ret >= 0 &&
                 fd_trans_host_to_target_data(arg1)) {
                 ret = fd_trans_host_to_target_data(arg1)(p, ret);
@@ -9008,7 +9018,7 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
 #endif
 #ifdef TARGET_NR_lseek
     case TARGET_NR_lseek:
-        return get_errno(lseek(arg1, arg2, arg3));
+        return get_errno(lseek64_symbolized(arg1, arg2, arg3));
 #endif
 #if defined(TARGET_NR_getxpid) && defined(TARGET_ALPHA)
     /* Alpha specific */
@@ -10735,7 +10745,7 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
         {
             int64_t res;
 #if !defined(__NR_llseek)
-            res = lseek(arg1, ((uint64_t)arg2 << 32) | (abi_ulong)arg3, arg5);
+            res = lseek64_symbolized(arg1, ((uint64_t)arg2 << 32) | (abi_ulong)arg3, arg5);
             if (res == -1) {
                 ret = get_errno(res);
             } else {

@@ -36,6 +36,9 @@
 #include "hw/qdev-properties.h"
 #include "internals.h"
 
+#define SymExpr void*
+#include "RuntimeCommon.h"
+
 static void aarch64_a35_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
@@ -678,9 +681,17 @@ void arm_cpu_lpa2_finalize(ARMCPU *cpu, Error **errp)
     cpu->isar.id_aa64mmfr0 = t;
 }
 
+static void init_env_exprs(ARMCPU *cpu)
+{
+    memset(cpu->env_exprs, 0, sizeof(cpu->env_exprs));
+    _sym_register_expression_region(cpu->env_exprs, sizeof(cpu->env_exprs));
+}
+
 static void aarch64_a57_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
+
+    init_env_exprs(cpu);
 
     cpu->dtb_compatible = "arm,cortex-a57";
     set_feature(&cpu->env, ARM_FEATURE_V8);
@@ -739,6 +750,8 @@ static void aarch64_a53_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
 
+    init_env_exprs(cpu);
+
     cpu->dtb_compatible = "arm,cortex-a53";
     set_feature(&cpu->env, ARM_FEATURE_V8);
     set_feature(&cpu->env, ARM_FEATURE_NEON);
@@ -795,6 +808,8 @@ static void aarch64_a53_initfn(Object *obj)
 static void aarch64_a72_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
+
+    init_env_exprs(cpu);
 
     cpu->dtb_compatible = "arm,cortex-a72";
     set_feature(&cpu->env, ARM_FEATURE_V8);

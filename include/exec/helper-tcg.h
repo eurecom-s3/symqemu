@@ -60,6 +60,7 @@
 
 #include "helper.h"
 #include "accel/tcg/tcg-runtime.h"
+#include "accel/tcg/tcg-runtime-sym.h"
 #include "accel/tcg/plugin-helpers.h"
 
 #undef str

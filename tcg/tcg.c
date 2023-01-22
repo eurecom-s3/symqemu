@@ -567,7 +567,8 @@ static ffi_type * const typecode_to_ffi[8] = {
 static int indirect_reg_alloc_order[ARRAY_SIZE(tcg_target_reg_alloc_order)];
 static void process_op_defs(TCGContext *s);
 static TCGTemp *tcg_global_reg_new_internal(TCGContext *s, TCGType type,
-                                            TCGReg reg, const char *name);
+                                            TCGReg reg, intptr_t sym_offset,
+                                            const char *name);
 
 static void tcg_context_init(unsigned max_cpus)
 {
@@ -685,7 +686,9 @@ static void tcg_context_init(unsigned max_cpus)
 #endif
 
     tcg_debug_assert(!tcg_regset_test_reg(s->reserved_regs, TCG_AREG0));
-    ts = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, TCG_AREG0, "env");
+    ts = tcg_global_reg_new_internal(
+        s, TCG_TYPE_PTR, TCG_AREG0,
+        offsetof(ArchCPU, env_exprs) - offsetof(ArchCPU, env), "env");
     cpu_env = temp_tcgv_ptr(ts);
 }
 
@@ -853,9 +856,11 @@ static TCGTemp *tcg_global_alloc(TCGContext *s)
 }
 
 static TCGTemp *tcg_global_reg_new_internal(TCGContext *s, TCGType type,
-                                            TCGReg reg, const char *name)
+                                            TCGReg reg, intptr_t sym_offset,
+                                            const char *name)
 {
-    TCGTemp *ts;
+    TCGTemp *ts, *ts_expr;
+    char buf[64];
 
     if (TCG_TARGET_REG_BITS == 32 && type != TCG_TYPE_I32) {
         tcg_abort();
@@ -866,8 +871,22 @@ static TCGTemp *tcg_global_reg_new_internal(TCGContext *s, TCGType type,
     ts->type = type;
     ts->kind = TEMP_FIXED;
     ts->reg = reg;
+    ts->sym_offset = sym_offset;
     ts->name = name;
     tcg_regset_set_reg(s->reserved_regs, reg);
+
+    ts_expr = tcg_global_alloc(s);
+    ts_expr->base_type = TCG_TYPE_PTR;
+    ts_expr->type = TCG_TYPE_PTR;
+    ts_expr->kind = TEMP_FIXED;
+    ts_expr->symbolic_expression = 1;
+    ts_expr->indirect_reg = 0;
+    ts_expr->mem_allocated = 1;
+    ts_expr->mem_base = ts;
+    ts_expr->mem_offset = sym_offset;
+    pstrcpy(buf, sizeof(buf), name);
+    pstrcat(buf, sizeof(buf), "_expr");
+    ts_expr->name = strdup(buf);
 
     return ts;
 }
@@ -876,20 +895,28 @@ void tcg_set_frame(TCGContext *s, TCGReg reg, intptr_t start, intptr_t size)
 {
     s->frame_start = start;
     s->frame_end = start + size;
+    /* The frame temporary is never used as a base in regular temporary
+     * creation, nor is it the argument to any computations; it serves for sync
+     * only. Therefore, we can provide a fake sym_offset without having to worry
+     * about it. */
     s->frame_temp
-        = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, reg, "_frame");
+        = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, reg, 0, "_frame");
 }
 
 TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
                                      intptr_t offset, const char *name)
 {
     TCGContext *s = tcg_ctx;
+    int expr_idx = s->nb_globals / 2;
     TCGTemp *base_ts = tcgv_ptr_temp(base);
-    TCGTemp *ts = tcg_global_alloc(s);
+    TCGTemp *ts = tcg_global_alloc(s), *ts_expr = tcg_global_alloc(s);
+    char buf[64];
     int indirect_reg = 0, bigendian = 0;
 #if HOST_BIG_ENDIAN
     bigendian = 1;
 #endif
+
+    tcg_debug_assert(s->nb_globals % 2 == 0);
 
     switch (base_ts->kind) {
     case TEMP_FIXED:
@@ -899,7 +926,7 @@ TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
         tcg_debug_assert(!base_ts->indirect_reg);
         base_ts->indirect_base = 1;
         s->nb_indirects += (TCG_TARGET_REG_BITS == 32 && type == TCG_TYPE_I64
-                            ? 2 : 1);
+                            ? 4 : 2);
         indirect_reg = 1;
         break;
     default:
@@ -939,6 +966,17 @@ TCGTemp *tcg_global_mem_new_internal(TCGType type, TCGv_ptr base,
         ts->mem_offset = offset;
         ts->name = name;
     }
+
+    ts_expr->base_type = TCG_TYPE_PTR;
+    ts_expr->type = TCG_TYPE_PTR;
+    ts_expr->symbolic_expression = 1;
+    ts_expr->indirect_reg = indirect_reg;
+    ts_expr->mem_allocated = 1;
+    ts_expr->mem_base = base_ts;
+    ts_expr->mem_offset = base_ts->sym_offset + expr_idx * sizeof(void *);
+    pstrcpy(buf, sizeof(buf), name);
+    pstrcat(buf, sizeof(buf), "_expr");
+    ts_expr->name = strdup(buf);
     return ts;
 }
 
@@ -946,7 +984,7 @@ TCGTemp *tcg_temp_new_internal(TCGType type, bool temp_local)
 {
     TCGContext *s = tcg_ctx;
     TCGTempKind kind = temp_local ? TEMP_LOCAL : TEMP_NORMAL;
-    TCGTemp *ts;
+    TCGTemp *ts, *ts_expr;
     int idx, k;
 
     k = type + (temp_local ? TCG_TYPE_COUNT : 0);
@@ -959,6 +997,12 @@ TCGTemp *tcg_temp_new_internal(TCGType type, bool temp_local)
         ts->temp_allocated = 1;
         tcg_debug_assert(ts->base_type == type);
         tcg_debug_assert(ts->kind == kind);
+
+        ts_expr = &s->temps[idx+1];
+        ts_expr->temp_allocated = 1;
+        ts_expr->symbolic_expression = 1;
+        tcg_debug_assert(ts_expr->base_type == TCG_TYPE_PTR);
+        tcg_debug_assert(ts_expr->kind == kind);
     } else {
         ts = tcg_temp_alloc(s);
         if (TCG_TARGET_REG_BITS == 32 && type == TCG_TYPE_I64) {
@@ -980,10 +1024,17 @@ TCGTemp *tcg_temp_new_internal(TCGType type, bool temp_local)
             ts->temp_allocated = 1;
             ts->kind = kind;
         }
+
+        ts_expr = tcg_temp_alloc(s);
+        ts_expr->base_type = TCG_TYPE_PTR;
+        ts_expr->type = TCG_TYPE_PTR;
+        ts_expr->temp_allocated = 1;
+        ts_expr->kind = kind;
+        ts_expr->symbolic_expression = 1;
     }
 
 #if defined(CONFIG_DEBUG_TCG)
-    s->temps_in_use++;
+    s->temps_in_use += 2;
 #endif
     return ts;
 }
@@ -1027,6 +1078,7 @@ void tcg_temp_free_internal(TCGTemp *ts)
 {
     TCGContext *s = tcg_ctx;
     int k, idx;
+    TCGTemp *ts_expr = temp_expr(ts);
 
     switch (ts->kind) {
     case TEMP_CONST:
@@ -1043,7 +1095,7 @@ void tcg_temp_free_internal(TCGTemp *ts)
     }
 
 #if defined(CONFIG_DEBUG_TCG)
-    s->temps_in_use--;
+    s->temps_in_use -= 2;
     if (s->temps_in_use < 0) {
         fprintf(stderr, "More temporaries freed than allocated!\n");
     }
@@ -1051,6 +1103,10 @@ void tcg_temp_free_internal(TCGTemp *ts)
 
     tcg_debug_assert(ts->temp_allocated != 0);
     ts->temp_allocated = 0;
+
+    tcg_debug_assert(ts_expr->kind != TEMP_GLOBAL);
+    tcg_debug_assert(ts_expr->temp_allocated != 0);
+    ts_expr->temp_allocated = 0;
 
     idx = temp_idx(ts);
     k = ts->base_type + (ts->kind == TEMP_NORMAL ? 0 : TCG_TYPE_COUNT);
@@ -1477,6 +1533,13 @@ void tcg_gen_callN(void *func, TCGTemp *ret, int nargs, TCGTemp **args)
     const TCGHelperInfo *info;
     TCGOp *op;
 
+    if (ret != NULL && ret->symbolic_expression == 0) {
+        /* This is an unhandled helper; we concretize, i.e., the expression for
+         * the result is NULL */
+        tcg_gen_op2_i64(INDEX_op_mov_i64, temp_tcgv_i64(temp_expr(ret)), 
+                        temp_tcgv_i64(tcg_constant_internal(TCG_TYPE_I64, 0)));
+    }
+
     info = g_hash_table_lookup(helper_table, (gpointer)func);
     typemask = info->typemask;
 
@@ -1641,13 +1704,15 @@ static char *tcg_get_arg_str_ptr(TCGContext *s, char *buf, int buf_size,
         pstrcpy(buf, buf_size, ts->name);
         break;
     case TEMP_LOCAL:
-        snprintf(buf, buf_size, "loc%d", idx - s->nb_globals);
+        snprintf(buf, buf_size, "loc%d%s", (idx - s->nb_globals) / 2,
+                 ts->symbolic_expression ? "_expr" : "");
         break;
     case TEMP_EBB:
         snprintf(buf, buf_size, "ebb%d", idx - s->nb_globals);
         break;
     case TEMP_NORMAL:
-        snprintf(buf, buf_size, "tmp%d", idx - s->nb_globals);
+        snprintf(buf, buf_size, "tmp%d%s", (idx - s->nb_globals) / 2,
+                 ts->symbolic_expression ? "_expr" : "");
         break;
     case TEMP_CONST:
         switch (ts->type) {

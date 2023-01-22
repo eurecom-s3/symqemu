@@ -35,12 +35,21 @@
 #include "qapi/qapi-commands-machine-target.h"
 #include "fpu_helper.h"
 
+#define SymExpr void*
+#include "RuntimeCommon.h"
+
 const char regnames[32][3] = {
     "r0", "at", "v0", "v1", "a0", "a1", "a2", "a3",
     "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
     "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
     "t8", "t9", "k0", "k1", "gp", "sp", "s8", "ra",
 };
+
+static void init_env_exprs(MIPSCPU *cpu)
+{
+    memset(cpu->env_exprs, 0, sizeof(cpu->env_exprs));
+    _sym_register_expression_region(cpu->env_exprs, sizeof(cpu->env_exprs));
+}
 
 static void fpu_dump_fpr(fpr_t *fpr, FILE *f, bool is_fpu64)
 {
@@ -502,6 +511,8 @@ static void mips_cpu_realizefn(DeviceState *dev, Error **errp)
 static void mips_cpu_initfn(Object *obj)
 {
     MIPSCPU *cpu = MIPS_CPU(obj);
+    init_env_exprs(cpu);
+
     CPUMIPSState *env = &cpu->env;
     MIPSCPUClass *mcc = MIPS_CPU_GET_CLASS(obj);
 

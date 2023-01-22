@@ -72,6 +72,10 @@ static inline void gen_tb_start(const TranslationBlock *tb)
     }
 
     tcg_temp_free_i32(count);
+
+    TCGv_i64 block = tcg_const_i64((uint64_t)tb);
+    gen_helper_sym_notify_block(block);
+    tcg_temp_free_i64(block);
 }
 
 static inline void gen_tb_end(const TranslationBlock *tb, int num_insns)
