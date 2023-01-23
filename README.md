@@ -1,7 +1,7 @@
 # SymQEMU
 
 This is SymQEMU, a binary-only symbolic executor based on QEMU and SymCC. It
-currently extends QEMU 4.1.1 and works with the most recent version of SymCC.
+currently extends QEMU 7.2 and works with the most recent version of SymCC.
 (See README.orig for QEMU's original README file.)
 
 ## How to build
@@ -30,9 +30,9 @@ and binaries. The following invocation is known to work on Debian 10, Arch and
 Fedora 33:
 
 ``` shell
+
 $ ../configure                                                    \
       --audio-drv-list=                                           \
-      --disable-bluez                                             \
       --disable-sdl                                               \
       --disable-gtk                                               \
       --disable-vte                                               \
@@ -40,9 +40,9 @@ $ ../configure                                                    \
       --disable-virglrenderer                                     \
       --disable-werror                                            \
       --target-list=x86_64-linux-user                             \
-      --enable-capstone=git                                       \
       --symcc-source=</path/to/symcc>/sources                     \
       --symcc-build=</path/to/symcc>/build
+
 $ make
 ```
 
