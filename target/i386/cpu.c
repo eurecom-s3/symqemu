@@ -45,6 +45,9 @@
 #include "disas/capstone.h"
 #include "cpu-internal.h"
 
+#define SymExpr void*
+#include "RuntimeCommon.h"
+
 static void x86_cpu_realizefn(DeviceState *dev, Error **errp);
 
 /* Helpers for building CPUID[2] descriptors: */
@@ -7584,6 +7587,9 @@ static void x86_cpu_initfn(Object *obj)
     X86CPU *cpu = X86_CPU(obj);
     X86CPUClass *xcc = X86_CPU_GET_CLASS(obj);
     CPUX86State *env = &cpu->env;
+
+    memset(cpu->env_exprs, 0, sizeof(cpu->env_exprs));
+    _sym_register_expression_region(cpu->env_exprs, sizeof(cpu->env_exprs));
 
     env->nr_dies = 1;
     cpu_set_cpustate_pointers(cpu);

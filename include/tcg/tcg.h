@@ -416,9 +416,14 @@ typedef struct TCGTemp {
     unsigned int temp_allocated:1;
     unsigned int temp_subindex:1;
 
+    /* If true, this temp contains a symbolic expression. */
+    unsigned int symbolic_expression:1;
+
     int64_t val;
     struct TCGTemp *mem_base;
     intptr_t mem_offset;
+    /* Indirect bases use this to store the offset to the symbolic shadow. */
+    intptr_t sym_offset;
     const char *name;
 
     /* Pass-specific information that can be stored for a temporary.
@@ -626,6 +631,13 @@ static inline TCGTemp *tcgv_i32_temp(TCGv_i32 v)
 }
 #endif
 
+static inline TCGTemp *temp_expr(TCGTemp *ts) {
+    tcg_debug_assert(temp_idx(ts) + 1 < tcg_ctx->nb_temps);
+    tcg_debug_assert(!ts->symbolic_expression);
+    tcg_debug_assert((ts + 1)->symbolic_expression);
+    return ts + 1;
+}
+
 static inline TCGTemp *tcgv_i64_temp(TCGv_i64 v)
 {
     return tcgv_i32_temp((TCGv_i32)v);
@@ -707,6 +719,30 @@ static inline void tcg_set_insn_param(TCGOp *op, int arg, TCGArg v)
     op->args[arg] = v;
 }
 
+static inline TCGv_ptr tcgv_i32_expr(TCGv_i32 v)
+{
+    return temp_tcgv_ptr(temp_expr(tcgv_i32_temp(v)));
+}
+
+static inline TCGv_ptr tcgv_i64_expr(TCGv_i64 v)
+{
+    return temp_tcgv_ptr(temp_expr(tcgv_i64_temp(v)));
+}
+
+/* Expression pointers as (64-bit) numbers for code simplification. This assumes
+ * that we're running on a 64-bit architecture! */
+
+static inline TCGv_i64 tcgv_i32_expr_num(TCGv_i32 v)
+{
+    return temp_tcgv_i64(temp_expr(tcgv_i32_temp(v)));
+}
+
+static inline TCGv_i64 tcgv_i64_expr_num(TCGv_i64 v)
+{
+    return temp_tcgv_i64(temp_expr(tcgv_i64_temp(v)));
+}
+
+
 static inline uint64_t tcg_get_insn_start_param(TCGOp *op, int arg)
 {
     if (TCG_TARGET_REG_BITS == 64) {
@@ -783,7 +819,7 @@ static inline void *tcg_malloc(int size)
     }
 }
 
-void tcg_init(size_t tb_size, int splitwx, unsigned max_cpus);
+void tcg_init(size_t tb_size, int splitwx, unsigned max_cpus, intptr_t sym_offset);
 void tcg_register_thread(void);
 void tcg_prologue_init(TCGContext *s);
 void tcg_func_start(TCGContext *s);

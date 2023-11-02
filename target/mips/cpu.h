@@ -1217,6 +1217,9 @@ struct ArchCPU {
     Clock *count_div; /* Divider for CP0_Count clock */
     CPUNegativeOffsetState neg;
     CPUMIPSState env;
+
+    /* space for symbolic expressions corresponding to env */
+    void *env_exprs[512 + 1];   /* TCG_MAX_TEMPS + 1 (for NULL) */
 };
 
 

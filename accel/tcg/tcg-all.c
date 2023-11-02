@@ -114,7 +114,7 @@ static int tcg_init_machine(MachineState *ms)
 
     page_init();
     tb_htable_init();
-    tcg_init(s->tb_size * MiB, s->splitwx_enabled, max_cpus);
+    tcg_init(s->tb_size * MiB, s->splitwx_enabled, max_cpus, offsetof(ArchCPU, env_exprs) - offsetof(ArchCPU, env));
 
 #if defined(CONFIG_SOFTMMU)
     /*

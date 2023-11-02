@@ -35,6 +35,15 @@
 #include "semihosting/semihost.h"
 #include "fpu_helper.h"
 
+#define SymExpr void*
+#include "RuntimeCommon.h"
+
+static void init_env_exprs(MIPSCPU *cpu)
+{
+    memset(cpu->env_exprs, 0, sizeof(cpu->env_exprs));
+    _sym_register_expression_region(cpu->env_exprs, sizeof(cpu->env_exprs));
+}
+
 const char regnames[32][3] = {
     "r0", "at", "v0", "v1", "a0", "a1", "a2", "a3",
     "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
@@ -501,6 +510,8 @@ static void mips_cpu_realizefn(DeviceState *dev, Error **errp)
 static void mips_cpu_initfn(Object *obj)
 {
     MIPSCPU *cpu = MIPS_CPU(obj);
+    init_env_exprs(cpu);
+
     CPUMIPSState *env = &cpu->env;
     MIPSCPUClass *mcc = MIPS_CPU_GET_CLASS(obj);
 

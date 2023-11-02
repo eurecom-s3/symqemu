@@ -11,6 +11,10 @@
 #include "exec/helper-gen.h.inc"
 #undef  HELPER_H
 
+#define HELPER_H "accel/tcg/tcg-runtime-sym.h"
+#include "exec/helper-gen.h.inc"
+#undef  HELPER_H
+
 #define HELPER_H "accel/tcg/plugin-helpers.h"
 #include "exec/helper-gen.h.inc"
 #undef  HELPER_H

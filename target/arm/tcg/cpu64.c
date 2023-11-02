@@ -27,9 +27,14 @@
 #include "internals.h"
 #include "cpregs.h"
 
+#define SymExpr void*
+#include "RuntimeCommon.h"
+
 static void aarch64_a35_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
+
+    init_env_exprs(cpu);
 
     cpu->dtb_compatible = "arm,cortex-a35";
     set_feature(&cpu->env, ARM_FEATURE_V8);
@@ -266,6 +271,8 @@ static void aarch64_a55_initfn(Object *obj)
 static void aarch64_a72_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
+
+    init_env_exprs(cpu);
 
     cpu->dtb_compatible = "arm,cortex-a72";
     set_feature(&cpu->env, ARM_FEATURE_V8);

@@ -15,6 +15,7 @@
 #include "exec/plugin-gen.h"
 #include "tcg/tcg-op-common.h"
 #include "internal.h"
+#include "tcg/tcg-temp-internal.h"
 
 static void set_can_do_io(DisasContextBase *db, bool val)
 {
@@ -88,6 +89,10 @@ static TCGOp *gen_tb_start(DisasContextBase *db, uint32_t cflags)
      * very easy to forget doing it in the translator.
      */
     set_can_do_io(db, db->max_insns == 1 && (cflags & CF_LAST_IO));
+
+    TCGv_i64 block = tcg_constant_i64((uint64_t)db->tb);
+    gen_helper_sym_notify_block(block);
+    tcg_temp_free_i64(block);
 
     return icount_start_insn;
 }

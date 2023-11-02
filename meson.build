@@ -3446,6 +3446,7 @@ subdir('plugins')
 subdir('ebpf')
 
 common_user_inc = []
+common_user_inc += config_host['SYMCC_INC'].split()
 
 subdir('common-user')
 subdir('bsd-user')
@@ -3822,13 +3823,16 @@ foreach target : target_dirs
       exe_name += '-unsigned'
     endif
 
+    symcc_libs = files(config_host['SYMCC_LIBS'].split())
+
     emulator = executable(exe_name, exe['sources'],
                install: true,
                c_args: c_args,
                dependencies: arch_deps + deps + exe['dependencies'],
-               objects: lib.extract_all_objects(recursive: true),
+               objects: [lib.extract_all_objects(recursive: true), symcc_libs],
                link_depends: [block_syms, qemu_syms] + exe.get('link_depends', []),
                link_args: link_args,
+               build_rpath: config_host['SYMCC_BUILD'],
                win_subsystem: exe['win_subsystem'])
 
     if targetos == 'darwin'
