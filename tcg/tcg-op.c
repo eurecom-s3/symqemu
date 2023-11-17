@@ -2656,7 +2656,7 @@ void tcg_gen_sextract_i64(TCGv_i64 ret, TCGv_i64 arg,
         TCGv_i64 ofs_tmp, len_tmp;
         ofs_tmp = tcg_const_i64(ofs);
         len_tmp = tcg_const_i64(len);
-        gen_helper_sym_extract_i64(
+        gen_helper_sym_sextract_i64(
             tcgv_i64_expr(ret), tcgv_i64_expr(arg), ofs_tmp, len_tmp);
         tcg_temp_free_i64(ofs_tmp);
         tcg_temp_free_i64(len_tmp);
