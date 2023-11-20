@@ -3001,35 +3001,35 @@ void tcg_gen_abs_i64(TCGv_i64 ret, TCGv_i64 a)
 /* Size changing operations.  */
 
 void tcg_gen_extrl_i64_i32(TCGv_i32 ret, TCGv_i64 arg)
-{
+{/*
     if (TCG_TARGET_REG_BITS == 32) {
         tcg_gen_mov_i32(ret, TCGV_LOW(arg));
     } else if (TCG_TARGET_HAS_extrl_i64_i32) {
         tcg_gen_op2(INDEX_op_extrl_i64_i32,
                     tcgv_i32_arg(ret), tcgv_i64_arg(arg));
-    } else {
+    } else {*/
         gen_helper_sym_trunc_i64_i32(tcgv_i32_expr(ret), tcgv_i64_expr(arg));
         /* We don't want symbolic handling of this mov. */
         if (ret != (TCGv_i32)arg)
             tcg_gen_op2_i32(INDEX_op_mov_i32, ret, (TCGv_i32)arg);
-    }
+    /* } */
 }
 
 void tcg_gen_extrh_i64_i32(TCGv_i32 ret, TCGv_i64 arg)
-{
+{/*
     if (TCG_TARGET_REG_BITS == 32) {
         tcg_gen_mov_i32(ret, TCGV_HIGH(arg));
     } else if (TCG_TARGET_HAS_extrh_i64_i32) {
         tcg_gen_op2(INDEX_op_extrh_i64_i32,
                     tcgv_i32_arg(ret), tcgv_i64_arg(arg));
-    } else {
+    } else {*/
         TCGv_i64 t = tcg_temp_ebb_new_i64();
         tcg_gen_shri_i64(t, arg, 32);
         gen_helper_sym_trunc_i64_i32(tcgv_i32_expr(ret), tcgv_i64_expr(t));
         /* We don't want symbolic handling of this mov. */
         tcg_gen_op2_i32(INDEX_op_mov_i32, ret, (TCGv_i32)t);
         tcg_temp_free_i64(t);
-    }
+    /*}*/
 }
 
 void tcg_gen_extu_i32_i64(TCGv_i64 ret, TCGv_i32 arg)
