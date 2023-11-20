@@ -9272,11 +9272,11 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
         return 0; /* avoid warning */
     case TARGET_NR_read:
         if (arg2 == 0 && arg3 == 0) {
-            return get_errno(read_symbolized(arg1, 0, 0));
+            return get_errno(safe_read(arg1, 0, 0));
         } else {
             if (!(p = lock_user(VERIFY_WRITE, arg2, arg3, 0)))
                 return -TARGET_EFAULT;
-            ret = get_errno(safe_read(arg1, p, arg3));
+            ret = get_errno(read_symbolized(arg1, p, arg3));
             if (ret >= 0 &&
                 fd_trans_host_to_target_data(arg1)) {
                 ret = fd_trans_host_to_target_data(arg1)(p, ret);
