@@ -729,6 +729,11 @@ static inline TCGv_ptr tcgv_i64_expr(TCGv_i64 v)
     return temp_tcgv_ptr(temp_expr(tcgv_i64_temp(v)));
 }
 
+static inline TCGv_ptr tcgv_vec_expr(TCGv_vec v)
+{
+    return temp_tcgv_ptr(temp_expr(tcgv_vec_temp(v)));
+}
+
 /* Expression pointers as (64-bit) numbers for code simplification. This assumes
  * that we're running on a 64-bit architecture! */
 
