@@ -330,6 +330,25 @@ void tcg_gen_stl_vec(TCGv_vec r, TCGv_ptr b, TCGArg o, TCGType low_type)
 
     tcg_debug_assert(low_type >= TCG_TYPE_V64);
     tcg_debug_assert(low_type <= type);
+
+    uint64_t length;
+
+    switch (low_type) {
+        case TCG_TYPE_V64:
+            length = 8;
+            break;
+        case TCG_TYPE_V128:
+            length = 16;
+            break;
+        case TCG_TYPE_V256:
+            length = 32;
+            break;
+        default:
+            g_assert_not_reached();
+    }
+
+    gen_helper_sym_store_host(tcgv_vec_expr(r), b, tcg_constant_i64(o), tcg_constant_i64(length));
+
     vec_gen_3(INDEX_op_st_vec, low_type, 0, ri, bi, o);
 }
 
