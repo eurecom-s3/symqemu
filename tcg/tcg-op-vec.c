@@ -214,6 +214,7 @@ static void vec_gen_op3(TCGOpcode opc, unsigned vece,
 void tcg_gen_mov_vec(TCGv_vec r, TCGv_vec a)
 {
     if (r != a) {
+        tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcgv_vec_expr_num(a));
         vec_gen_op2(INDEX_op_mov_vec, 0, r, a);
     }
 }
