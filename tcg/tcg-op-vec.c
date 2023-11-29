@@ -277,6 +277,24 @@ static void vec_gen_ldst(TCGOpcode opc, TCGv_vec r, TCGv_ptr b, TCGArg o)
 
 void tcg_gen_ld_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
 {
+    uint64_t length;
+
+    switch(tcgv_vec_temp(r)->base_type) {
+        case TCG_TYPE_V64:
+            length = 8;
+            break;
+        case TCG_TYPE_V128:
+            length = 16;
+            break;
+        case TCG_TYPE_V256:
+            length = 32;
+            break;
+        default:
+            g_assert_not_reached();
+    }
+
+    gen_helper_sym_load_host_v(tcgv_vec_expr(r), b, tcg_constant_i64(o), tcg_constant_i64(length));
+
     vec_gen_ldst(INDEX_op_ld_vec, r, b, o);
 }
 
