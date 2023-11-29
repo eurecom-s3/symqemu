@@ -742,6 +742,11 @@ static inline TCGv_i64 tcgv_i64_expr_num(TCGv_i64 v)
     return temp_tcgv_i64(temp_expr(tcgv_i64_temp(v)));
 }
 
+static inline TCGv_i64 tcgv_vec_expr_num(TCGv_vec v)
+{
+    return temp_tcgv_i64(temp_expr(tcgv_vec_temp(v)));
+}
+
 
 static inline uint64_t tcg_get_insn_start_param(TCGOp *op, int arg)
 {
