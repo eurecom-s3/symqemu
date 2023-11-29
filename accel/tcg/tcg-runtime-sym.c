@@ -397,15 +397,7 @@ void *HELPER(sym_load_host_v)(void *addr, uint64_t offset, uint64_t length)
     return sym_load_host_internal(addr, offset, length, length);
 }
 
-void HELPER(sym_store_host_i32)(uint32_t value, void *value_expr,
-                                void *addr,
-                                uint64_t offset, uint64_t length)
-{
-    _sym_write_memory((uint8_t*)addr + offset, length, value_expr, true);
-}
-
-void HELPER(sym_store_host_i64)(uint64_t value, void *value_expr,
-                                void *addr,
+void HELPER(sym_store_host)(void *value_expr, void *addr,
                                 uint64_t offset, uint64_t length)
 {
     _sym_write_memory((uint8_t*)addr + offset, length, value_expr, true);
