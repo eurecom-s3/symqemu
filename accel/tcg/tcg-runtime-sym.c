@@ -658,3 +658,11 @@ void HELPER(sym_collect_garbage)(void)
 {
     _sym_collect_garbage();
 }
+
+void *HELPER(malloc)(uint64_t size){
+    return malloc(size);
+}
+
+void HELPER(free)(void *ptr){
+    free(ptr);
+}
