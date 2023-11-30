@@ -24,6 +24,36 @@
 #include "tcg/tcg-mo.h"
 #include "tcg-internal.h"
 
+static int tcg_vec_length_bytes(TCGv_vec vector){
+    switch(tcgv_vec_temp(vector)->base_type) {
+        case TCG_TYPE_V64:
+            return 8;
+        case TCG_TYPE_V128:
+            return 16;
+        case TCG_TYPE_V256:
+            return 32;
+        default:
+            g_assert_not_reached();
+    }
+}
+
+static TCGv_ptr store_vector_in_memory(TCGv_vec vector){
+    TCGv_ptr buffer_address = tcg_temp_new_ptr();
+    gen_helper_malloc(buffer_address, tcg_constant_i64(tcg_vec_length_bytes(vector)));
+
+    /* store vec at a buffer_address */
+    vec_gen_3(
+            INDEX_op_st_vec,
+            tcgv_vec_temp(vector)->base_type,
+            0,
+            tcgv_vec_arg(vector),
+            tcgv_ptr_arg(buffer_address),
+            0
+    );
+
+    return buffer_address;
+}
+
 /*
  * Vector optional opcode tracking.
  * Except for the basic logical operations (and, or, xor), and
@@ -277,46 +307,25 @@ static void vec_gen_ldst(TCGOpcode opc, TCGv_vec r, TCGv_ptr b, TCGArg o)
 
 void tcg_gen_ld_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
 {
-    uint64_t length;
 
-    switch(tcgv_vec_temp(r)->base_type) {
-        case TCG_TYPE_V64:
-            length = 8;
-            break;
-        case TCG_TYPE_V128:
-            length = 16;
-            break;
-        case TCG_TYPE_V256:
-            length = 32;
-            break;
-        default:
-            g_assert_not_reached();
-    }
-
-    gen_helper_sym_load_host_v(tcgv_vec_expr(r), b, tcg_constant_i64(o), tcg_constant_i64(length));
+    gen_helper_sym_load_host_v(
+                tcgv_vec_expr(r),
+                b,
+                tcg_constant_i64(o),
+                tcg_constant_i64(tcg_vec_length_bytes(r))
+            );
 
     vec_gen_ldst(INDEX_op_ld_vec, r, b, o);
 }
 
 void tcg_gen_st_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
 {
-    uint64_t length;
-
-    switch(tcgv_vec_temp(r)->base_type) {
-        case TCG_TYPE_V64:
-            length = 8;
-            break;
-        case TCG_TYPE_V128:
-            length = 16;
-            break;
-        case TCG_TYPE_V256:
-            length = 32;
-            break;
-        default:
-            g_assert_not_reached();
-    }
-
-    gen_helper_sym_store_host(tcgv_vec_expr(r), b, tcg_constant_i64(o), tcg_constant_i64(length) );
+    gen_helper_sym_store_host(
+                tcgv_vec_expr(r),
+                b,
+                tcg_constant_i64(o),
+                tcg_constant_i64(tcg_vec_length_bytes(r))
+            );
 
     vec_gen_ldst(INDEX_op_st_vec, r, b, o);
 }
