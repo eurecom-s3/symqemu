@@ -363,6 +363,26 @@ void tcg_gen_stl_vec(TCGv_vec r, TCGv_ptr b, TCGArg o, TCGType low_type)
 
 void tcg_gen_and_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    TCGv_ptr buffer_address_a = store_vector_in_memory(a);
+    TCGv_ptr buffer_address_b = store_vector_in_memory(b);
+    int length_a = tcg_vec_length_bytes(a);
+    int length_b = tcg_vec_length_bytes(b);
+    int length_r = tcg_vec_length_bytes(r);
+
+    g_assert(length_a == length_b && length_b == length_r);
+
+    gen_helper_sym_and_vec(
+            tcgv_vec_expr(r),
+            buffer_address_a,
+            tcgv_vec_expr(a),
+            buffer_address_b,
+            tcgv_vec_expr(b),
+            tcg_constant_i64(length_a)
+    );
+
+    gen_helper_free(buffer_address_a);
+    gen_helper_free(buffer_address_b);
+
     vec_gen_op3(INDEX_op_and_vec, 0, r, a, b);
 }
 

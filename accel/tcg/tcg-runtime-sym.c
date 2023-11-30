@@ -666,3 +666,7 @@ void *HELPER(malloc)(uint64_t size){
 void HELPER(free)(void *ptr){
     free(ptr);
 }
+
+void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size){
+    return NULL;
+}
