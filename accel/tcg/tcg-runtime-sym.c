@@ -668,5 +668,23 @@ void HELPER(free)(void *ptr){
 }
 
 void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size){
-    return NULL;
+
+    if (arg1_expr == NULL && arg2_expr == NULL) {
+        return NULL;
+    }
+
+    if (arg1_expr == NULL) {
+        /* _sym_build_integer_arbitrary_length expects arg1 to be an uint64_t array */
+        g_assert(size % 8 == 0);
+        arg1_expr = _sym_build_integer_arbitrary_length(size * 8, size, arg1);
+    }
+
+    if (arg2_expr == NULL) {
+        g_assert(size % 8 == 0);
+        arg2_expr = _sym_build_integer_arbitrary_length(size * 8, size, arg2);
+    }
+
+    g_assert(_sym_bits_helper(arg1_expr) == _sym_bits_helper(arg2_expr));
+
+    return _sym_build_and(arg1_expr, arg2_expr);
 }
