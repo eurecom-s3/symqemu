@@ -127,6 +127,8 @@ DEF_HELPER_FLAGS_0(sym_collect_garbage, TCG_CALL_NO_RWG, void)
 DEF_HELPER_FLAGS_1(malloc, TCG_CALL_NO_RWG, ptr, i64)
 DEF_HELPER_FLAGS_1(free, TCG_CALL_NO_RWG, void, ptr)
 
+DEF_HELPER_FLAGS_5(sym_and_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64)
+
 /* TODO clz, ctz, clrsb, ctpop; vector operations; helpers for atomic operations (?) */
 
 /* The extrl and extrh instructions aren't emitted on 64-bit hosts. If we ever
