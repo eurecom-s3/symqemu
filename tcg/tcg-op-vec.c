@@ -395,11 +395,13 @@ void tcg_gen_and_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 
 void tcg_gen_or_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_or_vec);
     vec_gen_op3(INDEX_op_or_vec, 0, r, a, b);
 }
 
 void tcg_gen_xor_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_xor_vec);
     vec_gen_op3(INDEX_op_xor_vec, 0, r, a, b);
 }
 
@@ -658,16 +660,19 @@ static void do_op3_nofail(unsigned vece, TCGv_vec r, TCGv_vec a,
 
 void tcg_gen_add_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_add_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_add_vec);
 }
 
 void tcg_gen_sub_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_sub_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_sub_vec);
 }
 
 void tcg_gen_mul_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_mul_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_mul_vec);
 }
 

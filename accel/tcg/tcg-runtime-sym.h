@@ -128,6 +128,11 @@ DEF_HELPER_FLAGS_1(malloc, TCG_CALL_NO_RWG, ptr, i64)
 DEF_HELPER_FLAGS_1(free, TCG_CALL_NO_RWG, void, ptr)
 
 DEF_HELPER_FLAGS_6(sym_and_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
+DEF_HELPER_FLAGS_6(sym_or_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
+DEF_HELPER_FLAGS_6(sym_xor_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
+DEF_HELPER_FLAGS_6(sym_add_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
+DEF_HELPER_FLAGS_6(sym_sub_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
+DEF_HELPER_FLAGS_6(sym_mul_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
 
 /* TODO clz, ctz, clrsb, ctpop; vector operations; helpers for atomic operations (?) */
 
