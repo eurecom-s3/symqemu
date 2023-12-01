@@ -41,7 +41,7 @@ static TCGv_ptr store_vector_in_memory(TCGv_vec vector){
     TCGv_ptr buffer_address = tcg_temp_new_ptr();
     gen_helper_malloc(buffer_address, tcg_constant_i64(tcg_vec_length_bytes(vector)));
 
-    /* store vec at a buffer_address */
+    /* store vec at buffer_address */
     vec_gen_3(
             INDEX_op_st_vec,
             tcgv_vec_temp(vector)->base_type,
