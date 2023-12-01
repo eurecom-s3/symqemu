@@ -701,8 +701,26 @@ static void* build_symbol_for_vector_binary_op(void *arg1, void *arg1_expr, void
     return final_symbol;
 }
 
-
 void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
-
     return build_symbol_for_vector_binary_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_and);
+}
+
+void *HELPER(sym_or_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
+    return build_symbol_for_vector_binary_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_or);
+}
+
+void *HELPER(sym_xor_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
+    return build_symbol_for_vector_binary_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_xor);
+}
+
+void *HELPER(sym_add_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
+    return build_symbol_for_vector_binary_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_add);
+}
+
+void *HELPER(sym_sub_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
+    return build_symbol_for_vector_binary_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_sub);
+}
+
+void *HELPER(sym_mul_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
+    return build_symbol_for_vector_binary_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_mul);
 }
