@@ -75,6 +75,9 @@ static void binary_vec_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a,
 
     gen_helper_free(buffer_address_a);
     gen_helper_free(buffer_address_b);
+
+    tcg_temp_free_ptr(buffer_address_a);
+    tcg_temp_free_ptr(buffer_address_b);
 }
 
 /*
