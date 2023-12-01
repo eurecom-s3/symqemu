@@ -667,8 +667,7 @@ void HELPER(free)(void *ptr){
     free(ptr);
 }
 
-void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
-
+static void* build_symbol_for_vector_binary_op(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece, void* (*sym_build_op)(void*, void*)){
     if (arg1_expr == NULL && arg2_expr == NULL) {
         return NULL;
     }
@@ -691,7 +690,7 @@ void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_ex
     for(uint64_t i = 0; i < symbol_count; i++){
         void *arg1_vec = _sym_extract_helper(arg1_expr, i * vece, (i + 1) * vece - 1);
         void *arg2_vec = _sym_extract_helper(arg2_expr, i * vece, (i + 1) * vece - 1);
-        intermediate_symbols[i] = _sym_build_and(arg1_vec, arg2_vec);
+        intermediate_symbols[i] = sym_build_op(arg1_vec, arg2_vec);
     }
 
     void* final_symbol = intermediate_symbols[0];
@@ -700,4 +699,10 @@ void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_ex
     }
 
     return final_symbol;
+}
+
+
+void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
+
+    return build_symbol_for_vector_binary_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_and);
 }
