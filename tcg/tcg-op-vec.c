@@ -377,7 +377,8 @@ void tcg_gen_and_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
             tcgv_vec_expr(a),
             buffer_address_b,
             tcgv_vec_expr(b),
-            tcg_constant_i64(length_a)
+            tcg_constant_i64(length_a),
+            tcg_constant_i64(vece)
     );
 
     gen_helper_free(buffer_address_a);
