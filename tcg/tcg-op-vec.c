@@ -749,26 +749,31 @@ void tcg_gen_umax_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 
 void tcg_gen_shlv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_shift_left_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_shlv_vec);
 }
 
 void tcg_gen_shrv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_logical_shift_right_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_shrv_vec);
 }
 
 void tcg_gen_sarv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_arithmetic_shift_right_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_sarv_vec);
 }
 
 void tcg_gen_rotlv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_rotate_left_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_rotlv_vec);
 }
 
 void tcg_gen_rotrv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_rotate_right_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_rotrv_vec);
 }
 
