@@ -24,14 +24,14 @@
 #include "tcg/tcg-mo.h"
 #include "tcg-internal.h"
 
-static int tcg_vec_length_bytes(TCGv_vec vector){
+static int vec_size(TCGv_vec vector){
     switch(tcgv_vec_temp(vector)->base_type) {
         case TCG_TYPE_V64:
-            return 8;
+            return 64;
         case TCG_TYPE_V128:
-            return 16;
+            return 128;
         case TCG_TYPE_V256:
-            return 32;
+            return 256;
         default:
             g_assert_not_reached();
     }
@@ -39,7 +39,7 @@ static int tcg_vec_length_bytes(TCGv_vec vector){
 
 static TCGv_ptr store_vector_in_memory(TCGv_vec vector){
     TCGv_ptr buffer_address = tcg_temp_new_ptr();
-    gen_helper_malloc(buffer_address, tcg_constant_i64(tcg_vec_length_bytes(vector)));
+    gen_helper_malloc(buffer_address, tcg_constant_i64(vec_size(vector) / 8));
 
     /* store vec at buffer_address */
     vec_gen_3(
@@ -57,11 +57,11 @@ static TCGv_ptr store_vector_in_memory(TCGv_vec vector){
 static void binary_vec_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b, void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i64, TCGv_i64)){
     TCGv_ptr buffer_address_a = store_vector_in_memory(a);
     TCGv_ptr buffer_address_b = store_vector_in_memory(b);
-    int length_a = tcg_vec_length_bytes(a);
-    int length_b = tcg_vec_length_bytes(b);
-    int length_r = tcg_vec_length_bytes(r);
+    int size_a = vec_size(a);
+    int size_b = vec_size(b);
+    int size_r = vec_size(r);
 
-    g_assert(length_a == length_b && length_b == length_r);
+    g_assert(size_a == size_b && size_b == size_r);
 
     sym_helper(
             tcgv_vec_expr(r),
@@ -69,7 +69,7 @@ static void binary_vec_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a,
             tcgv_vec_expr(a),
             buffer_address_b,
             tcgv_vec_expr(b),
-            tcg_constant_i64(length_a),
+            tcg_constant_i64(size_a),
             tcg_constant_i64(vece)
     );
 
@@ -338,7 +338,7 @@ void tcg_gen_ld_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
                 tcgv_vec_expr(r),
                 b,
                 tcg_constant_i64(o),
-                tcg_constant_i64(tcg_vec_length_bytes(r))
+                tcg_constant_i64(vec_size(r))
             );
 
     vec_gen_ldst(INDEX_op_ld_vec, r, b, o);
@@ -350,7 +350,7 @@ void tcg_gen_st_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
                 tcgv_vec_expr(r),
                 b,
                 tcg_constant_i64(o),
-                tcg_constant_i64(tcg_vec_length_bytes(r))
+                tcg_constant_i64(vec_size(r))
             );
 
     vec_gen_ldst(INDEX_op_st_vec, r, b, o);
