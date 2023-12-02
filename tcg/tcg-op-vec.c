@@ -513,7 +513,7 @@ void tcg_gen_abs_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
     tcg_assert_listed_vecop(INDEX_op_abs_vec);
     hold_list = tcg_swap_vecop_list(NULL);
 
-    if (!do_op2(vece, r, a, INDEX_op_abs_vec)) {
+    /*if (!do_op2(vece, r, a, INDEX_op_abs_vec)) {*/
         TCGType type = tcgv_vec_temp(r)->base_type;
         TCGv_vec t = tcg_temp_new_vec(type);
 
@@ -533,7 +533,7 @@ void tcg_gen_abs_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
         }
 
         tcg_temp_free_vec(t);
-    }
+    /*}*/
     tcg_swap_vecop_list(hold_list);
 }
 
