@@ -407,56 +407,56 @@ void tcg_gen_xor_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 
 void tcg_gen_andc_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_andc_vec) {
+   /* if (TCG_TARGET_HAS_andc_vec) {
         vec_gen_op3(INDEX_op_andc_vec, 0, r, a, b);
-    } else {
+    } else { */
         TCGv_vec t = tcg_temp_new_vec_matching(r);
         tcg_gen_not_vec(0, t, b);
         tcg_gen_and_vec(0, r, a, t);
         tcg_temp_free_vec(t);
-    }
+   /* } */
 }
 
 void tcg_gen_orc_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_orc_vec) {
+    /* if (TCG_TARGET_HAS_orc_vec) {
         vec_gen_op3(INDEX_op_orc_vec, 0, r, a, b);
-    } else {
+    } else { */
         TCGv_vec t = tcg_temp_new_vec_matching(r);
         tcg_gen_not_vec(0, t, b);
         tcg_gen_or_vec(0, r, a, t);
         tcg_temp_free_vec(t);
-    }
+    /* } */
 }
 
 void tcg_gen_nand_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_nand_vec) {
+    /* if (TCG_TARGET_HAS_nand_vec) {
         vec_gen_op3(INDEX_op_nand_vec, 0, r, a, b);
-    } else {
+    } else { */
         tcg_gen_and_vec(0, r, a, b);
         tcg_gen_not_vec(0, r, r);
-    }
+    /* } */
 }
 
 void tcg_gen_nor_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_nor_vec) {
+    /* if (TCG_TARGET_HAS_nor_vec) {
         vec_gen_op3(INDEX_op_nor_vec, 0, r, a, b);
-    } else {
+    } else { */
         tcg_gen_or_vec(0, r, a, b);
         tcg_gen_not_vec(0, r, r);
-    }
+    /* } */
 }
 
 void tcg_gen_eqv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_eqv_vec) {
+    /* if (TCG_TARGET_HAS_eqv_vec) {
         vec_gen_op3(INDEX_op_eqv_vec, 0, r, a, b);
-    } else {
+    } else { */
         tcg_gen_xor_vec(0, r, a, b);
         tcg_gen_not_vec(0, r, r);
-    }
+    /* } */
 }
 
 static bool do_op2(unsigned vece, TCGv_vec r, TCGv_vec a, TCGOpcode opc)
