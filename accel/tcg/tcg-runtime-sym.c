@@ -715,6 +715,37 @@ static void* build_symbol_for_vector_vector_op(void *arg1, void *arg1_expr, void
     return apply_op_and_merge(op, arg1_elements, arg2_elements, element_count);
 }
 
+static void* build_symbol_for_vector_int32_op(void *arg1, void *arg1_expr, uint32_t arg2, void *arg2_expr, uint64_t vector_size, uint64_t vece, void* (*op)(void*, void*)){
+    uint64_t element_size = vece_element_size(vece);
+    g_assert(element_size <= vector_size);
+    g_assert(vector_size % element_size == 0);
+
+    if (arg1_expr == NULL && arg2_expr == NULL) {
+        return NULL;
+    }
+
+    if (arg1_expr == NULL) {
+        arg1_expr = _sym_build_integer_from_buffer(arg1, vector_size);
+    }
+
+    if (arg2_expr == NULL) {
+        arg2_expr = _sym_build_integer(arg2, 32);
+    }
+
+    g_assert(_sym_bits_helper(arg1_expr) == vector_size);
+    g_assert(_sym_bits_helper(arg2_expr) == 32);
+
+    uint64_t element_count = vector_size / element_size;
+    void* arg1_elements[element_count];
+    void* arg2_elements[element_count];
+    split_symbol(arg1_expr, element_count, arg1_elements);
+    for(uint64_t i = 0; i < element_count; i++){
+        arg2_elements[i] = arg2_expr;
+    }
+
+    return apply_op_and_merge(op, arg1_elements, arg2_elements, element_count);
+}
+
 void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
     return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_and);
 }
