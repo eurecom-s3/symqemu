@@ -667,38 +667,52 @@ void HELPER(free)(void *ptr){
     free(ptr);
 }
 
-static void* build_symbol_for_vector_vector_op(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece, void* (*sym_build_op)(void*, void*)){
+static void split_symbol(void* symbol, uint64_t element_count, void* result[]){
+    g_assert(_sym_bits_helper(symbol) % element_count == 0);
+    for(uint64_t i = 0; i < element_count; i++){
+        result[i] = _sym_extract_helper(symbol, i * 8, (i + 1) * 8 - 1);
+    }
+}
+
+static void *apply_op_and_merge(void* (*op)(void*, void*), void* arg1[], void* arg2[], uint64_t element_count){
+    void* merged_result = op(arg1[0], arg2[0]);
+    for(uint64_t i = 1; i < element_count; i++){
+        merged_result = _sym_concat_helper(merged_result, op(arg1[i], arg2[i]));
+    }
+    return merged_result;
+}
+
+static uint64_t vece_element_size(uint64_t vece){
+    /* see definition of vece here https://www.qemu.org/docs/master/devel/tcg-ops.html#host-vector-operations */
+    return 8 << vece;
+}
+
+static void* build_symbol_for_vector_vector_op(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t vector_size, uint64_t vece, void* (*op)(void*, void*)){
+    uint64_t element_size = vece_element_size(vece);
+    g_assert(element_size <= vector_size);
+    g_assert(vector_size % element_size == 0);
+
     if (arg1_expr == NULL && arg2_expr == NULL) {
         return NULL;
     }
 
     if (arg1_expr == NULL) {
-        /* _sym_build_integer_arbitrary_length expects arg1 to be an uint64_t array */
-        g_assert(size % 8 == 0);
-        arg1_expr = _sym_build_integer_arbitrary_length(size * 8, size, arg1);
+        arg1_expr = _sym_build_integer_from_buffer(arg1, vector_size);
     }
 
     if (arg2_expr == NULL) {
-        g_assert(size % 8 == 0);
-        arg2_expr = _sym_build_integer_arbitrary_length(size * 8, size, arg2);
+        arg2_expr = _sym_build_integer_from_buffer(arg2, vector_size);
     }
 
-    g_assert(_sym_bits_helper(arg1_expr) == _sym_bits_helper(arg2_expr));
+    g_assert(_sym_bits_helper(arg1_expr) == _sym_bits_helper(arg2_expr) && _sym_bits_helper(arg1_expr) == vector_size);
 
-    uint64_t symbol_count = size * 8 / vece;
-    void* intermediate_symbols[symbol_count];
-    for(uint64_t i = 0; i < symbol_count; i++){
-        void *arg1_vec = _sym_extract_helper(arg1_expr, i * vece, (i + 1) * vece - 1);
-        void *arg2_vec = _sym_extract_helper(arg2_expr, i * vece, (i + 1) * vece - 1);
-        intermediate_symbols[i] = sym_build_op(arg1_vec, arg2_vec);
-    }
+    uint64_t element_count = vector_size / element_size;
+    void* arg1_elements[element_count];
+    void* arg2_elements[element_count];
+    split_symbol(arg1_expr, element_count, arg1_elements);
+    split_symbol(arg2_expr, element_count, arg2_elements);
 
-    void* final_symbol = intermediate_symbols[0];
-    for(uint64_t i = 1; i < symbol_count; i++){
-        final_symbol = _sym_concat_helper(final_symbol, intermediate_symbols[i]);
-    }
-
-    return final_symbol;
+    return apply_op_and_merge(op, arg1_elements, arg2_elements, element_count);
 }
 
 void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
