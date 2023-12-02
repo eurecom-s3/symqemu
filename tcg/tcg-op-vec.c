@@ -54,7 +54,7 @@ static TCGv_ptr store_vector_in_memory(TCGv_vec vector){
     return buffer_address;
 }
 
-static void binary_vec_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b, void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i64, TCGv_i64)){
+static void vec_vec_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b, void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i64, TCGv_i64)){
     TCGv_ptr buffer_address_a = store_vector_in_memory(a);
     TCGv_ptr buffer_address_b = store_vector_in_memory(b);
     int size_a = vec_size(a);
@@ -78,6 +78,28 @@ static void binary_vec_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a,
 
     tcg_temp_free_ptr(buffer_address_a);
     tcg_temp_free_ptr(buffer_address_b);
+}
+
+static void vec_int32_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 b, void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i32, TCGv_ptr, TCGv_i64, TCGv_i64)){
+    TCGv_ptr buffer_address_a = store_vector_in_memory(a);
+    int size_a = vec_size(a);
+    int size_r = vec_size(r);
+
+    g_assert(size_a == size_r);
+
+    sym_helper(
+            tcgv_vec_expr(r),
+            buffer_address_a,
+            tcgv_vec_expr(a),
+            b,
+            tcgv_i32_expr(b),
+            tcg_constant_i64(size_a),
+            tcg_constant_i64(vece)
+    );
+
+    gen_helper_free(buffer_address_a);
+
+    tcg_temp_free_ptr(buffer_address_a);
 }
 
 /*
@@ -389,19 +411,19 @@ void tcg_gen_stl_vec(TCGv_vec r, TCGv_ptr b, TCGArg o, TCGType low_type)
 
 void tcg_gen_and_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_and_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_and_vec);
     vec_gen_op3(INDEX_op_and_vec, 0, r, a, b);
 }
 
 void tcg_gen_or_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_or_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_or_vec);
     vec_gen_op3(INDEX_op_or_vec, 0, r, a, b);
 }
 
 void tcg_gen_xor_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_xor_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_xor_vec);
     vec_gen_op3(INDEX_op_xor_vec, 0, r, a, b);
 }
 
@@ -660,19 +682,19 @@ static void do_op3_nofail(unsigned vece, TCGv_vec r, TCGv_vec a,
 
 void tcg_gen_add_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_add_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_add_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_add_vec);
 }
 
 void tcg_gen_sub_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_sub_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_sub_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_sub_vec);
 }
 
 void tcg_gen_mul_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_mul_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_mul_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_mul_vec);
 }
 
@@ -749,31 +771,31 @@ void tcg_gen_umax_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 
 void tcg_gen_shlv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_shift_left_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_shift_left_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_shlv_vec);
 }
 
 void tcg_gen_shrv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_logical_shift_right_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_logical_shift_right_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_shrv_vec);
 }
 
 void tcg_gen_sarv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_arithmetic_shift_right_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_arithmetic_shift_right_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_sarv_vec);
 }
 
 void tcg_gen_rotlv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_rotate_left_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_rotate_left_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_rotlv_vec);
 }
 
 void tcg_gen_rotrv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    binary_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_rotate_right_vec);
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_rotate_right_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_rotrv_vec);
 }
 
@@ -805,21 +827,25 @@ static void do_shifts(unsigned vece, TCGv_vec r, TCGv_vec a,
 
 void tcg_gen_shls_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 b)
 {
+    vec_int32_op_instrumentation(vece, r, a, b, gen_helper_sym_shift_left_vec_int32);
     do_shifts(vece, r, a, b, INDEX_op_shls_vec);
 }
 
 void tcg_gen_shrs_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 b)
 {
+    vec_int32_op_instrumentation(vece, r, a, b, gen_helper_sym_logical_shift_right_vec_int32);
     do_shifts(vece, r, a, b, INDEX_op_shrs_vec);
 }
 
 void tcg_gen_sars_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 b)
 {
+    vec_int32_op_instrumentation(vece, r, a, b, gen_helper_sym_arithmetic_shift_right_vec_int32);
     do_shifts(vece, r, a, b, INDEX_op_sars_vec);
 }
 
 void tcg_gen_rotls_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 s)
 {
+    vec_int32_op_instrumentation(vece, r, a, s, gen_helper_sym_rotate_left_vec_int32);
     do_shifts(vece, r, a, s, INDEX_op_rotls_vec);
 }
 
