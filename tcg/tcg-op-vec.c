@@ -594,21 +594,25 @@ static void do_shifti(TCGOpcode opc, unsigned vece,
 
 void tcg_gen_shli_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_shift_left_vec_int32);
     do_shifti(INDEX_op_shli_vec, vece, r, a, i);
 }
 
 void tcg_gen_shri_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_logical_shift_right_vec_int32);
     do_shifti(INDEX_op_shri_vec, vece, r, a, i);
 }
 
 void tcg_gen_sari_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_arithmetic_shift_right_vec_int32);
     do_shifti(INDEX_op_sari_vec, vece, r, a, i);
 }
 
 void tcg_gen_rotli_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_rotate_left_vec_int32);
     do_shifti(INDEX_op_rotli_vec, vece, r, a, i);
 }
 
@@ -616,6 +620,7 @@ void tcg_gen_rotri_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
     int bits = 8 << vece;
     tcg_debug_assert(i >= 0 && i < bits);
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_rotate_right_vec_int32);
     do_shifti(INDEX_op_rotli_vec, vece, r, a, -i & (bits - 1));
 }
 
