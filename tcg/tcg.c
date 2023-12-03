@@ -1509,6 +1509,16 @@ void tcg_func_start(TCGContext *s)
 
 static TCGTemp *tcg_temp_alloc(TCGContext *s)
 {
+    int last_temp_idx = s->nb_temps - 1;
+    if (last_temp_idx > 0) {
+        if (last_temp_idx % 2 == 0) {
+            g_assert(!(s->temps[last_temp_idx].symbolic_expression));
+        } else {
+            g_assert((s->temps[last_temp_idx].symbolic_expression));
+        }
+    }
+
+
     int n = s->nb_temps++;
 
     if (n >= TCG_MAX_TEMPS) {
@@ -1843,14 +1853,15 @@ TCGTemp *tcg_constant_internal(TCGType type, int64_t val)
             val_ptr = &ts->val;
         }
         g_hash_table_insert(h, val_ptr, ts);
+
+        ts_expr = tcg_temp_alloc(s);
+        ts_expr->base_type = TCG_TYPE_PTR;
+        ts_expr->type = TCG_TYPE_PTR;
+        ts_expr->kind = TEMP_CONST;
+        ts_expr->temp_allocated = 1;
+        ts_expr->symbolic_expression = 1;
+        ts_expr->val = 0;
     }
-    ts_expr = tcg_temp_alloc(s);
-    ts_expr->base_type = TCG_TYPE_PTR;
-    ts_expr->type = TCG_TYPE_PTR;
-    ts_expr->kind = TEMP_CONST;
-    ts_expr->temp_allocated = 1;
-    ts_expr->symbolic_expression = 1;
-    ts_expr->val = 0;
 
     return ts;
 }
