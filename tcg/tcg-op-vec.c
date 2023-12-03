@@ -360,7 +360,7 @@ void tcg_gen_ld_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
                 tcgv_vec_expr(r),
                 b,
                 tcg_constant_i64(o),
-                tcg_constant_i64(vec_size(r))
+                tcg_constant_i64(vec_size(r) / 8)
             );
 
     vec_gen_ldst(INDEX_op_ld_vec, r, b, o);
@@ -372,7 +372,7 @@ void tcg_gen_st_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
                 tcgv_vec_expr(r),
                 b,
                 tcg_constant_i64(o),
-                tcg_constant_i64(vec_size(r))
+                tcg_constant_i64(vec_size(r) / 8)
             );
 
     vec_gen_ldst(INDEX_op_st_vec, r, b, o);
