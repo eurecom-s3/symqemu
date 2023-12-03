@@ -569,7 +569,7 @@ void *HELPER(sym_deposit_i64)(uint64_t arg1, void *arg1_expr,
             _sym_build_integer(ofs, 64)));
 }
 
-static void *build_and_push_path_constraint(CPUArchState *env, void *arg1_expr, void *arg2_expr, int32_t comparison_operator, uint64_t is_taken){
+static void *build_and_push_path_constraint(CPUArchState *env, void *arg1_expr, void *arg2_expr, uint32_t comparison_operator, uint8_t is_taken){
     void *(*handler)(void *, void*);
     switch (comparison_operator) {
         case TCG_COND_EQ:
@@ -673,10 +673,10 @@ void HELPER(free)(void *ptr){
     free(ptr);
 }
 
-static void split_symbol(void* symbol, uint64_t element_count, void* result[]){
+static void split_symbol(void* symbol, uint64_t element_count, uint64_t element_size, void* result[]){
     g_assert(_sym_bits_helper(symbol) % element_count == 0);
     for(uint64_t i = 0; i < element_count; i++){
-        result[i] = _sym_extract_helper(symbol, i * 8, (i + 1) * 8 - 1);
+        result[i] = _sym_extract_helper(symbol, i * element_size, (i + 1) * element_size - 1);
     }
 }
 
@@ -715,8 +715,8 @@ static void* build_symbol_for_vector_vector_op(void *arg1, void *arg1_expr, void
     uint64_t element_count = vector_size / element_size;
     void* arg1_elements[element_count];
     void* arg2_elements[element_count];
-    split_symbol(arg1_expr, element_count, arg1_elements);
-    split_symbol(arg2_expr, element_count, arg2_elements);
+    split_symbol(arg1_expr, element_count, element_size, arg1_elements);
+    split_symbol(arg2_expr, element_count, element_size, arg2_elements);
 
     return apply_op_and_merge(op, arg1_elements, arg2_elements, element_count);
 }
@@ -744,7 +744,7 @@ static void* build_symbol_for_vector_int32_op(void *arg1, void *arg1_expr, uint3
     uint64_t element_count = vector_size / element_size;
     void* arg1_elements[element_count];
     void* arg2_elements[element_count];
-    split_symbol(arg1_expr, element_count, arg1_elements);
+    split_symbol(arg1_expr, element_count, element_size, arg1_elements);
     for(uint64_t i = 0; i < element_count; i++){
         arg2_elements[i] = arg2_expr;
     }
@@ -814,4 +814,47 @@ void *HELPER(sym_rotate_left_vec_int32)(void *arg1, void *arg1_expr, uint32_t ar
 
 void *HELPER(sym_rotate_right_vec_int32)(void *arg1, void *arg1_expr, uint32_t arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
     return build_symbol_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_right);
+}
+
+void HELPER(sym_cmp_vec)(
+        CPUArchState *env,
+        void *arg1, void *arg1_expr,
+        void *arg2, void *arg2_expr,
+        uint32_t comparison_operator, void *concrete_result,
+        uint64_t vector_size, uint64_t vece
+) {
+    uint64_t element_size = vece_element_size(vece);
+    g_assert(element_size <= vector_size);
+    g_assert(vector_size % element_size == 0);
+
+    if (arg1_expr == NULL && arg2_expr == NULL) {
+        return;
+    }
+
+    if (arg1_expr == NULL) {
+        arg1_expr = _sym_build_integer_from_buffer(arg1, vector_size);
+    }
+
+    if (arg2_expr == NULL) {
+        arg2_expr = _sym_build_integer_from_buffer(arg2, vector_size);
+    }
+
+    g_assert(_sym_bits_helper(arg1_expr) == _sym_bits_helper(arg2_expr) && _sym_bits_helper(arg1_expr) == vector_size);
+
+    uint64_t element_count = vector_size / element_size;
+    void *arg1_elements[element_count];
+    void *arg2_elements[element_count];
+    split_symbol(arg1_expr, element_count, element_size, arg1_elements);
+    split_symbol(arg2_expr, element_count, element_size, arg2_elements);
+
+    for (uint64_t i = 0; i < element_count; i++) {
+        uint8_t is_taken = * (uint8_t*) (concrete_result + i * element_size / 8);
+        build_and_push_path_constraint(
+                env,
+                arg1_elements[i],
+                arg2_elements[i],
+                comparison_operator,
+                is_taken
+        );
+    }
 }

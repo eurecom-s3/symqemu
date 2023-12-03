@@ -636,6 +636,14 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
     TCGType type = rt->base_type;
     int can;
 
+    /* gen_helper_sym_cmp_vec below needs the concrete value of a and b.
+     * However, if r designates the same TCGTemp as a or b, the execution of the concrete cmp operation
+     * will overwrite the value of a or b. Therefore, we need to store the values of a and b
+     * *before* the concrete cmp operation is executed.
+     */
+    TCGv_ptr buffer_address_a = store_vector_in_memory(a);
+    TCGv_ptr buffer_address_b = store_vector_in_memory(b);
+
     tcg_debug_assert(at->base_type >= type);
     tcg_debug_assert(bt->base_type >= type);
     tcg_assert_listed_vecop(INDEX_op_cmp_vec);
@@ -648,6 +656,36 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
         tcg_expand_vec_op(INDEX_op_cmp_vec, type, vece, ri, ai, bi, cond);
         tcg_swap_vecop_list(hold_list);
     }
+
+    TCGv_ptr buffer_address_r = store_vector_in_memory(r);
+    int size_a = vec_size(a);
+    int size_b = vec_size(b);
+    int size_r = vec_size(r);
+
+    g_assert(size_a == size_b && size_b == size_r);
+
+    gen_helper_sym_cmp_vec(
+            cpu_env,
+            buffer_address_a,
+            tcgv_vec_expr(a),
+            buffer_address_b,
+            tcgv_vec_expr(b),
+            tcg_constant_i32(cond),
+            buffer_address_r,
+            tcg_constant_i64(size_a),
+            tcg_constant_i64(vece)
+    );
+
+    gen_helper_free(buffer_address_a);
+    gen_helper_free(buffer_address_b);
+    gen_helper_free(buffer_address_r);
+
+    tcg_temp_free_ptr(buffer_address_a);
+    tcg_temp_free_ptr(buffer_address_b);
+    tcg_temp_free_ptr(buffer_address_r);
+
+    /* Concretize r */
+    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
 }
 
 static bool do_op3(unsigned vece, TCGv_vec r, TCGv_vec a,
