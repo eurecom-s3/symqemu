@@ -569,74 +569,80 @@ void *HELPER(sym_deposit_i64)(uint64_t arg1, void *arg1_expr,
             _sym_build_integer(ofs, 64)));
 }
 
+static void *build_and_push_path_constraint(CPUArchState *env, void *arg1_expr, void *arg2_expr, int32_t comparison_operator, uint64_t is_taken){
+    void *(*handler)(void *, void*);
+    switch (comparison_operator) {
+        case TCG_COND_EQ:
+            handler = _sym_build_equal;
+            break;
+        case TCG_COND_NE:
+            handler = _sym_build_not_equal;
+            break;
+        case TCG_COND_LT:
+            handler = _sym_build_signed_less_than;
+            break;
+        case TCG_COND_GE:
+            handler = _sym_build_signed_greater_equal;
+            break;
+        case TCG_COND_LE:
+            handler = _sym_build_signed_less_equal;
+            break;
+        case TCG_COND_GT:
+            handler = _sym_build_signed_greater_than;
+            break;
+        case TCG_COND_LTU:
+            handler = _sym_build_unsigned_less_than;
+            break;
+        case TCG_COND_GEU:
+            handler = _sym_build_unsigned_greater_equal;
+            break;
+        case TCG_COND_LEU:
+            handler = _sym_build_unsigned_less_equal;
+            break;
+        case TCG_COND_GTU:
+            handler = _sym_build_unsigned_greater_than;
+            break;
+        default:
+            g_assert_not_reached();
+    }
+
+    void *condition_symbol = handler(arg1_expr, arg2_expr);
+    _sym_push_path_constraint(condition_symbol, is_taken, get_pc(env));
+
+    return condition_symbol;
+}
+
 static void *sym_setcond_internal(CPUArchState *env,
                                   uint64_t arg1, void *arg1_expr,
                                   uint64_t arg2, void *arg2_expr,
-                                  int32_t cond, uint64_t result,
+                                  int32_t comparison_operator, uint64_t is_taken,
                                   uint8_t result_bits)
 {
     BINARY_HELPER_ENSURE_EXPRESSIONS;
 
-    void *(*handler)(void *, void*);
-    switch (cond) {
-    case TCG_COND_EQ:
-        handler = _sym_build_equal;
-        break;
-    case TCG_COND_NE:
-        handler = _sym_build_not_equal;
-        break;
-    case TCG_COND_LT:
-        handler = _sym_build_signed_less_than;
-        break;
-    case TCG_COND_GE:
-        handler = _sym_build_signed_greater_equal;
-        break;
-    case TCG_COND_LE:
-        handler = _sym_build_signed_less_equal;
-        break;
-    case TCG_COND_GT:
-        handler = _sym_build_signed_greater_than;
-        break;
-    case TCG_COND_LTU:
-        handler = _sym_build_unsigned_less_than;
-        break;
-    case TCG_COND_GEU:
-        handler = _sym_build_unsigned_greater_equal;
-        break;
-    case TCG_COND_LEU:
-        handler = _sym_build_unsigned_less_equal;
-        break;
-    case TCG_COND_GTU:
-        handler = _sym_build_unsigned_greater_than;
-        break;
-    default:
-        g_assert_not_reached();
-    }
-
-    void *condition = handler(arg1_expr, arg2_expr);
-    _sym_push_path_constraint(condition, result, get_pc(env));
+    void *condition_symbol = build_and_push_path_constraint(env, arg1_expr, arg2_expr, comparison_operator, is_taken);
 
     assert(result_bits > 1);
-    return _sym_build_zext(_sym_build_bool_to_bit(condition),
+    return _sym_build_zext(_sym_build_bool_to_bit(condition_symbol),
                            result_bits - 1);
 }
 
 void *HELPER(sym_setcond_i32)(CPUArchState *env,
                               uint32_t arg1, void *arg1_expr,
                               uint32_t arg2, void *arg2_expr,
-                              int32_t cond, uint32_t result)
+                              int32_t comparison_operator, uint32_t is_taken)
 {
     return sym_setcond_internal(
-        env, arg1, arg1_expr, arg2, arg2_expr, cond, result, 32);
+            env, arg1, arg1_expr, arg2, arg2_expr, comparison_operator, is_taken, 32);
 }
 
 void *HELPER(sym_setcond_i64)(CPUArchState *env,
                               uint64_t arg1, void *arg1_expr,
                               uint64_t arg2, void *arg2_expr,
-                              int32_t cond, uint64_t result)
+                              int32_t comparison_operator, uint64_t is_taken)
 {
     return sym_setcond_internal(
-        env, arg1, arg1_expr, arg2, arg2_expr, cond, result, 64);
+            env, arg1, arg1_expr, arg2, arg2_expr, comparison_operator, is_taken, 64);
 }
 
 void HELPER(sym_notify_call)(uint64_t return_address)
