@@ -676,7 +676,7 @@ void HELPER(free)(void *ptr){
 static void split_symbol(void* symbol, uint64_t element_count, uint64_t element_size, void* result[]){
     g_assert(_sym_bits_helper(symbol) % element_count == 0);
     for(uint64_t i = 0; i < element_count; i++){
-        result[i] = _sym_extract_helper(symbol, i * element_size, (i + 1) * element_size - 1);
+        result[i] = _sym_build_extract(symbol, i * element_size / 8, element_size / 8, false);
     }
 }
 
@@ -694,6 +694,7 @@ static uint64_t vece_element_size(uint64_t vece){
 }
 
 static void* build_symbol_for_vector_vector_op(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t vector_size, uint64_t vece, void* (*op)(void*, void*)){
+    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
     uint64_t element_size = vece_element_size(vece);
     g_assert(element_size <= vector_size);
     g_assert(vector_size % element_size == 0);
@@ -718,10 +719,13 @@ static void* build_symbol_for_vector_vector_op(void *arg1, void *arg1_expr, void
     split_symbol(arg1_expr, element_count, element_size, arg1_elements);
     split_symbol(arg2_expr, element_count, element_size, arg2_elements);
 
-    return apply_op_and_merge(op, arg1_elements, arg2_elements, element_count);
+    void* result = apply_op_and_merge(op, arg1_elements, arg2_elements, element_count);
+    g_assert(_sym_bits_helper(result) == vector_size);
+    return result;
 }
 
 static void* build_symbol_for_vector_int32_op(void *arg1, void *arg1_expr, uint32_t arg2, void *arg2_expr, uint64_t vector_size, uint64_t vece, void* (*op)(void*, void*)){
+    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
     uint64_t element_size = vece_element_size(vece);
     g_assert(element_size <= vector_size);
     g_assert(vector_size % element_size == 0);
@@ -749,7 +753,9 @@ static void* build_symbol_for_vector_int32_op(void *arg1, void *arg1_expr, uint3
         arg2_elements[i] = arg2_expr;
     }
 
-    return apply_op_and_merge(op, arg1_elements, arg2_elements, element_count);
+    void* result = apply_op_and_merge(op, arg1_elements, arg2_elements, element_count);
+    g_assert(_sym_bits_helper(result) == vector_size);
+    return result;
 }
 
 void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece){
