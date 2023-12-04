@@ -676,7 +676,7 @@ void HELPER(free)(void *ptr){
 static void split_symbol(void* symbol, uint64_t element_count, uint64_t element_size, void* result[]){
     g_assert(_sym_bits_helper(symbol) % element_count == 0);
     for(uint64_t i = 0; i < element_count; i++){
-        result[i] = _sym_build_extract(symbol, i * element_size / 8, element_size / 8, false);
+        result[i] = _sym_extract_helper(symbol, (i + 1) * element_size - 1, i * element_size);
     }
 }
 
