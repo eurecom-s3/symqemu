@@ -919,16 +919,16 @@ void tcg_gen_bitsel_vec(unsigned vece, TCGv_vec r, TCGv_vec a,
     tcg_debug_assert(bt->base_type >= type);
     tcg_debug_assert(ct->base_type >= type);
 
-    if (TCG_TARGET_HAS_bitsel_vec) {
+    /* if (TCG_TARGET_HAS_bitsel_vec) {
         vec_gen_4(INDEX_op_bitsel_vec, type, MO_8,
                   temp_arg(rt), temp_arg(at), temp_arg(bt), temp_arg(ct));
-    } else {
+    } else { */
         TCGv_vec t = tcg_temp_new_vec(type);
         tcg_gen_and_vec(MO_8, t, a, b);
         tcg_gen_andc_vec(MO_8, r, c, a);
         tcg_gen_or_vec(MO_8, r, r, t);
         tcg_temp_free_vec(t);
-    }
+    /* } */
 }
 
 void tcg_gen_cmpsel_vec(TCGCond cond, unsigned vece, TCGv_vec r,
@@ -959,16 +959,16 @@ void tcg_gen_cmpsel_vec(TCGCond cond, unsigned vece, TCGv_vec r,
     hold_list = tcg_swap_vecop_list(NULL);
     can = tcg_can_emit_vec_op(INDEX_op_cmpsel_vec, type, vece);
 
-    if (can > 0) {
+    /* if (can > 0) {
         vec_gen_6(INDEX_op_cmpsel_vec, type, vece, ri, ai, bi, ci, di, cond);
     } else if (can < 0) {
         tcg_expand_vec_op(INDEX_op_cmpsel_vec, type, vece,
                           ri, ai, bi, ci, di, cond);
-    } else {
+    } else { */
         TCGv_vec t = tcg_temp_new_vec(type);
         tcg_gen_cmp_vec(cond, vece, t, a, b);
         tcg_gen_bitsel_vec(vece, r, t, c, d);
         tcg_temp_free_vec(t);
-    }
+    /* } */
     tcg_swap_vecop_list(hold_list);
 }
