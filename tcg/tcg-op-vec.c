@@ -305,6 +305,8 @@ void tcg_gen_dupi_vec(unsigned vece, TCGv_vec r, uint64_t a)
 
 void tcg_gen_dup_i64_vec(unsigned vece, TCGv_vec r, TCGv_i64 a)
 {
+    gen_helper_sym_duplicate_value_into_vec(tcgv_vec_expr(r), tcgv_i64_expr(a), tcg_constant_i64(vece), tcg_constant_i64(vec_size(r)));
+
     TCGArg ri = tcgv_vec_arg(r);
     TCGTemp *rt = arg_temp(ri);
     TCGType type = rt->base_type;
@@ -324,6 +326,8 @@ void tcg_gen_dup_i64_vec(unsigned vece, TCGv_vec r, TCGv_i64 a)
 
 void tcg_gen_dup_i32_vec(unsigned vece, TCGv_vec r, TCGv_i32 a)
 {
+    gen_helper_sym_duplicate_value_into_vec(tcgv_vec_expr(r), tcgv_i32_expr(a), tcg_constant_i64(vece), tcg_constant_i64(vec_size(r)));
+
     TCGArg ri = tcgv_vec_arg(r);
     TCGArg ai = tcgv_i32_arg(a);
     TCGTemp *rt = arg_temp(ri);

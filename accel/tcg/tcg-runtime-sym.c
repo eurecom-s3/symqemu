@@ -838,6 +838,37 @@ void *HELPER(sym_rotate_right_vec_int32)(void *arg1, void *arg1_expr, uint32_t a
     return build_symbol_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_right);
 }
 
+void *HELPER(sym_duplicate_value_into_vec)(void *value_expr, uint64_t vector_size, uint64_t vece){
+    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
+    uint64_t element_size = vece_element_size(vece);
+    g_assert(element_size <= vector_size);
+    g_assert(vector_size % element_size == 0);
+
+    if (value_expr == NULL) {
+        return NULL;
+    }
+
+    g_assert(_sym_bits_helper(value_expr) == 32 || _sym_bits_helper(value_expr) == 64);
+
+    void *resized_value_expr;
+
+    if (_sym_bits_helper(value_expr) == element_size) {
+        resized_value_expr = value_expr;
+    } else if (_sym_bits_helper(value_expr) < element_size) {
+        resized_value_expr = _sym_build_zext(value_expr, element_size);
+    } else {
+        resized_value_expr = _sym_extract_helper(value_expr, element_size - 1, 0);
+    }
+
+    uint64_t element_count = vector_size / element_size;
+    void *result_symbol = resized_value_expr;
+    for(uint64_t i = 1; i < element_count; i++){
+        result_symbol = _sym_concat_helper(resized_value_expr, result_symbol);
+    }
+    g_assert(_sym_bits_helper(result_symbol) == vector_size);
+    return result_symbol;
+}
+
 
 
 void HELPER(sym_cmp_vec)(
