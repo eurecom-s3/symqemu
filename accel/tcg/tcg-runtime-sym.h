@@ -150,6 +150,7 @@ DEF_HELPER_FLAGS_6(sym_rotate_right_vec_int32, TCG_CALL_NO_RWG, ptr, ptr, ptr, i
 DEF_HELPER_FLAGS_9(sym_cmp_vec, TCG_CALL_NO_RWG, void, env, ptr, ptr, ptr, ptr, i32, ptr, i64, i64)
 DEF_HELPER_FLAGS_9(sym_minmax_vec, TCG_CALL_NO_RWG, ptr, env, ptr, ptr, ptr, ptr, i32, ptr, i64, i64)
 DEF_HELPER_FLAGS_3(sym_duplicate_value_into_vec, TCG_CALL_NO_RWG, ptr, ptr, i64, i64)
+DEF_HELPER_FLAGS_4(sym_load_and_duplicate_into_vec, TCG_CALL_NO_RWG, ptr, ptr, i64, i64, i64)
 
 /* TODO clz, ctz, clrsb, ctpop; vector operations; helpers for atomic operations (?) */
 

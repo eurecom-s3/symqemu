@@ -339,6 +339,14 @@ void tcg_gen_dup_i32_vec(unsigned vece, TCGv_vec r, TCGv_i32 a)
 void tcg_gen_dup_mem_vec(unsigned vece, TCGv_vec r, TCGv_ptr b,
                          tcg_target_long ofs)
 {
+    gen_helper_sym_load_and_duplicate_into_vec(
+            tcgv_vec_expr(r),
+            b,
+            tcg_constant_i64(ofs),
+            tcg_constant_i64(vec_size(r)),
+            tcg_constant_i64(vece)
+    );
+
     TCGArg ri = tcgv_vec_arg(r);
     TCGArg bi = tcgv_ptr_arg(b);
     TCGTemp *rt = arg_temp(ri);

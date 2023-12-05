@@ -869,6 +869,18 @@ void *HELPER(sym_duplicate_value_into_vec)(void *value_expr, uint64_t vector_siz
     return result_symbol;
 }
 
+void *HELPER(sym_load_and_duplicate_into_vec)(void *addr, uint64_t offset, uint64_t vector_size, uint64_t vece){
+    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
+    uint64_t element_size = vece_element_size(vece);
+    g_assert(element_size <= vector_size);
+    g_assert(vector_size % element_size == 0);
+
+    void *value_expr = helper_sym_load_host_v(addr, offset, element_size / 8);
+    g_assert(_sym_bits_helper(value_expr) == element_size);
+
+    return helper_sym_duplicate_value_into_vec(value_expr, vector_size, vece);
+}
+
 static void *element_address(void *concrete_vector, uint64_t element_index, uint64_t element_size, uint64_t vector_size){
     void* result = concrete_vector + element_index * element_size / 8;
     g_assert(result + element_size <= concrete_vector + vector_size);
