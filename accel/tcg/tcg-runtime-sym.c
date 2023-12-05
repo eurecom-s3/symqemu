@@ -869,7 +869,11 @@ void *HELPER(sym_duplicate_value_into_vec)(void *value_expr, uint64_t vector_siz
     return result_symbol;
 }
 
-
+static void *element_address(void *concrete_vector, uint64_t element_index, uint64_t element_size, uint64_t vector_size){
+    void* result = concrete_vector + element_index * element_size / 8;
+    g_assert(result + element_size <= concrete_vector + vector_size);
+    return result;
+}
 
 void HELPER(sym_cmp_vec)(
         CPUArchState *env,
@@ -903,7 +907,7 @@ void HELPER(sym_cmp_vec)(
     split_symbol(arg2_expr, element_count, element_size, arg2_elements);
 
     for (uint64_t i = 0; i < element_count; i++) {
-        uint8_t is_taken = * (uint8_t*) (concrete_result + i * element_size / 8);
+        uint8_t is_taken = * (uint8_t*) element_address(concrete_result, i, element_size, vector_size);
         build_and_push_path_constraint(
                 env,
                 arg1_elements[i],
@@ -912,4 +916,60 @@ void HELPER(sym_cmp_vec)(
                 is_taken
         );
     }
+}
+
+void *HELPER(sym_minmax_vec)(
+        CPUArchState *env,
+        void *arg1, void *arg1_expr,
+        void *arg2, void *arg2_expr,
+        uint32_t comparison_operator, void *concrete_result,
+        uint64_t vector_size, uint64_t vece
+){
+    uint64_t element_size = vece_element_size(vece);
+    g_assert(element_size <= vector_size);
+    g_assert(vector_size % element_size == 0);
+
+    if (arg1_expr == NULL && arg2_expr == NULL) {
+        return NULL;
+    }
+
+    if (arg1_expr == NULL) {
+        arg1_expr = _sym_build_integer_from_buffer(arg1, vector_size);
+    }
+
+    if (arg2_expr == NULL) {
+        arg2_expr = _sym_build_integer_from_buffer(arg2, vector_size);
+    }
+
+    g_assert(_sym_bits_helper(arg1_expr) == _sym_bits_helper(arg2_expr) && _sym_bits_helper(arg1_expr) == vector_size);
+
+    uint64_t element_count = vector_size / element_size;
+    void *arg1_elements[element_count];
+    void *arg2_elements[element_count];
+    int is_taken[element_count];
+    split_symbol(arg1_expr, element_count, element_size, arg1_elements);
+    split_symbol(arg2_expr, element_count, element_size, arg2_elements);
+    for (int i = 0; i < element_count; i++) {
+        void *result_element_ptr = element_address(concrete_result, i, element_size, vector_size);
+        void *arg1_element_ptr = element_address(arg1, i, element_size, vector_size);
+        is_taken[i] = memcmp(result_element_ptr, arg1_element_ptr, element_size / 8) == 0;
+    }
+
+    for (int i = 0; i < element_count; i++) {
+        build_and_push_path_constraint(
+                env,
+                arg1_elements[i],
+                arg2_elements[i],
+                comparison_operator,
+                is_taken[i]
+        );
+    }
+
+    void *result_symbol = is_taken[0] ? arg1_elements[0] : arg2_elements[0];
+    for (int i = 1; i < element_count; i++) {
+        result_symbol = _sym_concat_helper(is_taken[i] ? arg1_elements[i] : arg2_elements[i], result_symbol);
+    }
+
+    g_assert(_sym_bits_helper(result_symbol) == vector_size);
+    return result_symbol;
 }

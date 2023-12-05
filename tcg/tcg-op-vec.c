@@ -795,38 +795,73 @@ void tcg_gen_ussub_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 static void do_minmax(unsigned vece, TCGv_vec r, TCGv_vec a,
                       TCGv_vec b, TCGOpcode opc, TCGCond cond)
 {
+    /*
+     * gen_helper_sym_minmax_vec below needs the concrete value of a and b.
+     * However, if r designates the same TCGTemp as a or b, the execution of the concrete min/max operation
+     * will overwrite the value of a or b. Therefore, we need to store the values of a and b
+     * *before* the concrete cmp operation is executed.
+     */
+    TCGv_ptr buffer_address_a = store_vector_in_memory(a);
+    TCGv_ptr buffer_address_b = store_vector_in_memory(b);
+
+    /* Note that, if the if below is entered, an infinite recursion occurs.
+     * This is due to the fact that tcg_expand_vec_op, which is called by several functions in the present file,
+     * internally leads to calls to min / max functions.
+     * For this reason, here we have to provide an explicit instrumentation of the min / max functions instead
+     * of forcing the instruction to be generated with other instrumented functions, as done in several other cases.
+     */
     if (!do_op3(vece, r, a, b, opc)) {
         const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
         tcg_gen_cmpsel_vec(cond, vece, r, a, b, a, b);
         tcg_swap_vecop_list(hold_list);
     }
+
+    TCGv_ptr buffer_address_r = store_vector_in_memory(r);
+    int size_a = vec_size(a);
+    int size_b = vec_size(b);
+    int size_r = vec_size(r);
+
+    g_assert(size_a == size_b && size_b == size_r);
+
+    gen_helper_sym_minmax_vec(
+            tcgv_vec_expr(r),
+            cpu_env,
+            buffer_address_a,
+            tcgv_vec_expr(a),
+            buffer_address_b,
+            tcgv_vec_expr(b),
+            tcg_constant_i32(cond),
+            buffer_address_r,
+            tcg_constant_i64(size_a),
+            tcg_constant_i64(vece)
+    );
+
+    gen_helper_free(buffer_address_a);
+    gen_helper_free(buffer_address_b);
+    gen_helper_free(buffer_address_r);
+
+    tcg_temp_free_ptr(buffer_address_a);
+    tcg_temp_free_ptr(buffer_address_b);
+    tcg_temp_free_ptr(buffer_address_r);
 }
 
 void tcg_gen_smin_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    /* TODO instrument */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
     do_minmax(vece, r, a, b, INDEX_op_smin_vec, TCG_COND_LT);
 }
 
 void tcg_gen_umin_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    /* TODO instrument */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
     do_minmax(vece, r, a, b, INDEX_op_umin_vec, TCG_COND_LTU);
 }
 
 void tcg_gen_smax_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    /* TODO instrument */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
     do_minmax(vece, r, a, b, INDEX_op_smax_vec, TCG_COND_GT);
 }
 
 void tcg_gen_umax_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    /* TODO instrument */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
     do_minmax(vece, r, a, b, INDEX_op_umax_vec, TCG_COND_GTU);
 }
 
