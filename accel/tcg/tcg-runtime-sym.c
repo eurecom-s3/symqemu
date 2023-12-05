@@ -683,7 +683,7 @@ static void split_symbol(void* symbol, uint64_t element_count, uint64_t element_
 static void *apply_op_and_merge(void* (*op)(void*, void*), void* arg1[], void* arg2[], uint64_t element_count){
     void* merged_result = op(arg1[0], arg2[0]);
     for(uint64_t i = 1; i < element_count; i++){
-        merged_result = _sym_concat_helper(merged_result, op(arg1[i], arg2[i]));
+        merged_result = _sym_concat_helper(op(arg1[i], arg2[i]), merged_result);
     }
     return merged_result;
 }
