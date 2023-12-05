@@ -743,15 +743,14 @@ void tcg_gen_mul_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 
 void tcg_gen_ssadd_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    /* TODO instrument */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_signed_saturating_add_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_ssadd_vec);
 }
 
 void tcg_gen_usadd_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    /* TODO instrument */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_unsigned_saturating_add_vec);
+
     if (!do_op3(vece, r, a, b, INDEX_op_usadd_vec)) {
         const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
         TCGv_vec t = tcg_temp_new_vec_matching(r);
@@ -768,15 +767,14 @@ void tcg_gen_usadd_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 
 void tcg_gen_sssub_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    /* TODO instrument */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_signed_saturating_sub_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_sssub_vec);
 }
 
 void tcg_gen_ussub_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    /* TODO instrument */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_unsigned_saturating_sub_vec);
+
     if (!do_op3(vece, r, a, b, INDEX_op_ussub_vec)) {
         const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
         TCGv_vec t = tcg_temp_new_vec_matching(r);
