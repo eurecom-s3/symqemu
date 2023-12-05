@@ -934,8 +934,6 @@ void tcg_gen_bitsel_vec(unsigned vece, TCGv_vec r, TCGv_vec a,
 void tcg_gen_cmpsel_vec(TCGCond cond, unsigned vece, TCGv_vec r,
                         TCGv_vec a, TCGv_vec b, TCGv_vec c, TCGv_vec d)
 {
-    /* TODO instrument */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
     TCGTemp *rt = tcgv_vec_temp(r);
     TCGTemp *at = tcgv_vec_temp(a);
     TCGTemp *bt = tcgv_vec_temp(b);
