@@ -876,7 +876,7 @@ void *HELPER(sym_load_and_duplicate_into_vec)(void *addr, uint64_t offset, uint6
     g_assert(vector_size % element_size == 0);
 
     void *value_expr = helper_sym_load_host_v(addr, offset, element_size / 8);
-    g_assert(_sym_bits_helper(value_expr) == element_size);
+    g_assert(value_expr == NULL || _sym_bits_helper(value_expr) == element_size);
 
     return helper_sym_duplicate_value_into_vec(value_expr, vector_size, vece);
 }
