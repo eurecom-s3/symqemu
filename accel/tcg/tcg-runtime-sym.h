@@ -124,34 +124,6 @@ DEF_HELPER_FLAGS_1(sym_notify_block, TCG_CALL_NO_RWG, void, i64)
 DEF_HELPER_FLAGS_0(sym_collect_garbage, TCG_CALL_NO_RWG, void)
 
 
-DEF_HELPER_FLAGS_1(malloc, TCG_CALL_NO_RWG, ptr, i64)
-DEF_HELPER_FLAGS_1(free, TCG_CALL_NO_RWG, void, ptr)
-
-DEF_HELPER_FLAGS_6(sym_and_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_or_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_xor_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_add_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_sub_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_mul_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_signed_saturating_add_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_signed_saturating_sub_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_unsigned_saturating_add_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_unsigned_saturating_sub_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_shift_left_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_logical_shift_right_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_arithmetic_shift_right_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_rotate_left_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_rotate_right_vec, TCG_CALL_NO_RWG, ptr, ptr, ptr, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_shift_left_vec_int32, TCG_CALL_NO_RWG, ptr, ptr, ptr, i32, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_logical_shift_right_vec_int32, TCG_CALL_NO_RWG, ptr, ptr, ptr, i32, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_arithmetic_shift_right_vec_int32, TCG_CALL_NO_RWG, ptr, ptr, ptr, i32, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_rotate_left_vec_int32, TCG_CALL_NO_RWG, ptr, ptr, ptr, i32, ptr, i64, i64)
-DEF_HELPER_FLAGS_6(sym_rotate_right_vec_int32, TCG_CALL_NO_RWG, ptr, ptr, ptr, i32, ptr, i64, i64)
-DEF_HELPER_FLAGS_9(sym_cmp_vec, TCG_CALL_NO_RWG, void, env, ptr, ptr, ptr, ptr, i32, ptr, i64, i64)
-DEF_HELPER_FLAGS_9(sym_minmax_vec, TCG_CALL_NO_RWG, ptr, env, ptr, ptr, ptr, ptr, i32, ptr, i64, i64)
-DEF_HELPER_FLAGS_3(sym_duplicate_value_into_vec, TCG_CALL_NO_RWG, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_4(sym_load_and_duplicate_into_vec, TCG_CALL_NO_RWG, ptr, ptr, i64, i64, i64)
-
 /* TODO clz, ctz, clrsb, ctpop; vector operations; helpers for atomic operations (?) */
 
 /* The extrl and extrh instructions aren't emitted on 64-bit hosts. If we ever
