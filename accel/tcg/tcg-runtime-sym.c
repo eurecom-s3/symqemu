@@ -382,7 +382,7 @@ void *HELPER(sym_load_host_i64)(void *addr, uint64_t offset, uint64_t length)
     return sym_load_host_internal(addr, offset, length, 8);
 }
 
-void *HELPER(sym_load_host_v)(void *addr, uint64_t offset, uint64_t length)
+void *HELPER(sym_load_host_vec)(void *addr, uint64_t offset, uint64_t length)
 {
     return sym_load_host_internal(addr, offset, length, length);
 }
