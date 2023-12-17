@@ -97,7 +97,7 @@ DEF_HELPER_FLAGS_7(sym_store_guest_i64, TCG_CALL_NO_RWG, void, env, i64, ptr,
 /* Host memory */
 DEF_HELPER_FLAGS_3(sym_load_host_i32, TCG_CALL_NO_RWG_SE, ptr, ptr, i64, i64)
 DEF_HELPER_FLAGS_3(sym_load_host_i64, TCG_CALL_NO_RWG_SE, ptr, ptr, i64, i64)
-DEF_HELPER_FLAGS_3(sym_load_host_v, TCG_CALL_NO_RWG_SE, ptr, ptr, i64, i64)
+DEF_HELPER_FLAGS_3(sym_load_host_vec, TCG_CALL_NO_RWG_SE, ptr, ptr, i64, i64)
 DEF_HELPER_FLAGS_4(sym_store_host, TCG_CALL_NO_RWG, void, ptr, ptr,
                    i64, i64)
 

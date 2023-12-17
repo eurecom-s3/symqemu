@@ -37,11 +37,18 @@ static int vec_size(TCGv_vec vector){
     }
 }
 
+/* Adds TCG ops for storing a vector TCG variable in a heap buffer.
+ *
+ * The caller must add TCG ops for freeing the buffer.
+ *
+ * Returns
+ *      A TCG variable that will contain the buffer address at run time.
+ */
 static TCGv_ptr store_vector_in_memory(TCGv_vec vector){
     TCGv_ptr buffer_address = tcg_temp_new_ptr();
     gen_helper_malloc(buffer_address, tcg_constant_i64(vec_size(vector) / 8));
 
-    /* store vec at buffer_address */
+    /* store vector at buffer_address */
     vec_gen_3(
             INDEX_op_st_vec,
             tcgv_vec_temp(vector)->base_type,
@@ -54,7 +61,20 @@ static TCGv_ptr store_vector_in_memory(TCGv_vec vector){
     return buffer_address;
 }
 
-static void vec_vec_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b, void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i64, TCGv_i64)){
+/* Adds instrumentation TCG ops for an instruction of the form vec = vec <op> vec.
+ *
+ * Args
+ *      vece: element size in bits = 8 * 2^vece
+ *      r: output operand
+ *      a: first input operand
+ *      b: second input operand
+ *      sym_helper: function for calling the symbolic helper
+ */
+static void vec_vec_op_instrumentation(
+        unsigned vece,
+        TCGv_vec r, TCGv_vec a, TCGv_vec b,
+        void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i64, TCGv_i64)
+) {
     TCGv_ptr buffer_address_a = store_vector_in_memory(a);
     TCGv_ptr buffer_address_b = store_vector_in_memory(b);
     int size_a = vec_size(a);
@@ -75,12 +95,23 @@ static void vec_vec_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a, TC
 
     gen_helper_free(buffer_address_a);
     gen_helper_free(buffer_address_b);
-
-    tcg_temp_free_ptr(buffer_address_a);
-    tcg_temp_free_ptr(buffer_address_b);
 }
 
-static void vec_int32_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 b, void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i32, TCGv_ptr, TCGv_i64, TCGv_i64)){
+/*
+ * Adds instrumentation TCG ops for an instruction of the form vec = vec <op> i32.
+ *
+ * Args
+ *      vece: element size in bits = 8 * 2^vece
+ *      r: output operand
+ *      a: first input operand
+ *      b: second input operand
+ *      sym_helper: function for calling the symbolic helper
+ */
+static void vec_int32_op_instrumentation(
+        unsigned vece,
+        TCGv_vec r, TCGv_vec a, TCGv_i32 b,
+        void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i32, TCGv_ptr, TCGv_i64, TCGv_i64)
+) {
     TCGv_ptr buffer_address_a = store_vector_in_memory(a);
     int size_a = vec_size(a);
     int size_r = vec_size(r);
@@ -98,8 +129,6 @@ static void vec_int32_op_instrumentation(unsigned vece, TCGv_vec r, TCGv_vec a, 
     );
 
     gen_helper_free(buffer_address_a);
-
-    tcg_temp_free_ptr(buffer_address_a);
 }
 
 /*
@@ -368,7 +397,7 @@ static void vec_gen_ldst(TCGOpcode opc, TCGv_vec r, TCGv_ptr b, TCGArg o)
 void tcg_gen_ld_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
 {
 
-    gen_helper_sym_load_host_v(
+    gen_helper_sym_load_host_vec(
                 tcgv_vec_expr(r),
                 b,
                 tcg_constant_i64(o),
@@ -677,6 +706,7 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
     g_assert(size_a == size_b && size_b == size_r);
 
     gen_helper_sym_cmp_vec(
+            tcgv_vec_expr(r),
             cpu_env,
             buffer_address_a,
             tcgv_vec_expr(a),
@@ -692,12 +722,6 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
     gen_helper_free(buffer_address_b);
     gen_helper_free(buffer_address_r);
 
-    tcg_temp_free_ptr(buffer_address_a);
-    tcg_temp_free_ptr(buffer_address_b);
-    tcg_temp_free_ptr(buffer_address_r);
-
-    /* Concretize r */
-    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcg_constant_i64(0));
 }
 
 static bool do_op3(unsigned vece, TCGv_vec r, TCGv_vec a,
@@ -804,7 +828,7 @@ static void do_minmax(unsigned vece, TCGv_vec r, TCGv_vec a,
                       TCGv_vec b, TCGOpcode opc, TCGCond cond)
 {
     /*
-     * gen_helper_sym_minmax_vec below needs the concrete value of a and b.
+     * gen_helper_sym_ternary_vec below needs the concrete values of a and b.
      * However, if r designates the same TCGTemp as a or b, the execution of the concrete min/max operation
      * will overwrite the value of a or b. Therefore, we need to store the values of a and b
      * *before* the concrete cmp operation is executed.
@@ -831,7 +855,7 @@ static void do_minmax(unsigned vece, TCGv_vec r, TCGv_vec a,
 
     g_assert(size_a == size_b && size_b == size_r);
 
-    gen_helper_sym_minmax_vec(
+    gen_helper_sym_ternary_vec(
             tcgv_vec_expr(r),
             cpu_env,
             buffer_address_a,
@@ -847,10 +871,6 @@ static void do_minmax(unsigned vece, TCGv_vec r, TCGv_vec a,
     gen_helper_free(buffer_address_a);
     gen_helper_free(buffer_address_b);
     gen_helper_free(buffer_address_r);
-
-    tcg_temp_free_ptr(buffer_address_a);
-    tcg_temp_free_ptr(buffer_address_b);
-    tcg_temp_free_ptr(buffer_address_r);
 }
 
 void tcg_gen_smin_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
