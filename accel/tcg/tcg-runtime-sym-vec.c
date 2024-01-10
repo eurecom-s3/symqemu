@@ -1,3 +1,8 @@
+/*
+ * This file is part of SymQEMU.
+ * It contains symbolic helper functions for vector operations.
+ */
+
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/helper-proto.h"
@@ -25,25 +30,25 @@ void HELPER(free)(void *ptr) {
 }
 
 /*
- * Splits a symbol into multiple symbols of equal size.
+ * Splits an expression into multiple expressions of equal size.
  *
- * The symbols are stored in little endian order : result[0] is the least significant element of the original symbol,
+ * The expressions are stored in little endian order : result[0] is the least significant element of the original expression,
  * result[element_count - 1] is the most significant element.
  *
  * Args
- *      symbol : the symbol to split
- *      element_count : number of symbols to split into
- *      element_size : size of each result symbol in bits
+ *      expression : the expression to split
+ *      element_count : number of expressions to split into
+ *      element_size : size of each result expression in bits
  *      result : array of size element_count to store the result
  */
-static void split_symbol(void *symbol, uint64_t element_count, uint64_t element_size, void *result[]) {
-    g_assert(_sym_bits_helper(symbol) % element_count == 0);
+static void split_expression(void *expression, uint64_t element_count, uint64_t element_size, void *result[]) {
+    g_assert(_sym_bits_helper(expression) % element_count == 0);
     for (uint64_t i = 0; i < element_count; i++) {
-        result[i] = _sym_extract_helper(symbol, (i + 1) * element_size - 1, i * element_size);
+        result[i] = _sym_extract_helper(expression, (i + 1) * element_size - 1, i * element_size);
     }
 }
 
-/* Pairwise applies a binary operation on two arrays of symbols and concatenates the result into a single symbol.
+/* Pairwise applies a binary operation on two arrays of expressions and concatenates the result into a single expression.
  *
  * The concatenation is done in little endian order : symbolic_operation(args1[0], args2[0]) is the least significant
  * element of the result, symbolic_operation(args1[element_count - 1], args2[element_count - 1]) is the most significant.
@@ -54,7 +59,7 @@ static void split_symbol(void *symbol, uint64_t element_count, uint64_t element_
  *      args2 : second array of symbols
  *      element_count : number of elements in each array
  * Returns
- *      A symbol that represents the concatenated results
+ *      An expression that represents the concatenated results
  */
 static void *apply_op_and_merge(
         void *(*symbolic_operation)(void *, void *),
@@ -83,9 +88,9 @@ static uint64_t vece_element_size(uint64_t vece) {
  *      vece : element size in bits = 8 * 2^vece
  *      symbolic_operation : function for the symbolic operation applied on each element of the vectors
  * Returns
- *      A symbol that represents the output of the SIMD operation
+ *      A symbol expression that represents the output of the SIMD operation
  */
-static void *build_symbol_for_vector_vector_op(
+static void *build_expression_for_vector_vector_op(
         void *arg1_concrete, void *arg1_symbolic,
         void *arg2_concrete, void *arg2_symbolic,
         uint64_t vector_size, uint64_t vece,
@@ -114,8 +119,8 @@ static void *build_symbol_for_vector_vector_op(
     uint64_t element_count = vector_size / element_size;
     void *arg1_elements[element_count];
     void *arg2_elements[element_count];
-    split_symbol(arg1_symbolic, element_count, element_size, arg1_elements);
-    split_symbol(arg2_symbolic, element_count, element_size, arg2_elements);
+    split_expression(arg1_symbolic, element_count, element_size, arg1_elements);
+    split_expression(arg2_symbolic, element_count, element_size, arg2_elements);
 
     void *result = apply_op_and_merge(symbolic_operation, arg1_elements, arg2_elements, element_count);
     g_assert(_sym_bits_helper(result) == vector_size);
@@ -135,9 +140,11 @@ static void *build_symbol_for_vector_vector_op(
  *      vector_size : size of the vector in bits
  *      vece: element size in bits = 8 * 2^vece
  *      symbolic_operation : function for the symbolic operation applied on each element of the vector
+ * Returns
+ *    A symbol expression that represents the output of the SIMD operation
  */
 static void *
-build_symbol_for_vector_int32_op(
+build_expression_for_vector_int32_op(
         void *arg1_concrete, void *arg1_symbolic,
         uint32_t arg2_concrete, void *arg2_symbolic,
         uint64_t vector_size, uint64_t vece,
@@ -170,7 +177,7 @@ build_symbol_for_vector_int32_op(
     uint64_t element_count = vector_size / element_size;
     void *arg1_elements[element_count];
     void *arg2_elements[element_count];
-    split_symbol(arg1_symbolic, element_count, element_size, arg1_elements);
+    split_expression(arg1_symbolic, element_count, element_size, arg1_elements);
     for (uint64_t i = 0; i < element_count; i++) {
         arg2_elements[i] = arg2_symbolic;
     }
@@ -181,140 +188,140 @@ build_symbol_for_vector_int32_op(
 }
 
 void *HELPER(sym_and_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_and);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_and);
 }
 
 void *HELPER(sym_or_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_or);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_or);
 }
 
 void *HELPER(sym_xor_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_xor);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_xor);
 }
 
 void *HELPER(sym_add_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_add);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_add);
 }
 
 void *HELPER(sym_sub_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_sub);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_sub);
 }
 
 void *HELPER(sym_mul_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_mul);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_mul);
 }
 
 void *HELPER(sym_signed_saturating_add_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size,
                                             uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_sadd_sat);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_sadd_sat);
 }
 
 void *HELPER(sym_signed_saturating_sub_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size,
                                             uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_ssub_sat);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_ssub_sat);
 }
 
 void *HELPER(sym_unsigned_saturating_add_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size,
                                               uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_uadd_sat);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_uadd_sat);
 }
 
 void *HELPER(sym_unsigned_saturating_sub_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size,
                                               uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_usub_sat);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_usub_sat);
 }
 
 void *
 HELPER(sym_shift_left_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_shift_left);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_shift_left);
 }
 
 void *HELPER(sym_logical_shift_right_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size,
                                           uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece,
-                                             _sym_build_logical_shift_right);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece,
+                                                 _sym_build_logical_shift_right);
 }
 
 void *HELPER(sym_arithmetic_shift_right_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size,
                                              uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece,
-                                             _sym_build_arithmetic_shift_right);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece,
+                                                 _sym_build_arithmetic_shift_right);
 }
 
 void *
 HELPER(sym_rotate_left_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_left);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_left);
 }
 
 void *
 HELPER(sym_rotate_right_vec)(void *arg1, void *arg1_expr, void *arg2, void *arg2_expr, uint64_t size, uint64_t vece) {
-    return build_symbol_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_right);
+    return build_expression_for_vector_vector_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_right);
 }
 
 void *HELPER(sym_shift_left_vec_int32)(void *arg1, void *arg1_expr, uint32_t arg2, void *arg2_expr, uint64_t size,
                                        uint64_t vece) {
-    return build_symbol_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_shift_left);
+    return build_expression_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_shift_left);
 }
 
 void *
 HELPER(sym_logical_shift_right_vec_int32)(void *arg1, void *arg1_expr, uint32_t arg2, void *arg2_expr, uint64_t size,
                                           uint64_t vece) {
-    return build_symbol_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece,
-                                            _sym_build_logical_shift_right);
+    return build_expression_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece,
+                                                _sym_build_logical_shift_right);
 }
 
 void *
 HELPER(sym_arithmetic_shift_right_vec_int32)(void *arg1, void *arg1_expr, uint32_t arg2, void *arg2_expr, uint64_t size,
                                              uint64_t vece) {
-    return build_symbol_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece,
-                                            _sym_build_arithmetic_shift_right);
+    return build_expression_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece,
+                                                _sym_build_arithmetic_shift_right);
 }
 
 void *HELPER(sym_rotate_left_vec_int32)(void *arg1, void *arg1_expr, uint32_t arg2, void *arg2_expr, uint64_t size,
                                         uint64_t vece) {
-    return build_symbol_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_left);
+    return build_expression_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_left);
 }
 
 void *HELPER(sym_rotate_right_vec_int32)(void *arg1, void *arg1_expr, uint32_t arg2, void *arg2_expr, uint64_t size,
                                          uint64_t vece) {
-    return build_symbol_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_right);
+    return build_expression_for_vector_int32_op(arg1, arg1_expr, arg2, arg2_expr, size, vece, _sym_build_rotate_right);
 }
 
 /*
  * Symbolic equivalent of creating a vector by duplicating a value.
  *
- * value_symbol is resized to match vece before being duplicated.
+ * value_expression is resized to match vece before being duplicated.
  */
-void *HELPER(sym_duplicate_value_into_vec)(void *value_symbol, uint64_t vector_size, uint64_t vece) {
+void *HELPER(sym_duplicate_value_into_vec)(void *value_expression, uint64_t vector_size, uint64_t vece) {
     g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
     uint64_t element_size = vece_element_size(vece);
     g_assert(element_size <= vector_size);
     g_assert(vector_size % element_size == 0);
 
-    if (value_symbol == NULL) {
+    if (value_expression == NULL) {
         return NULL;
     }
 
-    g_assert(_sym_bits_helper(value_symbol) == 32 || _sym_bits_helper(value_symbol) == 64);
+    g_assert(_sym_bits_helper(value_expression) == 32 || _sym_bits_helper(value_expression) == 64);
 
     void *resized_value_expr;
 
-    if (_sym_bits_helper(value_symbol) == element_size) {
-        resized_value_expr = value_symbol;
-    } else if (_sym_bits_helper(value_symbol) < element_size) {
-        resized_value_expr = _sym_build_zext(value_symbol, element_size);
+    if (_sym_bits_helper(value_expression) == element_size) {
+        resized_value_expr = value_expression;
+    } else if (_sym_bits_helper(value_expression) < element_size) {
+        resized_value_expr = _sym_build_zext(value_expression, element_size);
     } else {
-        resized_value_expr = _sym_extract_helper(value_symbol, element_size - 1, 0);
+        resized_value_expr = _sym_extract_helper(value_expression, element_size - 1, 0);
     }
 
     uint64_t element_count = vector_size / element_size;
-    void *result_symbol = resized_value_expr;
+    void *result_expression = resized_value_expr;
     for (uint64_t i = 1; i < element_count; i++) {
-        result_symbol = _sym_concat_helper(resized_value_expr, result_symbol);
+        result_expression = _sym_concat_helper(resized_value_expr, result_expression);
     }
 
-    g_assert(_sym_bits_helper(result_symbol) == vector_size);
-    return result_symbol;
+    g_assert(_sym_bits_helper(result_expression) == vector_size);
+    return result_expression;
 }
 
 /*
@@ -350,6 +357,25 @@ static void *element_address(
     return result;
 }
 
+/*
+ * Symbolic equivalent of an SIMD comparison operation, where true is represented by -1 and false by 0.
+ *
+ * This function performs the symbolic equivalent of computing an output vector of the form :
+ * result[i] = arg1[i] <comparison_operator> arg2[i] ? -1 : 0
+ *
+ * For each element, the concrete result is used to determine if the comparison was true or false,
+ * and path constraints are pushed accordingly.
+ *
+ * Args
+ *   arg1_concrete, arg2_concrete : pointers to buffers that store the concrete values of the input vector operands
+ *   arg1_symbolic, arg2_symbolic : symbolic expressions of the input vector operands
+ *   comparison_operator : enum value that represents a comparison operator like <, >, ==, etc.
+ *   result_concrete : pointer to a buffer that stores the concrete value of the result vector, as computed by the
+ *       concrete execution of the SIMD operation
+ *   vector_size : size of the vectors in bits
+ *   vece : element size in bits = 8 * 2^vece
+ *
+ */
 void *HELPER(sym_cmp_vec)(
         CPUArchState *env,
         void *arg1_concrete, void *arg1_symbolic,
@@ -382,10 +408,12 @@ void *HELPER(sym_cmp_vec)(
     void *arg1_elements[element_count];
     void *arg2_elements[element_count];
 
-    split_symbol(arg1_symbolic, element_count, element_size, arg1_elements);
-    split_symbol(arg2_symbolic, element_count, element_size, arg2_elements);
+    split_expression(arg1_symbolic, element_count, element_size, arg1_elements);
+    split_expression(arg2_symbolic, element_count, element_size, arg2_elements);
 
     for (uint64_t i = 0; i < element_count; i++) {
+        /* For each element, the comparison was true iff the element of the result is equal to -1.
+        * Here it is ok to take the first byte of the element, because the result is either -1 or 0. */
         uint8_t is_taken = *(uint8_t *) element_address(result_concrete, i, element_size, vector_size);
         build_and_push_path_constraint(
                 env,
@@ -397,6 +425,7 @@ void *HELPER(sym_cmp_vec)(
 
     }
 
+    /* Concretize the result, as path constraints for its value have been pushed. */
     return NULL;
 }
 
@@ -419,7 +448,7 @@ void *HELPER(sym_cmp_vec)(
  *      vector_size : size of the vectors in bits
  *      vece : element size in bits = 8 * 2^vece
  * Returns
- *      A symbol that corresponds to the symbolic result of the SIMD operation
+ *      An expression that corresponds to the symbolic result of the SIMD operation
  */
 void *HELPER(sym_ternary_vec)(
         CPUArchState *env,
@@ -453,8 +482,8 @@ void *HELPER(sym_ternary_vec)(
     void *arg1_elements[element_count];
     void *arg2_elements[element_count];
 
-    split_symbol(arg1_symbolic, element_count, element_size, arg1_elements);
-    split_symbol(arg2_symbolic, element_count, element_size, arg2_elements);
+    split_expression(arg1_symbolic, element_count, element_size, arg1_elements);
+    split_expression(arg2_symbolic, element_count, element_size, arg2_elements);
 
     /* For each element, the condition of the ternary was true iff the element of the result is equal to the element
      * of arg1. */
@@ -476,12 +505,12 @@ void *HELPER(sym_ternary_vec)(
         );
     }
 
-    void *result_symbol = concrete_condition_was_true[0] ? arg1_elements[0] : arg2_elements[0];
+    void *result_expression = concrete_condition_was_true[0] ? arg1_elements[0] : arg2_elements[0];
     for (int i = 1; i < element_count; i++) {
-        result_symbol = _sym_concat_helper(concrete_condition_was_true[i] ? arg1_elements[i] : arg2_elements[i],
-                                           result_symbol);
+        result_expression = _sym_concat_helper(concrete_condition_was_true[i] ? arg1_elements[i] : arg2_elements[i],
+                                               result_expression);
     }
 
-    g_assert(_sym_bits_helper(result_symbol) == vector_size);
-    return result_symbol;
+    g_assert(_sym_bits_helper(result_expression) == vector_size);
+    return result_expression;
 }
