@@ -66,3 +66,30 @@ target_ulong get_pc(CPUArchState *env)
 
     return pc;
 }
+
+void *sym_rotate_left(void *arg1_expr, void *arg2_expr) {
+    /* The implementation follows the alternative implementation of
+     * tcg_gen_rotl_i64 in tcg-op.c (which handles architectures that don't
+     * support rotl directly). */
+
+    uint8_t bits = _sym_bits_helper(arg1_expr);
+    return _sym_build_or(
+            _sym_build_shift_left(arg1_expr, arg2_expr),
+            _sym_build_logical_shift_right(
+                    arg1_expr,
+                    _sym_build_sub(_sym_build_integer(bits, bits), arg2_expr)));
+}
+
+void *sym_rotate_right(void *arg1_expr, void *arg2_expr) {
+
+    /* The implementation follows the alternative implementation of
+     * tcg_gen_rotr_i64 in tcg-op.c (which handles architectures that don't
+     * support rotr directly). */
+
+    uint8_t bits = _sym_bits_helper(arg1_expr);
+    return _sym_build_or(
+            _sym_build_logical_shift_right(arg1_expr, arg2_expr),
+            _sym_build_shift_left(
+                    arg1_expr,
+                    _sym_build_sub(_sym_build_integer(bits, bits), arg2_expr)));
+}
