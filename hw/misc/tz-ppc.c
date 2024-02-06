@@ -15,8 +15,11 @@
 #include "qapi/error.h"
 #include "trace.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/registerfields.h"
+#include "hw/irq.h"
 #include "hw/misc/tz-ppc.h"
+#include "hw/qdev-properties.h"
 
 static void tz_ppc_update_irq(TZPPC *s)
 {
@@ -193,7 +196,21 @@ static bool tz_ppc_dummy_accepts(void *opaque, hwaddr addr,
     g_assert_not_reached();
 }
 
+static uint64_t tz_ppc_dummy_read(void *opaque, hwaddr addr, unsigned size)
+{
+    g_assert_not_reached();
+}
+
+static void tz_ppc_dummy_write(void *opaque, hwaddr addr,
+                                        uint64_t data, unsigned size)
+{
+    g_assert_not_reached();
+}
+
 static const MemoryRegionOps tz_ppc_dummy_ops = {
+    /* define r/w methods to avoid assert failure in memory_region_init_io */
+    .read = tz_ppc_dummy_read,
+    .write = tz_ppc_dummy_write,
     .valid.accepts = tz_ppc_dummy_accepts,
 };
 
@@ -316,7 +333,7 @@ static void tz_ppc_class_init(ObjectClass *klass, void *data)
     dc->realize = tz_ppc_realize;
     dc->vmsd = &tz_ppc_vmstate;
     dc->reset = tz_ppc_reset;
-    dc->props = tz_ppc_properties;
+    device_class_set_props(dc, tz_ppc_properties);
 }
 
 static const TypeInfo tz_ppc_info = {

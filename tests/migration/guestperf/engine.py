@@ -1,4 +1,3 @@
-from __future__ import print_function
 #
 # Migration test main engine
 #
@@ -7,7 +6,7 @@ from __future__ import print_function
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
 # License as published by the Free Software Foundation; either
-# version 2 of the License, or (at your option) any later version.
+# version 2.1 of the License, or (at your option) any later version.
 #
 # This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -66,7 +65,6 @@ class Engine(object):
         return records
 
     def _cpu_timing(self, pid):
-        records = []
         now = time.time()
 
         jiffies_per_sec = os.sysconf(os.sysconf_names['SC_CLK_TCK'])
@@ -103,7 +101,7 @@ class Engine(object):
             info.get("downtime", 0),
             info.get("expected-downtime", 0),
             info.get("setup-time", 0),
-            info.get("x-cpu-throttle-percentage", 0),
+            info.get("cpu-throttle-percentage", 0),
         )
 
     def _migrate(self, hardware, scenario, src, dst, connect_uri):
@@ -111,10 +109,10 @@ class Engine(object):
         src_vcpu_time = []
         src_pid = src.get_pid()
 
-        vcpus = src.command("query-cpus")
+        vcpus = src.command("query-cpus-fast")
         src_threads = []
         for vcpu in vcpus:
-            src_threads.append(vcpu["thread_id"])
+            src_threads.append(vcpu["thread-id"])
 
         # XXX how to get dst timings on remote host ?
 
@@ -136,7 +134,7 @@ class Engine(object):
                                      "state": True }
                                ])
             resp = src.command("migrate-set-parameters",
-                               x_cpu_throttle_increment=scenario._auto_converge_step)
+                               cpu_throttle_increment=scenario._auto_converge_step)
 
         if scenario._post_copy:
             resp = src.command("migrate-set-capabilities",
@@ -150,11 +148,11 @@ class Engine(object):
                                      "state": True }
                                ])
 
-        resp = src.command("migrate_set_speed",
-                           value=scenario._bandwidth * 1024 * 1024)
+        resp = src.command("migrate-set-parameters",
+                           max_bandwidth=scenario._bandwidth * 1024 * 1024)
 
-        resp = src.command("migrate_set_downtime",
-                           value=scenario._downtime / 1024.0)
+        resp = src.command("migrate-set-parameters",
+                           downtime_limit=scenario._downtime)
 
         if scenario._compression_mt:
             resp = src.command("migrate-set-capabilities",
@@ -183,9 +181,27 @@ class Engine(object):
                                    { "capability": "xbzrle",
                                      "state": True }
                                ])
-            resp = src.command("migrate-set-cache-size",
-                               value=(hardware._mem * 1024 * 1024 * 1024 / 100 *
-                                      scenario._compression_xbzrle_cache))
+            resp = src.command("migrate-set-parameters",
+                               xbzrle_cache_size=(
+                                   hardware._mem *
+                                   1024 * 1024 * 1024 / 100 *
+                                   scenario._compression_xbzrle_cache))
+
+        if scenario._multifd:
+            resp = src.command("migrate-set-capabilities",
+                               capabilities = [
+                                   { "capability": "multifd",
+                                     "state": True }
+                               ])
+            resp = src.command("migrate-set-parameters",
+                               multifd_channels=scenario._multifd_channels)
+            resp = dst.command("migrate-set-capabilities",
+                               capabilities = [
+                                   { "capability": "multifd",
+                                     "state": True }
+                               ])
+            resp = dst.command("migrate-set-parameters",
+                               multifd_channels=scenario._multifd_channels)
 
         resp = src.command("migrate", uri=connect_uri)
 
@@ -265,6 +281,26 @@ class Engine(object):
                 resp = src.command("stop")
                 paused = True
 
+    def _is_ppc64le(self):
+        _, _, _, _, machine = os.uname()
+        if machine == "ppc64le":
+            return True
+        return False
+
+    def _get_guest_console_args(self):
+        if self._is_ppc64le():
+            return "console=hvc0"
+        else:
+            return "console=ttyS0"
+
+    def _get_qemu_serial_args(self):
+        if self._is_ppc64le():
+            return ["-chardev", "stdio,id=cdev0",
+                    "-device", "spapr-vty,chardev=cdev0"]
+        else:
+            return ["-chardev", "stdio,id=cdev0",
+                    "-device", "isa-serial,chardev=cdev0"]
+
     def _get_common_args(self, hardware, tunnelled=False):
         args = [
             "noapic",
@@ -273,8 +309,10 @@ class Engine(object):
             "noreplace-smp",
             "cgroup_disable=memory",
             "pci=noearly",
-            "console=ttyS0",
         ]
+
+        args.append(self._get_guest_console_args())
+
         if self._debug:
             args.append("debug")
         else:
@@ -287,25 +325,25 @@ class Engine(object):
             cmdline = "'" + cmdline + "'"
 
         argv = [
-            "-machine", "accel=kvm",
+            "-accel", "kvm",
             "-cpu", "host",
             "-kernel", self._kernel,
             "-initrd", self._initrd,
             "-append", cmdline,
-            "-chardev", "stdio,id=cdev0",
-            "-device", "isa-serial,chardev=cdev0",
             "-m", str((hardware._mem * 1024) + 512),
             "-smp", str(hardware._cpus),
         ]
 
+        argv.extend(self._get_qemu_serial_args())
+
         if self._debug:
-            argv.extend(["-device", "sga"])
+            argv.extend(["-machine", "graphics=off"])
 
         if hardware._prealloc_pages:
             argv_source += ["-mem-path", "/dev/shm",
                             "-mem-prealloc"]
         if hardware._locked_pages:
-            argv_source += ["-realtime", "mlock=on"]
+            argv_source += ["-overcommit", "mem-lock=on"]
         if hardware._huge_pages:
             pass
 
@@ -406,8 +444,15 @@ class Engine(object):
             progress_history = ret[0]
             qemu_timings = ret[1]
             vcpu_timings = ret[2]
-            if uri[0:5] == "unix:":
+            if uri[0:5] == "unix:" and os.path.exists(uri[5:]):
                 os.remove(uri[5:])
+
+            if os.path.exists(srcmonaddr):
+                os.remove(srcmonaddr)
+
+            if self._dst_host == "localhost" and os.path.exists(dstmonaddr):
+                os.remove(dstmonaddr)
+
             if self._verbose:
                 print("Finished migration")
 

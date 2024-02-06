@@ -24,8 +24,9 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
 #include "hw/pci/pci.h"
+#include "migration/vmstate.h"
 #include "sysemu/dma.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
@@ -38,7 +39,7 @@
         (IDE_RETRY_DMA | IDE_RETRY_PIO | \
         IDE_RETRY_READ | IDE_RETRY_FLUSH)
 
-static uint64_t pci_ide_cmd_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t pci_ide_status_read(void *opaque, hwaddr addr, unsigned size)
 {
     IDEBus *bus = opaque;
 
@@ -48,20 +49,20 @@ static uint64_t pci_ide_cmd_read(void *opaque, hwaddr addr, unsigned size)
     return ide_status_read(bus, addr + 2);
 }
 
-static void pci_ide_cmd_write(void *opaque, hwaddr addr,
-                              uint64_t data, unsigned size)
+static void pci_ide_ctrl_write(void *opaque, hwaddr addr,
+                               uint64_t data, unsigned size)
 {
     IDEBus *bus = opaque;
 
     if (addr != 2 || size != 1) {
         return;
     }
-    ide_cmd_write(bus, addr + 2, data);
+    ide_ctrl_write(bus, addr + 2, data);
 }
 
 const MemoryRegionOps pci_ide_cmd_le_ops = {
-    .read = pci_ide_cmd_read,
-    .write = pci_ide_cmd_write,
+    .read = pci_ide_status_read,
+    .write = pci_ide_ctrl_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
@@ -103,7 +104,13 @@ const MemoryRegionOps pci_ide_data_le_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
-static void bmdma_start_dma(IDEDMA *dma, IDEState *s,
+static IDEState *bmdma_active_if(BMDMAState *bmdma)
+{
+    assert(bmdma->bus->retry_unit != (uint8_t)-1);
+    return bmdma->bus->ifs + bmdma->bus->retry_unit;
+}
+
+static void bmdma_start_dma(const IDEDMA *dma, IDEState *s,
                             BlockCompletionFunc *dma_cb)
 {
     BMDMAState *bm = DO_UPCAST(BMDMAState, dma, dma);
@@ -126,7 +133,7 @@ static void bmdma_start_dma(IDEDMA *dma, IDEState *s,
  * IDEState.io_buffer_size will contain the number of bytes described
  * by the PRDs, whether or not we added them to the sglist.
  */
-static int32_t bmdma_prepare_buf(IDEDMA *dma, int32_t limit)
+static int32_t bmdma_prepare_buf(const IDEDMA *dma, int32_t limit)
 {
     BMDMAState *bm = DO_UPCAST(BMDMAState, dma, dma);
     IDEState *s = bmdma_active_if(bm);
@@ -138,7 +145,7 @@ static int32_t bmdma_prepare_buf(IDEDMA *dma, int32_t limit)
     int l, len;
 
     pci_dma_sglist_init(&s->sg, pci_dev,
-                        s->nsector / (BMDMA_PAGE_SIZE / 512) + 1);
+                        s->nsector / (BMDMA_PAGE_SIZE / BDRV_SECTOR_SIZE) + 1);
     s->io_buffer_size = 0;
     for(;;) {
         if (bm->cur_prd_len == 0) {
@@ -181,7 +188,7 @@ static int32_t bmdma_prepare_buf(IDEDMA *dma, int32_t limit)
 }
 
 /* return 0 if buffer completed */
-static int bmdma_rw_buf(IDEDMA *dma, int is_write)
+static int bmdma_rw_buf(const IDEDMA *dma, bool is_write)
 {
     BMDMAState *bm = DO_UPCAST(BMDMAState, dma, dma);
     IDEState *s = bmdma_active_if(bm);
@@ -230,7 +237,7 @@ static int bmdma_rw_buf(IDEDMA *dma, int is_write)
     return 1;
 }
 
-static void bmdma_set_inactive(IDEDMA *dma, bool more)
+static void bmdma_set_inactive(const IDEDMA *dma, bool more)
 {
     BMDMAState *bm = DO_UPCAST(BMDMAState, dma, dma);
 
@@ -242,7 +249,7 @@ static void bmdma_set_inactive(IDEDMA *dma, bool more)
     }
 }
 
-static void bmdma_restart_dma(IDEDMA *dma)
+static void bmdma_restart_dma(const IDEDMA *dma)
 {
     BMDMAState *bm = DO_UPCAST(BMDMAState, dma, dma);
 
@@ -257,7 +264,7 @@ static void bmdma_cancel(BMDMAState *bm)
     }
 }
 
-static void bmdma_reset(IDEDMA *dma)
+static void bmdma_reset(const IDEDMA *dma)
 {
     BMDMAState *bm = DO_UPCAST(BMDMAState, dma, dma);
 
@@ -295,7 +302,7 @@ void bmdma_cmd_writeb(BMDMAState *bm, uint32_t val)
     /* Ignore writes to SSBM if it keeps the old value */
     if ((val & BM_CMD_START) != (bm->cmd & BM_CMD_START)) {
         if (!(val & BM_CMD_START)) {
-            ide_cancel_dma_sync(idebus_active_if(bm->bus));
+            ide_cancel_dma_sync(ide_bus_active_if(bm->bus));
             bm->status &= ~BM_STATUS_DMAING;
         } else {
             bm->cur_addr = bm->addr;
@@ -309,6 +316,12 @@ void bmdma_cmd_writeb(BMDMAState *bm, uint32_t val)
     }
 
     bm->cmd = val & 0x09;
+}
+
+void bmdma_status_writeb(BMDMAState *bm, uint32_t val)
+{
+    bm->status = (val & 0x60) | (bm->status & BM_STATUS_DMAING)
+                 | (bm->status & ~val & (BM_STATUS_ERROR | BM_STATUS_INT));
 }
 
 static uint64_t bmdma_addr_read(void *opaque, hwaddr addr,
@@ -476,17 +489,20 @@ const VMStateDescription vmstate_ide_pci = {
     }
 };
 
-void pci_ide_create_devs(PCIDevice *dev, DriveInfo **hd_table)
+/* hd_table must contain 4 block drivers */
+void pci_ide_create_devs(PCIDevice *dev)
 {
     PCIIDEState *d = PCI_IDE(dev);
+    DriveInfo *hd_table[2 * MAX_IDE_DEVS];
     static const int bus[4]  = { 0, 0, 1, 1 };
     static const int unit[4] = { 0, 1, 0, 1 };
     int i;
 
+    ide_drive_get(hd_table, ARRAY_SIZE(hd_table));
     for (i = 0; i < 4; i++) {
-        if (hd_table[i] == NULL)
-            continue;
-        ide_create_drive(d->bus+bus[i], unit[i], hd_table[i]);
+        if (hd_table[i]) {
+            ide_bus_create_drive(d->bus + bus[i], unit[i], hd_table[i]);
+        }
     }
 }
 
@@ -509,13 +525,23 @@ void bmdma_init(IDEBus *bus, BMDMAState *bm, PCIIDEState *d)
     bus->dma = &bm->dma;
     bm->irq = bus->irq;
     bus->irq = qemu_allocate_irq(bmdma_irq, bm, 0);
+    bm->bus = bus;
     bm->pci_dev = d;
+}
+
+static void pci_ide_init(Object *obj)
+{
+    PCIIDEState *d = PCI_IDE(obj);
+
+    qdev_init_gpio_out_named(DEVICE(d), d->isa_irq, "isa-irq",
+                             ARRAY_SIZE(d->isa_irq));
 }
 
 static const TypeInfo pci_ide_type_info = {
     .name = TYPE_PCI_IDE,
     .parent = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIIDEState),
+    .instance_init = pci_ide_init,
     .abstract = true,
     .interfaces = (InterfaceInfo[]) {
         { INTERFACE_CONVENTIONAL_PCI_DEVICE },

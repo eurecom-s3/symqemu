@@ -23,12 +23,15 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/irq.h"
 #include "hw/or-irq.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
 
 static void or_irq_handler(void *opaque, int n, int level)
 {
-    qemu_or_irq *s = OR_IRQ(opaque);
+    OrIRQState *s = OR_IRQ(opaque);
     int or_level = 0;
     int i;
 
@@ -43,7 +46,7 @@ static void or_irq_handler(void *opaque, int n, int level)
 
 static void or_irq_reset(DeviceState *dev)
 {
-    qemu_or_irq *s = OR_IRQ(dev);
+    OrIRQState *s = OR_IRQ(dev);
     int i;
 
     for (i = 0; i < MAX_OR_LINES; i++) {
@@ -53,16 +56,16 @@ static void or_irq_reset(DeviceState *dev)
 
 static void or_irq_realize(DeviceState *dev, Error **errp)
 {
-    qemu_or_irq *s = OR_IRQ(dev);
+    OrIRQState *s = OR_IRQ(dev);
 
-    assert(s->num_lines < MAX_OR_LINES);
+    assert(s->num_lines <= MAX_OR_LINES);
 
     qdev_init_gpio_in(dev, or_irq_handler, s->num_lines);
 }
 
 static void or_irq_init(Object *obj)
 {
-    qemu_or_irq *s = OR_IRQ(obj);
+    OrIRQState *s = OR_IRQ(obj);
 
     qdev_init_gpio_out(DEVICE(obj), &s->out_irq, 1);
 }
@@ -81,7 +84,7 @@ static void or_irq_init(Object *obj)
 
 static bool vmstate_extras_needed(void *opaque)
 {
-    qemu_or_irq *s = OR_IRQ(opaque);
+    OrIRQState *s = OR_IRQ(opaque);
 
     return s->num_lines >= OLD_MAX_OR_LINES;
 }
@@ -92,7 +95,7 @@ static const VMStateDescription vmstate_or_irq_extras = {
     .minimum_version_id = 1,
     .needed = vmstate_extras_needed,
     .fields = (VMStateField[]) {
-        VMSTATE_VARRAY_UINT16_UNSAFE(levels, qemu_or_irq, num_lines, 0,
+        VMSTATE_VARRAY_UINT16_UNSAFE(levels, OrIRQState, num_lines, 0,
                                      vmstate_info_bool, bool),
         VMSTATE_END_OF_LIST(),
     },
@@ -103,7 +106,7 @@ static const VMStateDescription vmstate_or_irq = {
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
-        VMSTATE_BOOL_SUB_ARRAY(levels, qemu_or_irq, 0, OLD_MAX_OR_LINES),
+        VMSTATE_BOOL_SUB_ARRAY(levels, OrIRQState, 0, OLD_MAX_OR_LINES),
         VMSTATE_END_OF_LIST(),
     },
     .subsections = (const VMStateDescription*[]) {
@@ -113,7 +116,7 @@ static const VMStateDescription vmstate_or_irq = {
 };
 
 static Property or_irq_properties[] = {
-    DEFINE_PROP_UINT16("num-lines", qemu_or_irq, num_lines, 1),
+    DEFINE_PROP_UINT16("num-lines", OrIRQState, num_lines, 1),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -122,7 +125,7 @@ static void or_irq_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->reset = or_irq_reset;
-    dc->props = or_irq_properties;
+    device_class_set_props(dc, or_irq_properties);
     dc->realize = or_irq_realize;
     dc->vmsd = &vmstate_or_irq;
 
@@ -133,7 +136,7 @@ static void or_irq_class_init(ObjectClass *klass, void *data)
 static const TypeInfo or_irq_type_info = {
    .name = TYPE_OR_IRQ,
    .parent = TYPE_DEVICE,
-   .instance_size = sizeof(qemu_or_irq),
+   .instance_size = sizeof(OrIRQState),
    .instance_init = or_irq_init,
    .class_init = or_irq_class_init,
 };

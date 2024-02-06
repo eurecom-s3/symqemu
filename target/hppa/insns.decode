@@ -6,7 +6,7 @@
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
 # License as published by the Free Software Foundation; either
-# version 2 of the License, or (at your option) any later version.
+# version 2.1 of the License, or (at your option) any later version.
 #
 # This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -111,6 +111,7 @@ rfi_r           000000 ----- ----- --- 01100101 00000
 # They are allocated from the unassigned instruction space.
 halt            1111 1111 1111 1101 1110 1010 1101 0000
 reset           1111 1111 1111 1101 1110 1010 1101 0001
+getshadowregs   1111 1111 1111 1101 1110 1010 1101 0010
 
 ####
 # Memory Management
@@ -149,9 +150,9 @@ lci             000001 ----- ----- -- 01001100 0 t:5
 # Arith/Log
 ####
 
-andcm           000010 ..... ..... .... 000000 0 .....  @rrr_cf
-and             000010 ..... ..... .... 001000 0 .....  @rrr_cf
-or              000010 ..... ..... .... 001001 0 .....  @rrr_cf
+andcm           000010 ..... ..... .... 000000 - .....  @rrr_cf
+and             000010 ..... ..... .... 001000 - .....  @rrr_cf
+or              000010 ..... ..... .... 001001 - .....  @rrr_cf
 xor             000010 ..... ..... .... 001010 0 .....  @rrr_cf
 uxor            000010 ..... ..... .... 001110 0 .....  @rrr_cf
 ds              000010 ..... ..... .... 010001 0 .....  @rrr_cf
@@ -161,13 +162,13 @@ uaddcm_tc       000010 ..... ..... .... 100111 0 .....  @rrr_cf
 dcor            000010 ..... 00000 .... 101110 0 .....  @rr_cf
 dcor_i          000010 ..... 00000 .... 101111 0 .....  @rr_cf
 
-add             000010 ..... ..... .... 0110.. 0 .....  @rrr_cf_sh
+add             000010 ..... ..... .... 0110.. - .....  @rrr_cf_sh
 add_l           000010 ..... ..... .... 1010.. 0 .....  @rrr_cf_sh
 add_tsv         000010 ..... ..... .... 1110.. 0 .....  @rrr_cf_sh
 add_c           000010 ..... ..... .... 011100 0 .....  @rrr_cf_sh0
 add_c_tsv       000010 ..... ..... .... 111100 0 .....  @rrr_cf_sh0
 
-sub             000010 ..... ..... .... 010000 0 .....  @rrr_cf
+sub             000010 ..... ..... .... 010000 - .....  @rrr_cf
 sub_tsv         000010 ..... ..... .... 110000 0 .....  @rrr_cf
 sub_tc          000010 ..... ..... .... 010011 0 .....  @rrr_cf
 sub_tsv_tc      000010 ..... ..... .... 110011 0 .....  @rrr_cf
@@ -387,10 +388,7 @@ fmpyfadd_d      101110 rm1:5 rm2:5 ... 0 1 ..0 0 0 neg:1 t:5    ra3=%rc32
 
 # Floating point class 0
 
-# FID.  With r = t = 0, which via fcpy puts 0 into fr0.
-# This is machine/revision = 0, which is reserved for simulator.
-fcpy_f          001100 00000 00000 00000 000000 00000   \
-                &fclass01 r=0 t=0
+fid_f           001100 00000 00000 000 00 000000 00000
 
 fcpy_f          001100 ..... ..... 010 00 ...... .....  @f0c_0
 fabs_f          001100 ..... ..... 011 00 ...... .....  @f0c_0

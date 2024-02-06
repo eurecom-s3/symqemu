@@ -1,41 +1,71 @@
 #ifndef HW_ARM_ALLWINNER_A10_H
 #define HW_ARM_ALLWINNER_A10_H
 
-#include "qemu/error-report.h"
-#include "hw/char/serial.h"
 #include "hw/arm/boot.h"
 #include "hw/timer/allwinner-a10-pit.h"
 #include "hw/intc/allwinner-a10-pic.h"
 #include "hw/net/allwinner_emac.h"
-#include "hw/ide/pci.h"
+#include "hw/sd/allwinner-sdhost.h"
 #include "hw/ide/ahci.h"
+#include "hw/usb/hcd-ohci.h"
+#include "hw/usb/hcd-ehci.h"
+#include "hw/rtc/allwinner-rtc.h"
+#include "hw/misc/allwinner-a10-ccm.h"
+#include "hw/misc/allwinner-a10-dramc.h"
+#include "hw/i2c/allwinner-i2c.h"
+#include "hw/watchdog/allwinner-wdt.h"
+#include "sysemu/block-backend.h"
 
-#include "sysemu/sysemu.h"
+#include "target/arm/cpu.h"
+#include "qom/object.h"
 
-
-#define AW_A10_PIC_REG_BASE     0x01c20400
-#define AW_A10_PIT_REG_BASE     0x01c20c00
-#define AW_A10_UART0_REG_BASE   0x01c28000
-#define AW_A10_EMAC_BASE        0x01c0b000
-#define AW_A10_SATA_BASE        0x01c18000
 
 #define AW_A10_SDRAM_BASE       0x40000000
 
-#define TYPE_AW_A10 "allwinner-a10"
-#define AW_A10(obj) OBJECT_CHECK(AwA10State, (obj), TYPE_AW_A10)
+#define AW_A10_NUM_USB          2
 
-typedef struct AwA10State {
+#define TYPE_AW_A10 "allwinner-a10"
+OBJECT_DECLARE_SIMPLE_TYPE(AwA10State, AW_A10)
+
+struct AwA10State {
     /*< private >*/
     DeviceState parent_obj;
     /*< public >*/
 
     ARMCPU cpu;
-    qemu_irq irq[AW_A10_PIC_INT_NR];
+    AwA10ClockCtlState ccm;
+    AwA10DramControllerState dramc;
     AwA10PITState timer;
     AwA10PICState intc;
     AwEmacState emac;
     AllwinnerAHCIState sata;
+    AwSdHostState mmc0;
+    AWI2CState i2c0;
+    AwRtcState rtc;
+    AwWdtState wdt;
     MemoryRegion sram_a;
-} AwA10State;
+    EHCISysBusState ehci[AW_A10_NUM_USB];
+    OHCISysBusState ohci[AW_A10_NUM_USB];
+};
+
+/**
+ * Emulate Boot ROM firmware setup functionality.
+ *
+ * A real Allwinner A10 SoC contains a Boot ROM
+ * which is the first code that runs right after
+ * the SoC is powered on. The Boot ROM is responsible
+ * for loading user code (e.g. a bootloader) from any
+ * of the supported external devices and writing the
+ * downloaded code to internal SRAM. After loading the SoC
+ * begins executing the code written to SRAM.
+ *
+ * This function emulates the Boot ROM by copying 32 KiB
+ * of data at offset 8 KiB from the given block device and writes it to
+ * the start of the first internal SRAM memory.
+ *
+ * @s: Allwinner A10 state object pointer
+ * @blk: Block backend device object pointer
+ */
+void allwinner_a10_bootrom_setup(AwA10State *s, BlockBackend *blk);
 
 #endif

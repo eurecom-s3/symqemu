@@ -7,7 +7,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,6 +24,8 @@
 #include "cpu.h"
 #include "exec/memory.h"
 #include "qemu/timer.h"
+#include "target/i386/cpu-qom.h"
+#include "qom/object.h"
 
 /* APIC Local Vector Table */
 #define APIC_LVT_TIMER                  0
@@ -124,15 +126,11 @@
 typedef struct APICCommonState APICCommonState;
 
 #define TYPE_APIC_COMMON "apic-common"
-#define APIC_COMMON(obj) \
-     OBJECT_CHECK(APICCommonState, (obj), TYPE_APIC_COMMON)
-#define APIC_COMMON_CLASS(klass) \
-     OBJECT_CLASS_CHECK(APICCommonClass, (klass), TYPE_APIC_COMMON)
-#define APIC_COMMON_GET_CLASS(obj) \
-     OBJECT_GET_CLASS(APICCommonClass, (obj), TYPE_APIC_COMMON)
+typedef struct APICCommonClass APICCommonClass;
+DECLARE_OBJ_CHECKERS(APICCommonState, APICCommonClass,
+                     APIC_COMMON, TYPE_APIC_COMMON)
 
-typedef struct APICCommonClass
-{
+struct APICCommonClass {
     DeviceClass parent_class;
 
     DeviceRealize realize;
@@ -150,7 +148,7 @@ typedef struct APICCommonClass
      * device, but it's convenient to have it here for now.
      */
     void (*send_msi)(MSIMessage *msi);
-} APICCommonClass;
+};
 
 struct APICCommonState {
     /*< private >*/
@@ -201,7 +199,6 @@ typedef struct VAPICState {
 
 extern bool apic_report_tpr_access;
 
-void apic_report_irq_delivered(int delivered);
 bool apic_next_timer(APICCommonState *s, int64_t current_time);
 void apic_enable_tpr_access_reporting(DeviceState *d, bool enable);
 void apic_enable_vapic(DeviceState *d, hwaddr paddr);
@@ -210,6 +207,7 @@ void vapic_report_tpr_access(DeviceState *dev, CPUState *cpu, target_ulong ip,
                              TPRAccess access);
 
 int apic_get_ppr(APICCommonState *s);
+uint32_t apic_get_current_count(APICCommonState *s);
 
 static inline void apic_set_bit(uint32_t *tab, int index)
 {
@@ -227,6 +225,6 @@ static inline int apic_get_bit(uint32_t *tab, int index)
     return !!(tab[i] & mask);
 }
 
-APICCommonClass *apic_get_class(void);
+APICCommonClass *apic_get_class(Error **errp);
 
 #endif /* QEMU_APIC_INTERNAL_H */

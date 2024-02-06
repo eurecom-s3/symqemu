@@ -10,29 +10,25 @@
  *
  */
 
+/* header to be included in non-WHPX-specific code */
+
 #ifndef QEMU_WHPX_H
 #define QEMU_WHPX_H
 
-
-int whpx_init_vcpu(CPUState *cpu);
-int whpx_vcpu_exec(CPUState *cpu);
-void whpx_destroy_vcpu(CPUState *cpu);
-void whpx_vcpu_kick(CPUState *cpu);
-
-
-void whpx_cpu_synchronize_state(CPUState *cpu);
-void whpx_cpu_synchronize_post_reset(CPUState *cpu);
-void whpx_cpu_synchronize_post_init(CPUState *cpu);
-void whpx_cpu_synchronize_pre_loadvm(CPUState *cpu);
+#ifdef NEED_CPU_H
 
 #ifdef CONFIG_WHPX
 
 int whpx_enabled(void);
+bool whpx_apic_in_platform(void);
 
 #else /* CONFIG_WHPX */
 
 #define whpx_enabled() (0)
+#define whpx_apic_in_platform() (0)
 
 #endif /* CONFIG_WHPX */
+
+#endif /* NEED_CPU_H */
 
 #endif /* QEMU_WHPX_H */

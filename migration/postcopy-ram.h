@@ -14,13 +14,14 @@
 #define QEMU_POSTCOPY_RAM_H
 
 /* Return true if the host supports everything we need to do postcopy-ram */
-bool postcopy_ram_supported_by_host(MigrationIncomingState *mis);
+bool postcopy_ram_supported_by_host(MigrationIncomingState *mis,
+                                    Error **errp);
 
 /*
  * Make all of RAM sensitive to accesses to areas that haven't yet been written
  * and wire up anything necessary to deal with it.
  */
-int postcopy_ram_enable_notify(MigrationIncomingState *mis);
+int postcopy_ram_incoming_setup(MigrationIncomingState *mis);
 
 /*
  * Initialise postcopy-ram, setting the RAM to a state where we can go into
@@ -43,10 +44,8 @@ int postcopy_ram_prepare_discard(MigrationIncomingState *mis);
 
 /*
  * Called at the start of each RAMBlock by the bitmap code.
- * Returns a new PDS
  */
-PostcopyDiscardState *postcopy_discard_send_init(MigrationState *ms,
-                                                 const char *name);
+void postcopy_discard_send_init(MigrationState *ms, const char *name);
 
 /*
  * Called by the bitmap code for each chunk to discard.
@@ -55,15 +54,14 @@ PostcopyDiscardState *postcopy_discard_send_init(MigrationState *ms,
  * @start,@length: a range of pages in the migration bitmap in the
  *  RAM block passed to postcopy_discard_send_init() (length=1 is one page)
  */
-void postcopy_discard_send_range(MigrationState *ms, PostcopyDiscardState *pds,
-                                 unsigned long start, unsigned long length);
+void postcopy_discard_send_range(MigrationState *ms, unsigned long start,
+                                 unsigned long length);
 
 /*
  * Called at the end of each RAMBlock by the bitmap code.
- * Sends any outstanding discard messages, frees the PDS.
+ * Sends any outstanding discard messages.
  */
-void postcopy_discard_send_finish(MigrationState *ms,
-                                  PostcopyDiscardState *pds);
+void postcopy_discard_send_finish(MigrationState *ms);
 
 /*
  * Place a page (from) at (host) efficiently
@@ -103,13 +101,6 @@ typedef enum {
     POSTCOPY_INCOMING_END
 } PostcopyState;
 
-/*
- * Allocate a page of memory that can be mapped at a later point in time
- * using postcopy_place_page
- * Returns: Pointer to allocated page
- */
-void *postcopy_get_tmp_page(MigrationIncomingState *mis);
-
 PostcopyState postcopy_state_get(void);
 /* Set the state and return the old state */
 PostcopyState postcopy_state_set(PostcopyState new_state);
@@ -145,6 +136,10 @@ void postcopy_remove_notifier(NotifierWithReturn *n);
 /* Call the notifier list set by postcopy_add_start_notifier */
 int postcopy_notify(enum PostcopyNotifyReason reason, Error **errp);
 
+void postcopy_thread_create(MigrationIncomingState *mis,
+                            QemuThread *thread, const char *name,
+                            void *(*fn)(void *), int joinable);
+
 struct PostCopyFD;
 
 /* ufd is a pointer to the struct uffd_msg *TODO: more Portable! */
@@ -171,7 +166,7 @@ struct PostCopyFD {
  */
 void postcopy_register_shared_ufd(struct PostCopyFD *pcfd);
 void postcopy_unregister_shared_ufd(struct PostCopyFD *pcfd);
-/* Call each of the shared 'waker's registerd telling them of
+/* Call each of the shared 'waker's registered telling them of
  * availability of a block.
  */
 int postcopy_notify_shared_wake(RAMBlock *rb, uint64_t offset);
@@ -188,5 +183,16 @@ int postcopy_wake_shared(struct PostCopyFD *pcfd, uint64_t client_addr,
 /* Callback from shared fault handlers to ask for a page */
 int postcopy_request_shared_page(struct PostCopyFD *pcfd, RAMBlock *rb,
                                  uint64_t client_addr, uint64_t offset);
+
+/* Hard-code channels for now for postcopy preemption */
+enum PostcopyChannels {
+    RAM_CHANNEL_PRECOPY = 0,
+    RAM_CHANNEL_POSTCOPY = 1,
+    RAM_CHANNEL_MAX,
+};
+
+void postcopy_preempt_new_channel(MigrationIncomingState *mis, QEMUFile *file);
+void postcopy_preempt_setup(MigrationState *s);
+int postcopy_preempt_establish_channel(MigrationState *s);
 
 #endif

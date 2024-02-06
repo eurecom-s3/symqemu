@@ -16,19 +16,20 @@
 #include "hw/pci/msi.h"
 #include "hw/pci/shpc.h"
 #include "hw/pci/slotid_cap.h"
+#include "hw/qdev-properties.h"
+#include "qom/object.h"
 
-typedef struct PCIEPCIBridge {
+struct PCIEPCIBridge {
     /*< private >*/
     PCIBridge parent_obj;
 
     OnOffAuto msi;
     MemoryRegion shpc_bar;
     /*< public >*/
-} PCIEPCIBridge;
+};
 
 #define TYPE_PCIE_PCI_BRIDGE_DEV "pcie-pci-bridge"
-#define PCIE_PCI_BRIDGE_DEV(obj) \
-        OBJECT_CHECK(PCIEPCIBridge, (obj), TYPE_PCIE_PCI_BRIDGE_DEV)
+OBJECT_DECLARE_SIMPLE_TYPE(PCIEPCIBridge, PCIE_PCI_BRIDGE_DEV)
 
 static void pcie_pci_bridge_realize(PCIDevice *d, Error **errp)
 {
@@ -144,14 +145,13 @@ static void pcie_pci_bridge_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     HotplugHandlerClass *hc = HOTPLUG_HANDLER_CLASS(klass);
 
-    k->is_bridge = true;
     k->vendor_id = PCI_VENDOR_ID_REDHAT;
     k->device_id = PCI_DEVICE_ID_REDHAT_PCIE_BRIDGE;
     k->realize = pcie_pci_bridge_realize;
     k->exit = pcie_pci_bridge_exit;
     k->config_write = pcie_pci_bridge_write_config;
     dc->vmsd = &pcie_pci_bridge_dev_vmstate;
-    dc->props = pcie_pci_bridge_dev_properties;
+    device_class_set_props(dc, pcie_pci_bridge_dev_properties);
     dc->reset = &pcie_pci_bridge_reset;
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
     hc->plug = pci_bridge_dev_plug_cb;

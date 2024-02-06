@@ -27,12 +27,13 @@
 #define SILENT_ES1370
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/audio/soundhw.h"
 #include "audio/audio.h"
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
 #include "sysemu/dma.h"
+#include "qom/object.h"
 
 /* Missing stuff:
    SCTRL_P[12](END|ST)INC
@@ -255,6 +256,9 @@ static void print_sctl (uint32_t val)
 #define lwarn(...)
 #endif
 
+#define TYPE_ES1370 "ES1370"
+OBJECT_DECLARE_SIMPLE_TYPE(ES1370State, ES1370)
+
 struct chan {
     uint32_t shift;
     uint32_t leftover;
@@ -263,7 +267,7 @@ struct chan {
     uint32_t frame_cnt;
 };
 
-typedef struct ES1370State {
+struct ES1370State {
     PCIDevice dev;
     QEMUSoundCard card;
     MemoryRegion io;
@@ -276,7 +280,7 @@ typedef struct ES1370State {
     uint32_t mempage;
     uint32_t codec;
     uint32_t sctl;
-} ES1370State;
+};
 
 struct chan_bits {
     uint32_t ctl_en;
@@ -289,10 +293,6 @@ struct chan_bits {
     void (*calc_freq) (ES1370State *s, uint32_t ctl,
                        uint32_t *old_freq, uint32_t *new_freq);
 };
-
-#define TYPE_ES1370 "ES1370"
-#define ES1370(obj) \
-    OBJECT_CHECK(ES1370State, (obj), TYPE_ES1370)
 
 static void es1370_dac1_calc_freq (ES1370State *s, uint32_t ctl,
                                    uint32_t *old_freq, uint32_t *new_freq);
@@ -502,7 +502,7 @@ static void es1370_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
     case ES1370_REG_DAC2_SCOUNT:
     case ES1370_REG_ADC_SCOUNT:
         d += (addr - ES1370_REG_DAC1_SCOUNT) >> 2;
-        d->scount = (val & 0xffff) | (d->scount & ~0xffff);
+        d->scount = (val & 0xffff) << 16 | (val & 0xffff);
         ldebug ("chan %td CURR_SAMP_CT %d, SAMP_CT %d\n",
                 d - &s->chan[0], val >> 16, (val & 0xffff));
         break;
@@ -643,18 +643,21 @@ static void es1370_transfer_audio (ES1370State *s, struct chan *d, int loop_sel,
     int csc_bytes = (csc + 1) << d->shift;
     int cnt = d->frame_cnt >> 16;
     int size = d->frame_cnt & 0xffff;
+    if (size < cnt) {
+        return;
+    }
     int left = ((size - cnt + 1) << 2) + d->leftover;
     int transferred = 0;
-    int temp = audio_MIN (max, audio_MIN (left, csc_bytes));
+    int temp = MIN (max, MIN (left, csc_bytes));
     int index = d - &s->chan[0];
 
     addr += (cnt << 2) + d->leftover;
 
     if (index == ADC_CHANNEL) {
-        while (temp) {
+        while (temp > 0) {
             int acquired, to_copy;
 
-            to_copy = audio_MIN ((size_t) temp, sizeof (tmpbuf));
+            to_copy = MIN ((size_t) temp, sizeof (tmpbuf));
             acquired = AUD_read (s->adc_voice, tmpbuf, to_copy);
             if (!acquired)
                 break;
@@ -669,10 +672,10 @@ static void es1370_transfer_audio (ES1370State *s, struct chan *d, int loop_sel,
     else {
         SWVoiceOut *voice = s->dac_voice[index];
 
-        while (temp) {
+        while (temp > 0) {
             int copied, to_copy;
 
-            to_copy = audio_MIN ((size_t) temp, sizeof (tmpbuf));
+            to_copy = MIN ((size_t) temp, sizeof (tmpbuf));
             pci_dma_read (&s->dev, addr, tmpbuf, to_copy);
             copied = AUD_write (voice, tmpbuf, to_copy);
             if (!copied)
@@ -840,7 +843,8 @@ static const VMStateDescription vmstate_es1370 = {
 
 static void es1370_on_reset(DeviceState *dev)
 {
-    ES1370State *s = container_of(dev, ES1370State, dev.qdev);
+    ES1370State *s = ES1370(dev);
+
     es1370_reset (s);
 }
 
@@ -881,11 +885,10 @@ static void es1370_exit(PCIDevice *dev)
     AUD_remove_card(&s->card);
 }
 
-static int es1370_init (PCIBus *bus)
-{
-    pci_create_simple (bus, -1, TYPE_ES1370);
-    return 0;
-}
+static Property es1370_properties[] = {
+    DEFINE_AUDIO_PROPERTIES(ES1370State, card),
+    DEFINE_PROP_END_OF_LIST(),
+};
 
 static void es1370_class_init (ObjectClass *klass, void *data)
 {
@@ -903,6 +906,7 @@ static void es1370_class_init (ObjectClass *klass, void *data)
     dc->desc = "ENSONIQ AudioPCI ES1370";
     dc->vmsd = &vmstate_es1370;
     dc->reset = es1370_on_reset;
+    device_class_set_props(dc, es1370_properties);
 }
 
 static const TypeInfo es1370_info = {
@@ -919,8 +923,8 @@ static const TypeInfo es1370_info = {
 static void es1370_register_types (void)
 {
     type_register_static (&es1370_info);
-    pci_register_soundhw("es1370", "ENSONIQ AudioPCI ES1370", es1370_init);
+    deprecated_register_soundhw("es1370", "ENSONIQ AudioPCI ES1370",
+                                0, TYPE_ES1370);
 }
 
 type_init (es1370_register_types)
-

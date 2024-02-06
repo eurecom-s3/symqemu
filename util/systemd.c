@@ -23,6 +23,7 @@ unsigned int check_socket_activation(void)
     unsigned long nr_fds;
     unsigned int i;
     int fd;
+    int f;
     int err;
 
     s = getenv("LISTEN_PID");
@@ -50,18 +51,20 @@ unsigned int check_socket_activation(void)
     /* So these are not passed to any child processes we might start. */
     unsetenv("LISTEN_FDS");
     unsetenv("LISTEN_PID");
+    unsetenv("LISTEN_FDNAMES");
 
     /* So the file descriptors don't leak into child processes. */
     for (i = 0; i < nr_fds; ++i) {
         fd = FIRST_SOCKET_ACTIVATION_FD + i;
-        if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
+        f = fcntl(fd, F_GETFD);
+        if (f == -1 || fcntl(fd, F_SETFD, f | FD_CLOEXEC) == -1) {
             /* If we cannot set FD_CLOEXEC then it probably means the file
              * descriptor is invalid, so socket activation has gone wrong
              * and we should exit.
              */
             error_report("Socket activation failed: "
-                         "invalid file descriptor fd = %d: %m",
-                         fd);
+                         "invalid file descriptor fd = %d: %s",
+                         fd, g_strerror(errno));
             exit(EXIT_FAILURE);
         }
     }

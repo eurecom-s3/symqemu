@@ -12,6 +12,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/qmp/qnull.h"
+#include "qobject-internal.h"
 
 QNull qnull_ = {
     .base = {
@@ -27,4 +28,9 @@ QNull qnull_ = {
 bool qnull_is_equal(const QObject *x, const QObject *y)
 {
     return true;
+}
+
+void qnull_unref(QNull *q)
+{
+    qobject_unref(q);
 }

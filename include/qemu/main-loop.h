@@ -26,8 +26,18 @@
 #define QEMU_MAIN_LOOP_H
 
 #include "block/aio.h"
+#include "qom/object.h"
+#include "sysemu/event-loop-base.h"
 
 #define SIG_IPI SIGUSR1
+
+#define TYPE_MAIN_LOOP  "main-loop"
+OBJECT_DECLARE_TYPE(MainLoop, MainLoopClass, MAIN_LOOP)
+
+struct MainLoop {
+    EventLoopBase parent_obj;
+};
+typedef struct MainLoop MainLoop;
 
 /**
  * qemu_init_main_loop: Set up the process so that it can run the main loop.
@@ -52,7 +62,7 @@ int qemu_init_main_loop(Error **errp);
  * repeatedly calls main_loop_wait(false).
  *
  * Main loop services include file descriptor callbacks, bottom halves
- * and timers (defined in qemu-timer.h).  Bottom halves are similar to timers
+ * and timers (defined in qemu/timer.h).  Bottom halves are similar to timers
  * that execute immediately, but have a lower overhead and scheduling them
  * is wait-free, thread-safe and signal-safe.
  *
@@ -147,6 +157,8 @@ typedef void WaitObjectFunc(void *opaque);
  * in the main loop's calls to WaitForMultipleObjects.  When the handle
  * is in a signaled state, QEMU will call @func.
  *
+ * If the same HANDLE is added twice, this function returns -1.
+ *
  * @handle: The Windows handle to be observed.
  * @func: A function to be called when @handle is in a signaled state.
  * @opaque: A pointer-size value that is passed to @func.
@@ -234,24 +246,6 @@ void event_notifier_set_handler(EventNotifier *e,
 
 GSource *iohandler_get_g_source(void);
 AioContext *iohandler_get_aio_context(void);
-#ifdef CONFIG_POSIX
-/**
- * qemu_add_child_watch: Register a child process for reaping.
- *
- * Under POSIX systems, a parent process must read the exit status of
- * its child processes using waitpid, or the operating system will not
- * free some of the resources attached to that process.
- *
- * This function directs the QEMU main loop to observe a child process
- * and call waitpid as soon as it exits; the watch is then removed
- * automatically.  It is useful whenever QEMU forks a child process
- * but will find out about its termination by other means such as a
- * "broken pipe".
- *
- * @pid: The pid that QEMU should observe.
- */
-int qemu_add_child_watch(pid_t pid);
-#endif
 
 /**
  * qemu_mutex_iothread_locked: Return lock status of the main loop mutex.
@@ -260,8 +254,62 @@ int qemu_add_child_watch(pid_t pid);
  * must always be taken outside other locks.  This function helps
  * functions take different paths depending on whether the current
  * thread is running within the main loop mutex.
+ *
+ * This function should never be used in the block layer, because
+ * unit tests, block layer tools and qemu-storage-daemon do not
+ * have a BQL.
+ * Please instead refer to qemu_in_main_thread().
  */
 bool qemu_mutex_iothread_locked(void);
+
+/**
+ * qemu_in_main_thread: return whether it's possible to safely access
+ * the global state of the block layer.
+ *
+ * Global state of the block layer is not accessible from I/O threads
+ * or worker threads; only from threads that "own" the default
+ * AioContext that qemu_get_aio_context() returns.  For tests, block
+ * layer tools and qemu-storage-daemon there is a designated thread that
+ * runs the event loop for qemu_get_aio_context(), and that is the
+ * main thread.
+ *
+ * For emulators, however, any thread that holds the BQL can act
+ * as the block layer main thread; this will be any of the actual
+ * main thread, the vCPU threads or the RCU thread.
+ *
+ * For clarity, do not use this function outside the block layer.
+ */
+bool qemu_in_main_thread(void);
+
+/*
+ * Mark and check that the function is part of the Global State API.
+ * Please refer to include/block/block-global-state.h for more
+ * information about GS API.
+ */
+#define GLOBAL_STATE_CODE()                                         \
+    do {                                                            \
+        assert(qemu_in_main_thread());                              \
+    } while (0)
+
+/*
+ * Mark and check that the function is part of the I/O API.
+ * Please refer to include/block/block-io.h for more
+ * information about IO API.
+ */
+#define IO_CODE()                                                   \
+    do {                                                            \
+        /* nop */                                                   \
+    } while (0)
+
+/*
+ * Mark and check that the function is part of the "I/O OR GS" API.
+ * Please refer to include/block/block-io.h for more
+ * information about "IO or GS" API.
+ */
+#define IO_OR_GS_CODE()                                             \
+    do {                                                            \
+        /* nop */                                                   \
+    } while (0)
 
 /**
  * qemu_mutex_lock_iothread: Lock the main loop mutex.
@@ -295,11 +343,56 @@ void qemu_mutex_lock_iothread_impl(const char *file, int line);
  */
 void qemu_mutex_unlock_iothread(void);
 
+/**
+ * QEMU_IOTHREAD_LOCK_GUARD
+ *
+ * Wrap a block of code in a conditional qemu_mutex_{lock,unlock}_iothread.
+ */
+typedef struct IOThreadLockAuto IOThreadLockAuto;
+
+static inline IOThreadLockAuto *qemu_iothread_auto_lock(const char *file,
+                                                        int line)
+{
+    if (qemu_mutex_iothread_locked()) {
+        return NULL;
+    }
+    qemu_mutex_lock_iothread_impl(file, line);
+    /* Anything non-NULL causes the cleanup function to be called */
+    return (IOThreadLockAuto *)(uintptr_t)1;
+}
+
+static inline void qemu_iothread_auto_unlock(IOThreadLockAuto *l)
+{
+    qemu_mutex_unlock_iothread();
+}
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(IOThreadLockAuto, qemu_iothread_auto_unlock)
+
+#define QEMU_IOTHREAD_LOCK_GUARD() \
+    g_autoptr(IOThreadLockAuto) _iothread_lock_auto __attribute__((unused)) \
+        = qemu_iothread_auto_lock(__FILE__, __LINE__)
+
+/*
+ * qemu_cond_wait_iothread: Wait on condition for the main loop mutex
+ *
+ * This function atomically releases the main loop mutex and causes
+ * the calling thread to block on the condition.
+ */
+void qemu_cond_wait_iothread(QemuCond *cond);
+
+/*
+ * qemu_cond_timedwait_iothread: like the previous, but with timeout
+ */
+void qemu_cond_timedwait_iothread(QemuCond *cond, int ms);
+
 /* internal interfaces */
 
-void qemu_fd_register(int fd);
-
-QEMUBH *qemu_bh_new(QEMUBHFunc *cb, void *opaque);
+#define qemu_bh_new_guarded(cb, opaque, guard) \
+    qemu_bh_new_full((cb), (opaque), (stringify(cb)), guard)
+#define qemu_bh_new(cb, opaque) \
+    qemu_bh_new_full((cb), (opaque), (stringify(cb)), NULL)
+QEMUBH *qemu_bh_new_full(QEMUBHFunc *cb, void *opaque, const char *name,
+                         MemReentrancyGuard *reentrancy_guard);
 void qemu_bh_schedule_idle(QEMUBH *bh);
 
 enum {

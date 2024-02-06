@@ -9,7 +9,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -31,15 +31,21 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/isa/isa.h"
+#include "hw/qdev-properties.h"
 #include "ui/console.h"
+#include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
+#include "qom/object.h"
+#include "hw/acpi/acpi_aml_interface.h"
 
 /* #define DEBUG_SMC */
 
 #define APPLESMC_DEFAULT_IOBASE        0x300
+#define TYPE_APPLE_SMC "isa-applesmc"
+#define APPLESMC_MAX_DATA_LENGTH       32
+#define APPLESMC_PROP_IO_BASE "iobase"
 
 enum {
     APPLESMC_DATA_PORT               = 0x00,
@@ -89,9 +95,8 @@ struct AppleSMCData {
     QLIST_ENTRY(AppleSMCData) node;
 };
 
-#define APPLE_SMC(obj) OBJECT_CHECK(AppleSMCState, (obj), TYPE_APPLE_SMC)
+OBJECT_DECLARE_SIMPLE_TYPE(AppleSMCState, APPLE_SMC)
 
-typedef struct AppleSMCState AppleSMCState;
 struct AppleSMCState {
     ISADevice parent_obj;
 
@@ -253,7 +258,7 @@ static void applesmc_add_key(AppleSMCState *s, const char *key,
 {
     struct AppleSMCData *def;
 
-    def = g_malloc0(sizeof(struct AppleSMCData));
+    def = g_new0(struct AppleSMCData, 1);
     def->key = key;
     def->len = len;
     def->data = data;
@@ -347,14 +352,35 @@ static Property applesmc_isa_properties[] = {
     DEFINE_PROP_END_OF_LIST(),
 };
 
+static void build_applesmc_aml(AcpiDevAmlIf *adev, Aml *scope)
+{
+    Aml *crs;
+    AppleSMCState *s = APPLE_SMC(adev);
+    uint32_t iobase = s->iobase;
+    Aml *dev = aml_device("SMC");
+
+    aml_append(dev, aml_name_decl("_HID", aml_eisaid("APP0001")));
+    /* device present, functioning, decoding, not shown in UI */
+    aml_append(dev, aml_name_decl("_STA", aml_int(0xB)));
+    crs = aml_resource_template();
+    aml_append(crs,
+        aml_io(AML_DECODE16, iobase, iobase, 0x01, APPLESMC_MAX_DATA_LENGTH)
+    );
+    aml_append(crs, aml_irq_no_flags(6));
+    aml_append(dev, aml_name_decl("_CRS", crs));
+    aml_append(scope, dev);
+}
+
 static void qdev_applesmc_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    AcpiDevAmlIfClass *adevc = ACPI_DEV_AML_IF_CLASS(klass);
 
     dc->realize = applesmc_isa_realize;
     dc->reset = qdev_applesmc_isa_reset;
-    dc->props = applesmc_isa_properties;
+    device_class_set_props(dc, applesmc_isa_properties);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+    adevc->build_dev_aml = build_applesmc_aml;
 }
 
 static const TypeInfo applesmc_isa_info = {
@@ -362,6 +388,10 @@ static const TypeInfo applesmc_isa_info = {
     .parent        = TYPE_ISA_DEVICE,
     .instance_size = sizeof(AppleSMCState),
     .class_init    = qdev_applesmc_class_init,
+    .interfaces = (InterfaceInfo[]) {
+        { TYPE_ACPI_DEV_AML_IF },
+        { },
+    },
 };
 
 static void applesmc_register_types(void)

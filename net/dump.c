@@ -23,16 +23,16 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "clients.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/iov.h"
-#include "qemu/log.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "qapi/visitor.h"
 #include "net/filter.h"
+#include "qom/object.h"
+#include "sysemu/rtc.h"
 
 typedef struct DumpState {
     int64_t start_ts;
@@ -61,12 +61,13 @@ struct pcap_sf_pkthdr {
     uint32_t len;
 };
 
-static ssize_t dump_receive_iov(DumpState *s, const struct iovec *iov, int cnt)
+static ssize_t dump_receive_iov(DumpState *s, const struct iovec *iov, int cnt,
+                                int offset)
 {
     struct pcap_sf_pkthdr hdr;
     int64_t ts;
     int caplen;
-    size_t size = iov_size(iov, cnt);
+    size_t size = iov_size(iov, cnt) - offset;
     struct iovec dumpiov[cnt + 1];
 
     /* Early return in case of previous error. */
@@ -84,7 +85,7 @@ static ssize_t dump_receive_iov(DumpState *s, const struct iovec *iov, int cnt)
 
     dumpiov[0].iov_base = &hdr;
     dumpiov[0].iov_len = sizeof(hdr);
-    cnt = iov_copy(&dumpiov[1], cnt, iov, cnt, 0, caplen);
+    cnt = iov_copy(&dumpiov[1], cnt, iov, cnt, offset, caplen);
 
     if (writev(s->fd, dumpiov, cnt + 1) != sizeof(hdr) + caplen) {
         error_report("network dump write error - stopping dump");
@@ -139,8 +140,7 @@ static int net_dump_state_init(DumpState *s, const char *filename,
 
 #define TYPE_FILTER_DUMP "filter-dump"
 
-#define FILTER_DUMP(obj) \
-    OBJECT_CHECK(NetFilterDumpState, (obj), TYPE_FILTER_DUMP)
+OBJECT_DECLARE_SIMPLE_TYPE(NetFilterDumpState, FILTER_DUMP)
 
 struct NetFilterDumpState {
     NetFilterState nfs;
@@ -148,15 +148,16 @@ struct NetFilterDumpState {
     char *filename;
     uint32_t maxlen;
 };
-typedef struct NetFilterDumpState NetFilterDumpState;
 
 static ssize_t filter_dump_receive_iov(NetFilterState *nf, NetClientState *sndr,
                                        unsigned flags, const struct iovec *iov,
                                        int iovcnt, NetPacketSent *sent_cb)
 {
     NetFilterDumpState *nfds = FILTER_DUMP(nf);
+    int offset = qemu_get_using_vnet_hdr(nf->netdev) ?
+                 qemu_get_vnet_hdr_len(nf->netdev) : 0;
 
-    dump_receive_iov(&nfds->ds, iov, iovcnt);
+    dump_receive_iov(&nfds->ds, iov, iovcnt, offset);
     return 0;
 }
 
@@ -192,22 +193,17 @@ static void filter_dump_set_maxlen(Object *obj, Visitor *v, const char *name,
                                    void *opaque, Error **errp)
 {
     NetFilterDumpState *nfds = FILTER_DUMP(obj);
-    Error *local_err = NULL;
     uint32_t value;
 
-    visit_type_uint32(v, name, &value, &local_err);
-    if (local_err) {
-        goto out;
+    if (!visit_type_uint32(v, name, &value, errp)) {
+        return;
     }
     if (value == 0) {
-        error_setg(&local_err, "Property '%s.%s' doesn't take value '%u'",
+        error_setg(errp, "Property '%s.%s' doesn't take value '%u'",
                    object_get_typename(obj), name, value);
-        goto out;
+        return;
     }
     nfds->maxlen = value;
-
-out:
-    error_propagate(errp, local_err);
 }
 
 static char *file_dump_get_filename(Object *obj, Error **errp)
@@ -230,11 +226,6 @@ static void filter_dump_instance_init(Object *obj)
     NetFilterDumpState *nfds = FILTER_DUMP(obj);
 
     nfds->maxlen = 65536;
-
-    object_property_add(obj, "maxlen", "uint32", filter_dump_get_maxlen,
-                        filter_dump_set_maxlen, NULL, NULL, NULL);
-    object_property_add_str(obj, "file", file_dump_get_filename,
-                            file_dump_set_filename, NULL);
 }
 
 static void filter_dump_instance_finalize(Object *obj)
@@ -247,6 +238,11 @@ static void filter_dump_instance_finalize(Object *obj)
 static void filter_dump_class_init(ObjectClass *oc, void *data)
 {
     NetFilterClass *nfc = NETFILTER_CLASS(oc);
+
+    object_class_property_add(oc, "maxlen", "uint32", filter_dump_get_maxlen,
+                              filter_dump_set_maxlen, NULL, NULL);
+    object_class_property_add_str(oc, "file", file_dump_get_filename,
+                                  file_dump_set_filename);
 
     nfc->setup = filter_dump_setup;
     nfc->cleanup = filter_dump_cleanup;

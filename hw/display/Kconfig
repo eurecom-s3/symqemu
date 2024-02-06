@@ -9,9 +9,6 @@ config EDID
 config FW_CFG_DMA
     bool
 
-config ADS7846
-    bool
-
 config VGA_CIRRUS
     bool
     default y if PCI_DEVICES
@@ -52,13 +49,13 @@ config VGA_ISA
     depends on ISA_BUS
     select VGA
 
-config VGA_ISA_MM
+config VGA_MMIO
     bool
     select VGA
 
 config VMWARE_VGA
     bool
-    default y if PCI_DEVICES
+    default y if PCI_DEVICES && PC_PCI
     depends on PCI
     select VGA
 
@@ -75,10 +72,6 @@ config BLIZZARD
 config FRAMEBUFFER
     bool
 
-config MILKYMIST_TMU2
-    bool
-    depends on OPENGL && X11
-
 config SM501
     bool
     select I2C
@@ -90,6 +83,10 @@ config TCX
 
 config CG3
     bool
+
+config ARTIST
+    bool
+    select FRAMEBUFFER
 
 config VGA
     bool
@@ -132,3 +129,8 @@ config ATI_VGA
     select VGA
     select BITBANG_I2C
     select DDC
+
+config MACFB
+    bool
+    select FRAMEBUFFER
+    depends on NUBUS

@@ -1,4 +1,6 @@
 # -*- Mode: Python -*-
+# vim: filetype=python
+#
 # Positive QAPI doc comment tests
 
 { 'pragma': { 'doc-required': true } }
@@ -8,27 +10,27 @@
 #
 # == Subsection
 #
-# *strong* _with emphasis_
+# *with emphasis*
 # @var {in braces}
+#
 # * List item one
-# - Two, multiple
+# * Two, multiple
 #   lines
 #
-# 3. Three
-# Still in list
+# * Three
+#   Still in list
 #
-#   Not in list
+# Not in list
+#
 # - Second list
-# Note: still in list
+#   Note: still in list
 #
 # Note: not in list
+#
 # 1. Third list
 #    is numbered
 #
-# - another item
-#
-# | example
-# | multiple lines
+# 2. another item
 #
 # Returns: the King
 # Since: the first age
@@ -51,48 +53,85 @@
 
 ##
 # @Enum:
-# @one: The _one_ {and only}
+#
+# @one: The _one_ {and only}, description on the same line
+#
+# Features:
+# @enum-feat: Also _one_ {and only}
+# @enum-member-feat: a member feature
 #
 # @two is undocumented
 ##
-{ 'enum': 'Enum', 'data':
-  [ { 'name': 'one', 'if': 'defined(IFONE)' }, 'two' ],
-  'if': 'defined(IFCOND)' }
+{ 'enum': 'Enum',
+  'data': [ { 'name': 'one', 'if': 'IFONE',
+              'features': [ 'enum-member-feat' ] },
+            'two' ],
+  'features': [ 'enum-feat' ],
+  'if': 'IFCOND' }
 
 ##
 # @Base:
+#
 # @base1:
-#   the first member
+# description starts on a new line,
+# not indented
 ##
-{ 'struct': 'Base', 'data': { 'base1': 'Enum' } }
+{ 'struct': 'Base', 'data': { 'base1': 'Enum' },
+  'if': { 'all': ['IFALL1', 'IFALL2'] } }
 
 ##
 # @Variant1:
+#
 # A paragraph
 #
-# Another paragraph (but no @var: line)
+# Another paragraph
+#
+# @var1 is undocumented
+#
+# Features:
+# @variant1-feat: a feature
+# @member-feat: a member feature
 ##
 { 'struct': 'Variant1',
-  'data': { 'var1': { 'type': 'str', 'if': 'defined(IFSTR)' } } }
+  'features': [ 'variant1-feat' ],
+  'data': { 'var1': { 'type': 'str',
+                      'features': [ 'member-feat' ],
+                      'if': 'IFSTR' } } }
 
 ##
 # @Variant2:
+#
 ##
 { 'struct': 'Variant2', 'data': {} }
 
 ##
 # @Object:
+#
+# Features:
+# @union-feat1: a feature
 ##
 { 'union': 'Object',
+  'features': [ 'union-feat1' ],
   'base': 'Base',
   'discriminator': 'base1',
-  'data': { 'one': 'Variant1', 'two': { 'type': 'Variant2', 'if': 'IFTWO' } } }
+  'data': { 'one': 'Variant1',
+            'two': { 'type': 'Variant2',
+                     'if': { 'any': ['IFONE', 'IFTWO'] } } } }
 
 ##
-# @SugaredUnion:
+# @Alternate:
+#
+# @i: description starts on the same line
+#     remainder indented the same
+#     @b is undocumented
+#
+# Features:
+# @alt-feat: a feature
 ##
-{ 'union': 'SugaredUnion',
-  'data': { 'one': 'Variant1', 'two': { 'type': 'Variant2', 'if': 'IFTWO' } } }
+{ 'alternate': 'Alternate',
+  'features': [ 'alt-feat' ],
+  'data': { 'i': 'int', 'b': 'bool' },
+  'if': { 'not': { 'any': [ 'IFONE', 'IFTWO' ] } } }
 
 ##
 # == Another subsection
@@ -100,14 +139,22 @@
 
 ##
 # @cmd:
-# @arg1: the first argument
 #
-# @arg2: the second
-# argument
+# @arg1:
+#     description starts on a new line,
+#     indented
+#
+# @arg2: description starts on the same line
+#     remainder indented differently
+#
+# Features:
+# @cmd-feat1: a feature
+# @cmd-feat2: another feature
 # Note: @arg3 is undocumented
 # Returns: @Object
 # TODO: frobnicate
 # Notes:
+#
 # - Lorem ipsum dolor sit amet
 # - Ut enim ad minim veniam
 #
@@ -123,11 +170,15 @@
 ##
 { 'command': 'cmd',
   'data': { 'arg1': 'int', '*arg2': 'str', 'arg3': 'bool' },
-  'returns': 'Object' }
+  'returns': 'Object',
+  'features': [ 'cmd-feat1', 'cmd-feat2' ] }
 
 ##
 # @cmd-boxed:
 # If you're bored enough to read this, go see a video of boxed cats
+# Features:
+# @cmd-feat1: a feature
+# @cmd-feat2: another feature
 # Example:
 #
 # -> in
@@ -135,4 +186,15 @@
 # <- out
 ##
 { 'command': 'cmd-boxed', 'boxed': true,
+  'data': 'Object',
+  'features': [ 'cmd-feat1', 'cmd-feat2' ] }
+
+##
+# @EVT_BOXED:
+#
+# Features:
+# @feat3: a feature
+##
+{ 'event': 'EVT_BOXED',  'boxed': true,
+  'features': [ 'feat3' ],
   'data': 'Object' }

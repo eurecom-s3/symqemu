@@ -21,6 +21,7 @@
 
 #include "qemu/osdep.h"
 #include "qxl.h"
+#include "sysemu/runstate.h"
 #include "trace.h"
 
 static void qxl_blit(PCIQXLDevice *qxl, QXLRect *rect)
@@ -106,9 +107,11 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
         qxl->guest_primary.resized = 0;
         qxl->guest_primary.data = qxl_phys2virt(qxl,
                                                 qxl->guest_primary.surface.mem,
-                                                MEMSLOT_GROUP_GUEST);
+                                                MEMSLOT_GROUP_GUEST,
+                                                qxl->guest_primary.abs_stride
+                                                * height);
         if (!qxl->guest_primary.data) {
-            return;
+            goto end;
         }
         qxl_set_rect_to_surface(qxl, &qxl->dirty[0]);
         qxl->num_dirty_rects = 1;
@@ -136,7 +139,7 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
     }
 
     if (!qxl->guest_primary.data) {
-        return;
+        goto end;
     }
     for (i = 0; i < qxl->num_dirty_rects; i++) {
         if (qemu_spice_rect_is_empty(qxl->dirty+i)) {
@@ -157,6 +160,11 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
                        qxl->dirty[i].bottom - qxl->dirty[i].top);
     }
     qxl->num_dirty_rects = 0;
+
+end:
+    if (qxl->render_update_cookie_num == 0) {
+        graphic_hw_update_done(qxl->ssd.dcl.con);
+    }
 }
 
 /*
@@ -175,6 +183,7 @@ void qxl_render_update(PCIQXLDevice *qxl)
         qxl->mode == QXL_MODE_UNDEFINED) {
         qxl_render_update_area_unlocked(qxl);
         qemu_mutex_unlock(&qxl->ssd.lock);
+        graphic_hw_update_done(qxl->ssd.dcl.con);
         return;
     }
 
@@ -221,7 +230,8 @@ static void qxl_unpack_chunks(void *dest, size_t size, PCIQXLDevice *qxl,
         if (offset == size) {
             return;
         }
-        chunk = qxl_phys2virt(qxl, chunk->next_chunk, group_id);
+        chunk = qxl_phys2virt(qxl, chunk->next_chunk, group_id,
+                              sizeof(QXLDataChunk) + chunk->data_size);
         if (!chunk) {
             return;
         }
@@ -240,6 +250,13 @@ static QEMUCursor *qxl_cursor(PCIQXLDevice *qxl, QXLCursor *cursor,
     size_t size;
 
     c = cursor_alloc(cursor->header.width, cursor->header.height);
+
+    if (!c) {
+        qxl_set_guest_bug(qxl, "%s: cursor %ux%u alloc error", __func__,
+                cursor->header.width, cursor->header.height);
+        goto fail;
+    }
+
     c->hot_x = cursor->header.hot_spot_x;
     c->hot_y = cursor->header.hot_spot_y;
     switch (cursor->header.type) {
@@ -259,7 +276,7 @@ static QEMUCursor *qxl_cursor(PCIQXLDevice *qxl, QXLCursor *cursor,
         }
         break;
     case SPICE_CURSOR_TYPE_ALPHA:
-        size = sizeof(uint32_t) * cursor->header.width * cursor->header.height;
+        size = sizeof(uint32_t) * c->width * c->height;
         qxl_unpack_chunks(c->data, size, qxl, &cursor->chunk, group_id);
         if (qxl->debug > 2) {
             cursor_print_ascii_art(c, "qxl/alpha");
@@ -273,7 +290,7 @@ static QEMUCursor *qxl_cursor(PCIQXLDevice *qxl, QXLCursor *cursor,
     return c;
 
 fail:
-    cursor_put(c);
+    cursor_unref(c);
     return NULL;
 }
 
@@ -281,7 +298,8 @@ fail:
 /* called from spice server thread context only */
 int qxl_render_cursor(PCIQXLDevice *qxl, QXLCommandExt *ext)
 {
-    QXLCursorCmd *cmd = qxl_phys2virt(qxl, ext->cmd.data, ext->group_id);
+    QXLCursorCmd *cmd = qxl_phys2virt(qxl, ext->cmd.data, ext->group_id,
+                                      sizeof(QXLCursorCmd));
     QXLCursor *cursor;
     QEMUCursor *c;
 
@@ -300,7 +318,15 @@ int qxl_render_cursor(PCIQXLDevice *qxl, QXLCommandExt *ext)
     }
     switch (cmd->type) {
     case QXL_CURSOR_SET:
-        cursor = qxl_phys2virt(qxl, cmd->u.set.shape, ext->group_id);
+        /* First read the QXLCursor to get QXLDataChunk::data_size ... */
+        cursor = qxl_phys2virt(qxl, cmd->u.set.shape, ext->group_id,
+                               sizeof(QXLCursor));
+        if (!cursor) {
+            return 1;
+        }
+        /* Then read including the chunked data following QXLCursor. */
+        cursor = qxl_phys2virt(qxl, cmd->u.set.shape, ext->group_id,
+                               sizeof(QXLCursor) + cursor->chunk.data_size);
         if (!cursor) {
             return 1;
         }
@@ -310,7 +336,7 @@ int qxl_render_cursor(PCIQXLDevice *qxl, QXLCommandExt *ext)
         }
         qemu_mutex_lock(&qxl->ssd.lock);
         if (qxl->ssd.cursor) {
-            cursor_put(qxl->ssd.cursor);
+            cursor_unref(qxl->ssd.cursor);
         }
         qxl->ssd.cursor = c;
         qxl->ssd.mouse_x = cmd->u.set.position.x;

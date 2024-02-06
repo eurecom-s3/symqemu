@@ -12,9 +12,11 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
+#include "qom/object.h"
 
 /* Mainstone FPGA for extern irqs */
 #define FPGA_GPIO_PIN	0
@@ -39,10 +41,9 @@
 #define MST_PCMCIA_CD1_IRQ	13
 
 #define TYPE_MAINSTONE_FPGA "mainstone-fpga"
-#define MAINSTONE_FPGA(obj) \
-    OBJECT_CHECK(mst_irq_state, (obj), TYPE_MAINSTONE_FPGA)
+OBJECT_DECLARE_SIMPLE_TYPE(mst_irq_state, MAINSTONE_FPGA)
 
-typedef struct mst_irq_state{
+struct mst_irq_state {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -62,7 +63,7 @@ typedef struct mst_irq_state{
     uint32_t intsetclr;
     uint32_t pcmcia0;
     uint32_t pcmcia1;
-}mst_irq_state;
+};
 
 static void
 mst_fpga_set_irq(void *opaque, int irq, int level)
@@ -130,7 +131,7 @@ mst_fpga_readb(void *opaque, hwaddr addr, unsigned size)
 		return s->pcmcia1;
 	default:
 		printf("Mainstone - mst_fpga_readb: Bad register offset "
-			"0x" TARGET_FMT_plx "\n", addr);
+			"0x" HWADDR_FMT_plx "\n", addr);
 	}
 	return 0;
 }
@@ -184,7 +185,7 @@ mst_fpga_writeb(void *opaque, hwaddr addr, uint64_t value,
 		break;
 	default:
 		printf("Mainstone - mst_fpga_writeb: Bad register offset "
-			"0x" TARGET_FMT_plx "\n", addr);
+			"0x" HWADDR_FMT_plx "\n", addr);
 	}
 }
 
@@ -221,7 +222,7 @@ static void mst_fpga_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem);
 }
 
-static VMStateDescription vmstate_mst_fpga_regs = {
+static const VMStateDescription vmstate_mst_fpga_regs = {
     .name = "mainstone_fpga",
     .version_id = 0,
     .minimum_version_id = 0,

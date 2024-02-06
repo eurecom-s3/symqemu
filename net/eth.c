@@ -16,30 +16,21 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/log.h"
 #include "net/eth.h"
 #include "net/checksum.h"
 #include "net/tap.h"
 
-void eth_setup_vlan_headers_ex(struct eth_header *ehdr, uint16_t vlan_tag,
-    uint16_t vlan_ethtype, bool *is_new)
+void eth_setup_vlan_headers(struct eth_header *ehdr, size_t *ehdr_size,
+                            uint16_t vlan_tag, uint16_t vlan_ethtype)
 {
     struct vlan_header *vhdr = PKT_GET_VLAN_HDR(ehdr);
 
-    switch (be16_to_cpu(ehdr->h_proto)) {
-    case ETH_P_VLAN:
-    case ETH_P_DVLAN:
-        /* vlan hdr exists */
-        *is_new = false;
-        break;
-
-    default:
-        /* No VLAN header, put a new one */
-        vhdr->h_proto = ehdr->h_proto;
-        ehdr->h_proto = cpu_to_be16(vlan_ethtype);
-        *is_new = true;
-        break;
-    }
+    memmove(vhdr + 1, vhdr, *ehdr_size - ETH_HLEN);
     vhdr->h_tci = cpu_to_be16(vlan_tag);
+    vhdr->h_proto = ehdr->h_proto;
+    ehdr->h_proto = cpu_to_be16(vlan_ethtype);
+    *ehdr_size += sizeof(*vhdr);
 }
 
 uint8_t
@@ -71,9 +62,8 @@ eth_get_gso_type(uint16_t l3_proto, uint8_t *l3_hdr, uint8_t l4proto)
             return VIRTIO_NET_HDR_GSO_TCPV6 | ecn_state;
         }
     }
-
-    /* Unsupported offload */
-    g_assert_not_reached();
+    qemu_log_mask(LOG_UNIMP, "%s: probably not GSO frame, "
+        "unknown L3 protocol: 0x%04"PRIx16"\n", __func__, l3_proto);
 
     return VIRTIO_NET_HDR_GSO_NONE | ecn_state;
 }
@@ -136,9 +126,8 @@ _eth_tcp_has_data(bool is_ip4,
     return l4len > TCP_HEADER_DATA_OFFSET(tcp);
 }
 
-void eth_get_protocols(const struct iovec *iov, int iovcnt,
-                       bool *isip4, bool *isip6,
-                       bool *isudp, bool *istcp,
+void eth_get_protocols(const struct iovec *iov, size_t iovcnt, size_t iovoff,
+                       bool *hasip4, bool *hasip6,
                        size_t *l3hdr_off,
                        size_t *l4hdr_off,
                        size_t *l5hdr_off,
@@ -148,96 +137,94 @@ void eth_get_protocols(const struct iovec *iov, int iovcnt,
 {
     int proto;
     bool fragment = false;
-    size_t l2hdr_len = eth_get_l2_hdr_length_iov(iov, iovcnt);
     size_t input_size = iov_size(iov, iovcnt);
     size_t copied;
+    uint8_t ip_p;
 
-    *isip4 = *isip6 = *isudp = *istcp = false;
+    *hasip4 = *hasip6 = false;
+    *l3hdr_off = iovoff + eth_get_l2_hdr_length_iov(iov, iovcnt, iovoff);
+    l4hdr_info->proto = ETH_L4_HDR_PROTO_INVALID;
 
-    proto = eth_get_l3_proto(iov, iovcnt, l2hdr_len);
-
-    *l3hdr_off = l2hdr_len;
+    proto = eth_get_l3_proto(iov, iovcnt, *l3hdr_off);
 
     if (proto == ETH_P_IP) {
         struct ip_header *iphdr = &ip4hdr_info->ip4_hdr;
 
-        if (input_size < l2hdr_len) {
+        if (input_size < *l3hdr_off) {
             return;
         }
 
-        copied = iov_to_buf(iov, iovcnt, l2hdr_len, iphdr, sizeof(*iphdr));
-
-        *isip4 = true;
-
-        if (copied < sizeof(*iphdr)) {
+        copied = iov_to_buf(iov, iovcnt, *l3hdr_off, iphdr, sizeof(*iphdr));
+        if (copied < sizeof(*iphdr) ||
+            IP_HEADER_VERSION(iphdr) != IP_HEADER_VERSION_4) {
             return;
         }
 
-        if (IP_HEADER_VERSION(iphdr) == IP_HEADER_VERSION_4) {
-            if (iphdr->ip_p == IP_PROTO_TCP) {
-                *istcp = true;
-            } else if (iphdr->ip_p == IP_PROTO_UDP) {
-                *isudp = true;
-            }
-        }
-
+        *hasip4 = true;
+        ip_p = iphdr->ip_p;
         ip4hdr_info->fragment = IP4_IS_FRAGMENT(iphdr);
-        *l4hdr_off = l2hdr_len + IP_HDR_GET_LEN(iphdr);
+        *l4hdr_off = *l3hdr_off + IP_HDR_GET_LEN(iphdr);
 
         fragment = ip4hdr_info->fragment;
     } else if (proto == ETH_P_IPV6) {
-
-        *isip6 = true;
-        if (eth_parse_ipv6_hdr(iov, iovcnt, l2hdr_len,
-                               ip6hdr_info)) {
-            if (ip6hdr_info->l4proto == IP_PROTO_TCP) {
-                *istcp = true;
-            } else if (ip6hdr_info->l4proto == IP_PROTO_UDP) {
-                *isudp = true;
-            }
-        } else {
+        if (!eth_parse_ipv6_hdr(iov, iovcnt, *l3hdr_off, ip6hdr_info)) {
             return;
         }
 
-        *l4hdr_off = l2hdr_len + ip6hdr_info->full_hdr_len;
+        *hasip6 = true;
+        ip_p = ip6hdr_info->l4proto;
+        *l4hdr_off = *l3hdr_off + ip6hdr_info->full_hdr_len;
         fragment = ip6hdr_info->fragment;
+    } else {
+        return;
     }
 
-    if (!fragment) {
-        if (*istcp) {
-            *istcp = _eth_copy_chunk(input_size,
-                                     iov, iovcnt,
-                                     *l4hdr_off, sizeof(l4hdr_info->hdr.tcp),
-                                     &l4hdr_info->hdr.tcp);
+    if (fragment) {
+        return;
+    }
 
-            if (*istcp) {
-                *l5hdr_off = *l4hdr_off +
-                    TCP_HEADER_DATA_OFFSET(&l4hdr_info->hdr.tcp);
+    switch (ip_p) {
+    case IP_PROTO_TCP:
+        if (_eth_copy_chunk(input_size,
+                            iov, iovcnt,
+                            *l4hdr_off, sizeof(l4hdr_info->hdr.tcp),
+                            &l4hdr_info->hdr.tcp)) {
+            l4hdr_info->proto = ETH_L4_HDR_PROTO_TCP;
+            *l5hdr_off = *l4hdr_off +
+                TCP_HEADER_DATA_OFFSET(&l4hdr_info->hdr.tcp);
 
-                l4hdr_info->has_tcp_data =
-                    _eth_tcp_has_data(proto == ETH_P_IP,
-                                      &ip4hdr_info->ip4_hdr,
-                                      &ip6hdr_info->ip6_hdr,
-                                      *l4hdr_off - *l3hdr_off,
-                                      &l4hdr_info->hdr.tcp);
-            }
-        } else if (*isudp) {
-            *isudp = _eth_copy_chunk(input_size,
-                                     iov, iovcnt,
-                                     *l4hdr_off, sizeof(l4hdr_info->hdr.udp),
-                                     &l4hdr_info->hdr.udp);
+            l4hdr_info->has_tcp_data =
+                _eth_tcp_has_data(proto == ETH_P_IP,
+                                  &ip4hdr_info->ip4_hdr,
+                                  &ip6hdr_info->ip6_hdr,
+                                  *l4hdr_off - *l3hdr_off,
+                                  &l4hdr_info->hdr.tcp);
+        }
+        break;
+
+    case IP_PROTO_UDP:
+        if (_eth_copy_chunk(input_size,
+                            iov, iovcnt,
+                            *l4hdr_off, sizeof(l4hdr_info->hdr.udp),
+                            &l4hdr_info->hdr.udp)) {
+            l4hdr_info->proto = ETH_L4_HDR_PROTO_UDP;
             *l5hdr_off = *l4hdr_off + sizeof(l4hdr_info->hdr.udp);
         }
+        break;
+
+    case IP_PROTO_SCTP:
+        l4hdr_info->proto = ETH_L4_HDR_PROTO_SCTP;
+        break;
     }
 }
 
 size_t
 eth_strip_vlan(const struct iovec *iov, int iovcnt, size_t iovoff,
-               uint8_t *new_ehdr_buf,
+               void *new_ehdr_buf,
                uint16_t *payload_offset, uint16_t *tci)
 {
     struct vlan_header vlan_hdr;
-    struct eth_header *new_ehdr = (struct eth_header *) new_ehdr_buf;
+    struct eth_header *new_ehdr = new_ehdr_buf;
 
     size_t copied = iov_to_buf(iov, iovcnt, iovoff,
                                new_ehdr, sizeof(*new_ehdr));
@@ -282,63 +269,50 @@ eth_strip_vlan(const struct iovec *iov, int iovcnt, size_t iovoff,
 }
 
 size_t
-eth_strip_vlan_ex(const struct iovec *iov, int iovcnt, size_t iovoff,
-                  uint16_t vet, uint8_t *new_ehdr_buf,
+eth_strip_vlan_ex(const struct iovec *iov, int iovcnt, size_t iovoff, int index,
+                  uint16_t vet, uint16_t vet_ext, void *new_ehdr_buf,
                   uint16_t *payload_offset, uint16_t *tci)
 {
     struct vlan_header vlan_hdr;
-    struct eth_header *new_ehdr = (struct eth_header *) new_ehdr_buf;
+    uint16_t *new_ehdr_proto;
+    size_t new_ehdr_size;
+    size_t copied;
 
-    size_t copied = iov_to_buf(iov, iovcnt, iovoff,
-                               new_ehdr, sizeof(*new_ehdr));
+    switch (index) {
+    case 0:
+        new_ehdr_proto = &PKT_GET_ETH_HDR(new_ehdr_buf)->h_proto;
+        new_ehdr_size = sizeof(struct eth_header);
+        copied = iov_to_buf(iov, iovcnt, iovoff, new_ehdr_buf, new_ehdr_size);
+        break;
 
-    if (copied < sizeof(*new_ehdr)) {
+    case 1:
+        new_ehdr_proto = &PKT_GET_VLAN_HDR(new_ehdr_buf)->h_proto;
+        new_ehdr_size = sizeof(struct eth_header) + sizeof(struct vlan_header);
+        copied = iov_to_buf(iov, iovcnt, iovoff, new_ehdr_buf, new_ehdr_size);
+        if (be16_to_cpu(PKT_GET_ETH_HDR(new_ehdr_buf)->h_proto) != vet_ext) {
+            return 0;
+        }
+        break;
+
+    default:
         return 0;
     }
 
-    if (be16_to_cpu(new_ehdr->h_proto) == vet) {
-        copied = iov_to_buf(iov, iovcnt, iovoff + sizeof(*new_ehdr),
-                            &vlan_hdr, sizeof(vlan_hdr));
-
-        if (copied < sizeof(vlan_hdr)) {
-            return 0;
-        }
-
-        new_ehdr->h_proto = vlan_hdr.h_proto;
-
-        *tci = be16_to_cpu(vlan_hdr.h_tci);
-        *payload_offset = iovoff + sizeof(*new_ehdr) + sizeof(vlan_hdr);
-        return sizeof(struct eth_header);
+    if (copied < new_ehdr_size || be16_to_cpu(*new_ehdr_proto) != vet) {
+        return 0;
     }
 
-    return 0;
-}
-
-void
-eth_setup_ip4_fragmentation(const void *l2hdr, size_t l2hdr_len,
-                            void *l3hdr, size_t l3hdr_len,
-                            size_t l3payload_len,
-                            size_t frag_offset, bool more_frags)
-{
-    const struct iovec l2vec = {
-        .iov_base = (void *) l2hdr,
-        .iov_len = l2hdr_len
-    };
-
-    if (eth_get_l3_proto(&l2vec, 1, l2hdr_len) == ETH_P_IP) {
-        uint16_t orig_flags;
-        struct ip_header *iphdr = (struct ip_header *) l3hdr;
-        uint16_t frag_off_units = frag_offset / IP_FRAG_UNIT_SIZE;
-        uint16_t new_ip_off;
-
-        assert(frag_offset % IP_FRAG_UNIT_SIZE == 0);
-        assert((frag_off_units & ~IP_OFFMASK) == 0);
-
-        orig_flags = be16_to_cpu(iphdr->ip_off) & ~(IP_OFFMASK|IP_MF);
-        new_ip_off = frag_off_units | orig_flags  | (more_frags ? IP_MF : 0);
-        iphdr->ip_off = cpu_to_be16(new_ip_off);
-        iphdr->ip_len = cpu_to_be16(l3payload_len + l3hdr_len);
+    copied = iov_to_buf(iov, iovcnt, iovoff + new_ehdr_size,
+                        &vlan_hdr, sizeof(vlan_hdr));
+    if (copied < sizeof(vlan_hdr)) {
+        return 0;
     }
+
+    *new_ehdr_proto = vlan_hdr.h_proto;
+    *payload_offset = iovoff + new_ehdr_size + sizeof(vlan_hdr);
+    *tci = be16_to_cpu(vlan_hdr.h_tci);
+
+    return new_ehdr_size;
 }
 
 void
@@ -389,7 +363,6 @@ eth_is_ip6_extension_header_type(uint8_t hdr_type)
     case IP6_HOP_BY_HOP:
     case IP6_ROUTING:
     case IP6_FRAGMENT:
-    case IP6_ESP:
     case IP6_AUTHENTICATION:
     case IP6_DESTINATON:
     case IP6_MOBILITY:
@@ -401,31 +374,29 @@ eth_is_ip6_extension_header_type(uint8_t hdr_type)
 
 static bool
 _eth_get_rss_ex_dst_addr(const struct iovec *pkt, int pkt_frags,
-                        size_t rthdr_offset,
+                        size_t ext_hdr_offset,
                         struct ip6_ext_hdr *ext_hdr,
                         struct in6_address *dst_addr)
 {
-    struct ip6_ext_hdr_routing *rthdr = (struct ip6_ext_hdr_routing *) ext_hdr;
+    struct ip6_ext_hdr_routing rt_hdr;
+    size_t input_size = iov_size(pkt, pkt_frags);
+    size_t bytes_read;
 
-    if ((rthdr->rtype == 2) &&
-        (rthdr->len == sizeof(struct in6_address) / 8) &&
-        (rthdr->segleft == 1)) {
-
-        size_t input_size = iov_size(pkt, pkt_frags);
-        size_t bytes_read;
-
-        if (input_size < rthdr_offset + sizeof(*ext_hdr)) {
-            return false;
-        }
-
-        bytes_read = iov_to_buf(pkt, pkt_frags,
-                                rthdr_offset + sizeof(*ext_hdr),
-                                dst_addr, sizeof(*dst_addr));
-
-        return bytes_read == sizeof(*dst_addr);
+    if (input_size < ext_hdr_offset + sizeof(rt_hdr) + sizeof(*dst_addr)) {
+        return false;
     }
 
-    return false;
+    bytes_read = iov_to_buf(pkt, pkt_frags, ext_hdr_offset,
+                            &rt_hdr, sizeof(rt_hdr));
+    assert(bytes_read == sizeof(rt_hdr));
+    if ((rt_hdr.rtype != 2) || (rt_hdr.segleft != 1)) {
+        return false;
+    }
+    bytes_read = iov_to_buf(pkt, pkt_frags, ext_hdr_offset + sizeof(rt_hdr),
+                            dst_addr, sizeof(*dst_addr));
+    assert(bytes_read == sizeof(*dst_addr));
+
+    return true;
 }
 
 static bool
@@ -528,10 +499,12 @@ bool eth_parse_ipv6_hdr(const struct iovec *pkt, int pkt_frags,
         }
 
         if (curr_ext_hdr_type == IP6_ROUTING) {
-            info->rss_ex_dst_valid =
-                _eth_get_rss_ex_dst_addr(pkt, pkt_frags,
-                                         ip6hdr_off + info->full_hdr_len,
-                                         &ext_hdr, &info->rss_ex_dst);
+            if (ext_hdr.ip6r_len == sizeof(struct in6_address) / 8) {
+                info->rss_ex_dst_valid =
+                    _eth_get_rss_ex_dst_addr(pkt, pkt_frags,
+                                             ip6hdr_off + info->full_hdr_len,
+                                             &ext_hdr, &info->rss_ex_dst);
+            }
         } else if (curr_ext_hdr_type == IP6_DESTINATON) {
             info->rss_ex_src_valid =
                 _eth_get_rss_ex_src_addr(pkt, pkt_frags,
@@ -546,5 +519,22 @@ bool eth_parse_ipv6_hdr(const struct iovec *pkt, int pkt_frags,
     } while (eth_is_ip6_extension_header_type(curr_ext_hdr_type));
 
     info->l4proto = ext_hdr.ip6r_nxt;
+    return true;
+}
+
+bool eth_pad_short_frame(uint8_t *padded_pkt, size_t *padded_buflen,
+                         const void *pkt, size_t pkt_size)
+{
+    assert(padded_buflen && *padded_buflen >= ETH_ZLEN);
+
+    if (pkt_size >= ETH_ZLEN) {
+        return false;
+    }
+
+    /* pad to minimum Ethernet frame length */
+    memcpy(padded_pkt, pkt, pkt_size);
+    memset(&padded_pkt[pkt_size], 0, ETH_ZLEN - pkt_size);
+    *padded_buflen = ETH_ZLEN;
+
     return true;
 }

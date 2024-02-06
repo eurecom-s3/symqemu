@@ -33,11 +33,11 @@
 #include "net/net.h"
 #include "net/tap.h"
 #include "clients.h"
-#include "sysemu/sysemu.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "qemu/iov.h"
 #include "qemu/cutils.h"
+#include "qemu/main-loop.h"
 
 typedef struct NetmapState {
     NetClientState      nc;

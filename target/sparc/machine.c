@@ -1,8 +1,6 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
-#include "hw/hw.h"
-#include "hw/boards.h"
 #include "qemu/timer.h"
 
 #include "migration/cpu.h"
@@ -12,7 +10,6 @@ static const VMStateDescription vmstate_cpu_timer = {
     .name = "cpu_timer",
     .version_id = 1,
     .minimum_version_id = 1,
-    .minimum_version_id_old = 1,
     .fields = (VMStateField[]) {
         VMSTATE_UINT32(frequency, CPUTimer),
         VMSTATE_UINT32(disabled, CPUTimer),
@@ -32,7 +29,6 @@ static const VMStateDescription vmstate_trap_state = {
     .name = "trap_state",
     .version_id = 1,
     .minimum_version_id = 1,
-    .minimum_version_id_old = 1,
     .fields = (VMStateField[]) {
         VMSTATE_UINT64(tpc, trap_state),
         VMSTATE_UINT64(tnpc, trap_state),
@@ -46,7 +42,6 @@ static const VMStateDescription vmstate_tlb_entry = {
     .name = "tlb_entry",
     .version_id = 1,
     .minimum_version_id = 1,
-    .minimum_version_id_old = 1,
     .fields = (VMStateField[]) {
         VMSTATE_UINT64(tag, SparcTLBEntry),
         VMSTATE_UINT64(tte, SparcTLBEntry),
@@ -70,7 +65,7 @@ static int get_psr(QEMUFile *f, void *opaque, size_t size,
 }
 
 static int put_psr(QEMUFile *f, void *opaque, size_t size,
-                   const VMStateField *field, QJSON *vmdesc)
+                   const VMStateField *field, JSONWriter *vmdesc)
 {
     SPARCCPU *cpu = opaque;
     CPUSPARCState *env = &cpu->env;
@@ -115,7 +110,6 @@ const VMStateDescription vmstate_sparc_cpu = {
     .name = "cpu",
     .version_id = SPARC_VMSTATE_VER,
     .minimum_version_id = SPARC_VMSTATE_VER,
-    .minimum_version_id_old = SPARC_VMSTATE_VER,
     .pre_save = cpu_pre_save,
     .fields = (VMStateField[]) {
         VMSTATE_UINTTL_ARRAY(env.gregs, SPARCCPU, 8),
@@ -174,7 +168,8 @@ const VMStateDescription vmstate_sparc_cpu = {
         VMSTATE_UINT64_ARRAY(env.bgregs, SPARCCPU, 8),
         VMSTATE_UINT64_ARRAY(env.igregs, SPARCCPU, 8),
         VMSTATE_UINT64_ARRAY(env.mgregs, SPARCCPU, 8),
-        VMSTATE_UINT64(env.fprs, SPARCCPU),
+        VMSTATE_UNUSED(4), /* was unused high half of uint64_t fprs */
+        VMSTATE_UINT32(env.fprs, SPARCCPU),
         VMSTATE_UINT64(env.tick_cmpr, SPARCCPU),
         VMSTATE_UINT64(env.stick_cmpr, SPARCCPU),
         VMSTATE_CPU_TIMER(env.tick, SPARCCPU),

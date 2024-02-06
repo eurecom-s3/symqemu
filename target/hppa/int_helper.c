@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,9 +22,9 @@
 #include "qemu/log.h"
 #include "cpu.h"
 #include "exec/helper-proto.h"
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
+#include "hw/hppa/hppa_hardware.h"
 
-#ifndef CONFIG_USER_ONLY
 static void eval_interrupt(HPPACPU *cpu)
 {
     CPUState *cs = CPU(cpu);
@@ -37,7 +37,7 @@ static void eval_interrupt(HPPACPU *cpu)
 
 /* Each CPU has a word mapped into the GSC bus.  Anything on the GSC bus
  * can write to this word to raise an external interrupt on the target CPU.
- * This includes the system controler (DINO) for regular devices, or
+ * This includes the system controller (DINO) for regular devices, or
  * another CPU for SMP interprocessor interrupts.
  */
 static uint64_t io_eir_read(void *opaque, hwaddr addr, unsigned size)
@@ -88,7 +88,6 @@ void HELPER(write_eiem)(CPUHPPAState *env, target_ureg val)
     eval_interrupt(env_archcpu(env));
     qemu_mutex_unlock_iothread();
 }
-#endif /* !CONFIG_USER_ONLY */
 
 void hppa_cpu_do_interrupt(CPUState *cs)
 {
@@ -100,7 +99,6 @@ void hppa_cpu_do_interrupt(CPUState *cs)
     uint64_t iasq_f = env->iasq_f;
     uint64_t iasq_b = env->iasq_b;
 
-#ifndef CONFIG_USER_ONLY
     target_ureg old_psw;
 
     /* As documented in pa2.0 -- interruption handling.  */
@@ -183,11 +181,17 @@ void hppa_cpu_do_interrupt(CPUState *cs)
     }
 
     /* step 7 */
-    env->iaoq_f = env->cr[CR_IVA] + 32 * i;
+    if (i == EXCP_TOC) {
+        env->iaoq_f = FIRMWARE_START;
+        /* help SeaBIOS and provide iaoq_b and iasq_back in shadow regs */
+        env->gr[24] = env->cr_back[0];
+        env->gr[25] = env->cr_back[1];
+    } else {
+        env->iaoq_f = env->cr[CR_IVA] + 32 * i;
+    }
     env->iaoq_b = env->iaoq_f + 4;
     env->iasq_f = 0;
     env->iasq_b = 0;
-#endif
 
     if (qemu_loglevel_mask(CPU_LOG_INT)) {
         static const char * const names[] = {
@@ -222,6 +226,7 @@ void hppa_cpu_do_interrupt(CPUState *cs)
             [EXCP_PER_INTERRUPT] = "performance monitor interrupt",
             [EXCP_SYSCALL]       = "syscall",
             [EXCP_SYSCALL_LWS]   = "syscall-lws",
+            [EXCP_TOC]           = "TOC (transfer of control)",
         };
         static int count;
         const char *name = NULL;
@@ -248,9 +253,16 @@ void hppa_cpu_do_interrupt(CPUState *cs)
 
 bool hppa_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 {
-#ifndef CONFIG_USER_ONLY
     HPPACPU *cpu = HPPA_CPU(cs);
     CPUHPPAState *env = &cpu->env;
+
+    if (interrupt_request & CPU_INTERRUPT_NMI) {
+        /* Raise TOC (NMI) interrupt */
+        cpu_reset_interrupt(cs, CPU_INTERRUPT_NMI);
+        cs->exception_index = EXCP_TOC;
+        hppa_cpu_do_interrupt(cs);
+        return true;
+    }
 
     /* If interrupts are requested and enabled, raise them.  */
     if ((env->psw & PSW_I) && (interrupt_request & CPU_INTERRUPT_HARD)) {
@@ -258,6 +270,5 @@ bool hppa_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
         hppa_cpu_do_interrupt(cs);
         return true;
     }
-#endif
     return false;
 }

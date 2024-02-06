@@ -16,18 +16,23 @@
  * Authors: Hollis Blanchard <hollisb@us.ibm.com>
  */
 
-/* This file implements emulation of the 32-bit PCI controller found in some
- * 4xx SoCs, such as the 440EP. */
+/*
+ * This file implements emulation of the 32-bit PCI controller found in some
+ * 4xx SoCs, such as the 440EP.
+ */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "qemu/log.h"
+#include "hw/irq.h"
 #include "hw/ppc/ppc.h"
 #include "hw/ppc/ppc4xx.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
-#include "hw/pci/pci.h"
+#include "sysemu/reset.h"
+#include "hw/pci/pci_device.h"
 #include "hw/pci/pci_host.h"
-#include "exec/address-spaces.h"
 #include "trace.h"
+#include "qom/object.h"
 
 struct PCIMasterMap {
     uint32_t la;
@@ -41,29 +46,31 @@ struct PCITargetMap {
     uint32_t la;
 };
 
-#define PPC4xx_PCI_HOST_BRIDGE(obj) \
-    OBJECT_CHECK(PPC4xxPCIState, (obj), TYPE_PPC4xx_PCI_HOST_BRIDGE)
+OBJECT_DECLARE_SIMPLE_TYPE(PPC4xxPCIState, PPC4xx_PCI_HOST)
 
 #define PPC4xx_PCI_NR_PMMS 3
 #define PPC4xx_PCI_NR_PTMS 2
+
+#define PPC4xx_PCI_NUM_DEVS 5
 
 struct PPC4xxPCIState {
     PCIHostState parent_obj;
 
     struct PCIMasterMap pmm[PPC4xx_PCI_NR_PMMS];
     struct PCITargetMap ptm[PPC4xx_PCI_NR_PTMS];
-    qemu_irq irq[4];
+    qemu_irq irq[PPC4xx_PCI_NUM_DEVS];
 
     MemoryRegion container;
     MemoryRegion iomem;
 };
-typedef struct PPC4xxPCIState PPC4xxPCIState;
 
 #define PCIC0_CFGADDR       0x0
 #define PCIC0_CFGDATA       0x4
 
-/* PLB Memory Map (PMM) registers specify which PLB addresses are translated to
- * PCI accesses. */
+/*
+ * PLB Memory Map (PMM) registers specify which PLB addresses are translated to
+ * PCI accesses.
+ */
 #define PCIL0_PMM0LA        0x0
 #define PCIL0_PMM0MA        0x4
 #define PCIL0_PMM0PCILA     0x8
@@ -77,8 +84,10 @@ typedef struct PPC4xxPCIState PPC4xxPCIState;
 #define PCIL0_PMM2PCILA     0x28
 #define PCIL0_PMM2PCIHA     0x2c
 
-/* PCI Target Map (PTM) registers specify which PCI addresses are translated to
- * PLB accesses. */
+/*
+ * PCI Target Map (PTM) registers specify which PCI addresses are translated to
+ * PLB accesses.
+ */
 #define PCIL0_PTM1MS        0x30
 #define PCIL0_PTM1LA        0x34
 #define PCIL0_PTM2MS        0x38
@@ -93,9 +102,10 @@ static void ppc4xx_pci_reg_write4(void *opaque, hwaddr offset,
 {
     struct PPC4xxPCIState *pci = opaque;
 
-    /* We ignore all target attempts at PCI configuration, effectively
-     * assuming a bidirectional 1:1 mapping of PLB and PCI space. */
-
+    /*
+     * We ignore all target attempts at PCI configuration, effectively
+     * assuming a bidirectional 1:1 mapping of PLB and PCI space.
+     */
     switch (offset) {
     case PCIL0_PMM0LA:
         pci->pmm[0].la = value;
@@ -150,8 +160,9 @@ static void ppc4xx_pci_reg_write4(void *opaque, hwaddr offset,
         break;
 
     default:
-        printf("%s: unhandled PCI internal register 0x%lx\n", __func__,
-               (unsigned long)offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                     "%s: unhandled PCI internal register 0x%" HWADDR_PRIx "\n",
+                     __func__, offset);
         break;
     }
 }
@@ -216,8 +227,9 @@ static uint64_t ppc4xx_pci_reg_read4(void *opaque, hwaddr offset,
         break;
 
     default:
-        printf("%s: invalid PCI internal register 0x%lx\n", __func__,
-               (unsigned long)offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: invalid PCI internal register 0x%" HWADDR_PRIx "\n",
+                      __func__, offset);
         value = 0;
     }
 
@@ -238,15 +250,17 @@ static void ppc4xx_pci_reset(void *opaque)
     memset(pci->ptm, 0, sizeof(pci->ptm));
 }
 
-/* On Bamboo, all pins from each slot are tied to a single board IRQ. This
- * may need further refactoring for other boards. */
+/*
+ * On Bamboo, all pins from each slot are tied to a single board IRQ.
+ * This may need further refactoring for other boards.
+ */
 static int ppc4xx_pci_map_irq(PCIDevice *pci_dev, int irq_num)
 {
-    int slot = pci_dev->devfn >> 3;
+    int slot = PCI_SLOT(pci_dev->devfn);
 
     trace_ppc4xx_pci_map_irq(pci_dev->devfn, irq_num, slot);
 
-    return slot - 1;
+    return slot > 0 ? slot - 1 : PPC4xx_PCI_NUM_DEVS - 1;
 }
 
 static void ppc4xx_pci_set_irq(void *opaque, int irq_num, int level)
@@ -254,10 +268,7 @@ static void ppc4xx_pci_set_irq(void *opaque, int irq_num, int level)
     qemu_irq *pci_irqs = opaque;
 
     trace_ppc4xx_pci_set_irq(irq_num);
-    if (irq_num < 0) {
-        fprintf(stderr, "%s: PCI irq %d\n", __func__, irq_num);
-        return;
-    }
+    assert(irq_num >= 0 && irq_num < PPC4xx_PCI_NUM_DEVS);
     qemu_set_irq(pci_irqs[irq_num], level);
 }
 
@@ -310,7 +321,7 @@ static void ppc4xx_pcihost_realize(DeviceState *dev, Error **errp)
     int i;
 
     h = PCI_HOST_BRIDGE(dev);
-    s = PPC4xx_PCI_HOST_BRIDGE(dev);
+    s = PPC4xx_PCI_HOST(dev);
 
     for (i = 0; i < ARRAY_SIZE(s->irq); i++) {
         sysbus_init_irq(sbd, &s->irq[i]);
@@ -318,10 +329,11 @@ static void ppc4xx_pcihost_realize(DeviceState *dev, Error **errp)
 
     b = pci_register_root_bus(dev, NULL, ppc4xx_pci_set_irq,
                               ppc4xx_pci_map_irq, s->irq, get_system_memory(),
-                              get_system_io(), 0, 4, TYPE_PCI_BUS);
+                              get_system_io(), 0, ARRAY_SIZE(s->irq),
+                              TYPE_PCI_BUS);
     h->bus = b;
 
-    pci_create_simple(b, 0, "ppc4xx-host-bridge");
+    pci_create_simple(b, 0, TYPE_PPC4xx_HOST_BRIDGE);
 
     /* XXX split into 2 memory regions, one for config space, one for regs */
     memory_region_init(&s->container, OBJECT(s), "pci-container", PCI_ALL_SIZE);
@@ -355,7 +367,7 @@ static void ppc4xx_host_bridge_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo ppc4xx_host_bridge_info = {
-    .name          = "ppc4xx-host-bridge",
+    .name          = TYPE_PPC4xx_HOST_BRIDGE,
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIDevice),
     .class_init    = ppc4xx_host_bridge_class_init,
@@ -374,7 +386,7 @@ static void ppc4xx_pcihost_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo ppc4xx_pcihost_info = {
-    .name          = TYPE_PPC4xx_PCI_HOST_BRIDGE,
+    .name          = TYPE_PPC4xx_PCI_HOST,
     .parent        = TYPE_PCI_HOST_BRIDGE,
     .instance_size = sizeof(PPC4xxPCIState),
     .class_init    = ppc4xx_pcihost_class_init,

@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,9 +22,9 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
-#include "cpu.h"
 #include "exec/exec-all.h"
 #include "hw/misc/mips_itu.h"
+#include "hw/qdev-properties.h"
 
 #define ITC_TAG_ADDRSPACE_SZ (ITC_ADDRESSMAP_NUM * 8)
 /* Initialize as 4kB area to fit all 32 cells with default 128B grain.
@@ -93,10 +93,10 @@ void itc_reconfigure(MIPSITUState *tag)
     uint64_t size = (1 * KiB) + (am[1] & ITC_AM1_ADDR_MASK_MASK);
     bool is_enabled = (am[0] & ITC_AM0_EN_MASK) != 0;
 
-    if (tag->saar_present) {
-        address = ((*(uint64_t *) tag->saar) & 0xFFFFFFFFE000ULL) << 4;
-        size = 1ULL << ((*(uint64_t *) tag->saar >> 1) & 0x1f);
-        is_enabled = *(uint64_t *) tag->saar & 1;
+    if (tag->saar) {
+        address = (tag->saar[0] & 0xFFFFFFFFE000ULL) << 4;
+        size = 1ULL << ((tag->saar[0] >> 1) & 0x1f);
+        is_enabled = tag->saar[0] & 1;
     }
 
     memory_region_transaction_begin();
@@ -157,7 +157,7 @@ static inline ITCView get_itc_view(hwaddr addr)
 static inline int get_cell_stride_shift(const MIPSITUState *s)
 {
     /* Minimum interval (for EntryGain = 0) is 128 B */
-    if (s->saar_present) {
+    if (s->saar) {
         return 7 + ((s->icr0 >> ITC_ICR0_BLK_GRAIN) &
                     ITC_ICR0_BLK_GRAIN_MASK);
     } else {
@@ -189,7 +189,8 @@ static void wake_blocked_threads(ITCStorageCell *c)
     c->blocked_threads = 0;
 }
 
-static void QEMU_NORETURN block_thread_and_exit(ITCStorageCell *c)
+static G_NORETURN
+void block_thread_and_exit(ITCStorageCell *c)
 {
     c->blocked_threads |= 1ULL << current_cpu->cpu_index;
     current_cpu->halted = 1;
@@ -514,6 +515,7 @@ static void mips_itu_init(Object *obj)
 static void mips_itu_realize(DeviceState *dev, Error **errp)
 {
     MIPSITUState *s = MIPS_ITU(dev);
+    CPUMIPSState *env;
 
     if (s->num_fifo > ITC_FIFO_NUM_MAX) {
         error_setg(errp, "Exceed maximum number of FIFO cells: %d",
@@ -525,6 +527,15 @@ static void mips_itu_realize(DeviceState *dev, Error **errp)
                    s->num_semaphores);
         return;
     }
+    if (!s->cpu0) {
+        error_setg(errp, "Missing 'cpu[0]' property");
+        return;
+    }
+
+    env = &s->cpu0->env;
+    if (env->saarp) {
+        s->saar = env->CP0_SAAR;
+    }
 
     s->cell = g_new(ITCStorageCell, get_num_cells(s));
 }
@@ -533,8 +544,8 @@ static void mips_itu_reset(DeviceState *dev)
 {
     MIPSITUState *s = MIPS_ITU(dev);
 
-    if (s->saar_present) {
-        *(uint64_t *) s->saar = 0x11 << 1;
+    if (s->saar) {
+        s->saar[0] = 0x11 << 1;
         s->icr0 = get_num_cells(s) << ITC_ICR0_CELL_NUM;
     } else {
         s->ITCAddressMap[0] = 0;
@@ -548,11 +559,11 @@ static void mips_itu_reset(DeviceState *dev)
 }
 
 static Property mips_itu_properties[] = {
-    DEFINE_PROP_INT32("num-fifo", MIPSITUState, num_fifo,
+    DEFINE_PROP_UINT32("num-fifo", MIPSITUState, num_fifo,
                       ITC_FIFO_NUM_MAX),
-    DEFINE_PROP_INT32("num-semaphores", MIPSITUState, num_semaphores,
+    DEFINE_PROP_UINT32("num-semaphores", MIPSITUState, num_semaphores,
                       ITC_SEMAPH_NUM_MAX),
-    DEFINE_PROP_BOOL("saar-present", MIPSITUState, saar_present, false),
+    DEFINE_PROP_LINK("cpu[0]", MIPSITUState, cpu0, TYPE_MIPS_CPU, MIPSCPU *),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -560,7 +571,7 @@ static void mips_itu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->props = mips_itu_properties;
+    device_class_set_props(dc, mips_itu_properties);
     dc->realize = mips_itu_realize;
     dc->reset = mips_itu_reset;
 }

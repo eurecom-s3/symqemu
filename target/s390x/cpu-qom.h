@@ -20,19 +20,23 @@
 #ifndef QEMU_S390_CPU_QOM_H
 #define QEMU_S390_CPU_QOM_H
 
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
+#include "qom/object.h"
 
 #define TYPE_S390_CPU "s390x-cpu"
 
-#define S390_CPU_CLASS(klass) \
-    OBJECT_CLASS_CHECK(S390CPUClass, (klass), TYPE_S390_CPU)
-#define S390_CPU(obj) \
-    OBJECT_CHECK(S390CPU, (obj), TYPE_S390_CPU)
-#define S390_CPU_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(S390CPUClass, (obj), TYPE_S390_CPU)
+OBJECT_DECLARE_CPU_TYPE(S390CPU, S390CPUClass, S390_CPU)
 
 typedef struct S390CPUModel S390CPUModel;
 typedef struct S390CPUDef S390CPUDef;
+
+typedef struct CPUArchState CPUS390XState;
+
+typedef enum cpu_reset_type {
+    S390_CPU_RESET_NORMAL,
+    S390_CPU_RESET_INITIAL,
+    S390_CPU_RESET_CLEAR,
+} cpu_reset_type;
 
 /**
  * S390CPUClass:
@@ -44,7 +48,7 @@ typedef struct S390CPUDef S390CPUDef;
  *
  * An S/390 CPU model.
  */
-typedef struct S390CPUClass {
+struct S390CPUClass {
     /*< private >*/
     CPUClass parent_class;
     /*< public >*/
@@ -55,13 +59,9 @@ typedef struct S390CPUClass {
     const char *desc;
 
     DeviceRealize parent_realize;
-    void (*parent_reset)(CPUState *cpu);
+    DeviceReset parent_reset;
     void (*load_normal)(CPUState *cpu);
-    void (*cpu_reset)(CPUState *cpu);
-    void (*initial_cpu_reset)(CPUState *cpu);
-} S390CPUClass;
-
-typedef struct S390CPU S390CPU;
-typedef struct CPUS390XState CPUS390XState;
+    void (*reset)(CPUState *cpu, cpu_reset_type type);
+};
 
 #endif

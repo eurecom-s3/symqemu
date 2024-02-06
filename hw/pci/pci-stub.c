@@ -19,21 +19,23 @@
  */
 
 #include "qemu/osdep.h"
-#include "sysemu/sysemu.h"
 #include "monitor/monitor.h"
-#include "qapi/error.h"
-#include "qapi/qapi-commands-misc.h"
-#include "qapi/qmp/qerror.h"
+#include "monitor/hmp.h"
+#include "qapi/qapi-commands-pci.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
+#include "hw/pci/msix.h"
 
 bool msi_nonbroken;
 bool pci_available;
 
 PciInfoList *qmp_query_pci(Error **errp)
 {
-    error_setg(errp, QERR_UNSUPPORTED);
     return NULL;
+}
+
+void hmp_info_pci(Monitor *mon, const QDict *qdict)
+{
 }
 
 void hmp_pcie_aer_inject_error(Monitor *mon, const QDict *qdict)
@@ -61,6 +63,32 @@ bool msi_enabled(const PCIDevice *dev)
 }
 
 void msi_notify(PCIDevice *dev, unsigned int vector)
+{
+    g_assert_not_reached();
+}
+
+/* Required by target/i386/kvm.c */
+bool msi_is_masked(const PCIDevice *dev, unsigned vector)
+{
+    g_assert_not_reached();
+}
+
+MSIMessage msi_get_message(PCIDevice *dev, unsigned int vector)
+{
+    g_assert_not_reached();
+}
+
+int msix_enabled(PCIDevice *dev)
+{
+    return false;
+}
+
+bool msix_is_masked(PCIDevice *dev, unsigned vector)
+{
+    g_assert_not_reached();
+}
+
+MSIMessage msix_get_message(PCIDevice *dev, unsigned int vector)
 {
     g_assert_not_reached();
 }

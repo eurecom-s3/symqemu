@@ -19,7 +19,11 @@
 #include "exec/helper-proto.h"
 #include "exec/cpu_ldst.h"
 #include "qemu/qemu-print.h"
-#include "tcg.h"
+#include "tcg/tcg.h"
+
+#define HELPER_H  "accel/tcg/tcg-runtime-sym.h"
+#include "exec/helper-info.c.inc"
+#undef  HELPER_H
 
 /* Include the symbolic backend, using void* as expression type. */
 

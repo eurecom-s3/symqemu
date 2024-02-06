@@ -16,6 +16,10 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/char/nrf51_uart.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
+#include "migration/vmstate.h"
 #include "trace.h"
 
 static void nrf51_uart_update_irq(NRF51UARTState *s)
@@ -71,7 +75,7 @@ static uint64_t uart_read(void *opaque, hwaddr addr, unsigned int size)
     return r;
 }
 
-static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+static gboolean uart_transmit(void *do_not_use, GIOCondition cond, void *opaque)
 {
     NRF51UARTState *s = NRF51_UART(opaque);
     int r;
@@ -242,7 +246,7 @@ static int uart_can_receive(void *opaque)
     return s->rx_started ? (UART_FIFO_LENGTH - s->rx_fifo_len) : 0;
 }
 
-static void uart_event(void *opaque, int event)
+static void uart_event(void *opaque, QEMUChrEvent event)
 {
     NRF51UARTState *s = NRF51_UART(opaque);
 
@@ -311,7 +315,7 @@ static void nrf51_uart_class_init(ObjectClass *klass, void *data)
 
     dc->reset = nrf51_uart_reset;
     dc->realize = nrf51_uart_realize;
-    dc->props = nrf51_uart_properties;
+    device_class_set_props(dc, nrf51_uart_properties);
     dc->vmsd = &nrf51_uart_vmstate;
 }
 

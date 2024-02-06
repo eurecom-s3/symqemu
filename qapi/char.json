@@ -1,4 +1,5 @@
 # -*- Mode: Python -*-
+# vim: filetype=python
 #
 
 ##
@@ -16,14 +17,14 @@
 #
 # @filename: the filename of the character device
 #
-# @frontend-open: shows whether the frontend device attached to this backend
-#                 (eg. with the chardev=... option) is in open or closed state
-#                 (since 2.1)
+# @frontend-open: shows whether the frontend device attached to this
+#     backend (e.g. with the chardev=... option) is in open or closed
+#     state (since 2.1)
 #
-# Notes: @filename is encoded using the QEMU command line character device
-#        encoding.  See the QEMU man page for details.
+# Notes: @filename is encoded using the QEMU command line character
+#     device encoding.  See the QEMU man page for details.
 #
-# Since: 0.14.0
+# Since: 0.14
 ##
 { 'struct': 'ChardevInfo',
   'data': { 'label': 'str',
@@ -37,7 +38,7 @@
 #
 # Returns: a list of @ChardevInfo
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Example:
 #
@@ -46,12 +47,12 @@
 #       "return": [
 #          {
 #             "label": "charchannel0",
-#             "filename": "unix:/var/lib/libvirt/qemu/seabios.rhel6.agent,server",
+#             "filename": "unix:/var/lib/libvirt/qemu/seabios.rhel6.agent,server=on",
 #             "frontend-open": false
 #          },
 #          {
 #             "label": "charmonitor",
-#             "filename": "unix:/var/lib/libvirt/qemu/seabios.rhel6.monitor,server",
+#             "filename": "unix:/var/lib/libvirt/qemu/seabios.rhel6.monitor,server=on",
 #             "frontend-open": true
 #          },
 #          {
@@ -61,7 +62,6 @@
 #          }
 #       ]
 #    }
-#
 ##
 { 'command': 'query-chardev', 'returns': ['ChardevInfo'],
   'allow-preconfig': true }
@@ -105,7 +105,6 @@
 #          }
 #       ]
 #    }
-#
 ##
 { 'command': 'query-chardev-backends', 'returns': ['ChardevBackendInfo'] }
 
@@ -133,11 +132,12 @@
 # @data: data to write
 #
 # @format: data encoding (default 'utf8').
-#          - base64: data must be base64 encoded text.  Its binary
-#            decoding gets written.
-#          - utf8: data's UTF-8 encoding is written
-#          - data itself is always Unicode regardless of format, like
-#            any other string.
+#
+#     - base64: data must be base64 encoded text.  Its binary decoding
+#       gets written.
+#     - utf8: data's UTF-8 encoding is written
+#     - data itself is always Unicode regardless of format, like any
+#       other string.
 #
 # Returns: Nothing on success
 #
@@ -150,7 +150,6 @@
 #                     "data": "abcdefgh",
 #                     "format": "utf8" } }
 # <- { "return": {} }
-#
 ##
 { 'command': 'ringbuf-write',
   'data': { 'device': 'str',
@@ -167,14 +166,14 @@
 # @size: how many bytes to read at most
 #
 # @format: data encoding (default 'utf8').
-#          - base64: the data read is returned in base64 encoding.
-#          - utf8: the data read is interpreted as UTF-8.
-#            Bug: can screw up when the buffer contains invalid UTF-8
-#            sequences, NUL characters, after the ring buffer lost
-#            data, and when reading stops because the size limit is
-#            reached.
-#          - The return value is always Unicode regardless of format,
-#            like any other string.
+#
+#     - base64: the data read is returned in base64 encoding.
+#     - utf8: the data read is interpreted as UTF-8.
+#       Bug: can screw up when the buffer contains invalid UTF-8
+#       sequences, NUL characters, after the ring buffer lost data,
+#       and when reading stops because the size limit is reached.
+#     - The return value is always Unicode regardless of format, like
+#       any other string.
 #
 # Returns: data read from the device
 #
@@ -187,7 +186,6 @@
 #                     "size": 1000,
 #                     "format": "utf8" } }
 # <- { "return": "abcdefgh" }
-#
 ##
 { 'command': 'ringbuf-read',
   'data': {'device': 'str', 'size': 'int', '*format': 'DataFormat'},
@@ -199,8 +197,9 @@
 # Configuration shared across all chardev backends
 #
 # @logfile: The name of a logfile to save output
-# @logappend: true to append instead of truncate
-#             (default to false to truncate)
+#
+# @logappend: true to append instead of truncate (default to false to
+#     truncate)
 #
 # Since: 2.6
 ##
@@ -213,10 +212,12 @@
 #
 # Configuration info for file chardevs.
 #
-# @in:  The name of the input file
+# @in: The name of the input file
+#
 # @out: The name of the output file
-# @append: Open the file in append mode (default false to
-#          truncate) (Since 2.6)
+#
+# @append: Open the file in append mode (default false to truncate)
+#     (Since 2.6)
 #
 # Since: 1.4
 ##
@@ -231,8 +232,8 @@
 #
 # Configuration info for device and pipe chardevs.
 #
-# @device: The name of the special file for the device,
-#          i.e. /dev/ttyS0 on Unix or COM1: on Windows
+# @device: The name of the special file for the device, i.e.
+#     /dev/ttyS0 on Unix or COM1: on Windows
 #
 # Since: 1.4
 ##
@@ -245,28 +246,36 @@
 #
 # Configuration info for (stream) socket chardevs.
 #
-# @addr: socket address to listen on (server=true)
-#        or connect to (server=false)
+# @addr: socket address to listen on (server=true) or connect to
+#     (server=false)
+#
 # @tls-creds: the ID of the TLS credentials object (since 2.6)
+#
 # @tls-authz: the ID of the QAuthZ authorization object against which
-#             the client's x509 distinguished name will be validated. This
-#             object is only resolved at time of use, so can be deleted
-#             and recreated on the fly while the chardev server is active.
-#             If missing, it will default to denying access (since 4.0)
+#     the client's x509 distinguished name will be validated.  This
+#     object is only resolved at time of use, so can be deleted and
+#     recreated on the fly while the chardev server is active.  If
+#     missing, it will default to denying access (since 4.0)
+#
 # @server: create server socket (default: true)
-# @wait: wait for incoming connection on server
-#        sockets (default: false).
+#
+# @wait: wait for incoming connection on server sockets (default:
+#     false). Silently ignored with server: false.  This use is
+#     deprecated.
+#
 # @nodelay: set TCP_NODELAY socket option (default: false)
-# @telnet: enable telnet protocol on server
-#          sockets (default: false)
-# @tn3270: enable tn3270 protocol on server
-#          sockets (default: false) (Since: 2.10)
-# @websocket: enable websocket protocol on server
-#           sockets (default: false) (Since: 3.1)
-# @reconnect: For a client socket, if a socket is disconnected,
-#          then attempt a reconnect after the given number of seconds.
-#          Setting this to zero disables this function. (default: 0)
-#          (Since: 2.2)
+#
+# @telnet: enable telnet protocol on server sockets (default: false)
+#
+# @tn3270: enable tn3270 protocol on server sockets (default: false)
+#     (Since: 2.10)
+#
+# @websocket: enable websocket protocol on server sockets
+#     (default: false) (Since: 3.1)
+#
+# @reconnect: For a client socket, if a socket is disconnected, then
+#     attempt a reconnect after the given number of seconds.  Setting
+#     this to zero disables this function.  (default: 0) (Since: 2.2)
 #
 # Since: 1.4
 ##
@@ -289,6 +298,7 @@
 # Configuration info for datagram socket chardevs.
 #
 # @remote: remote address
+#
 # @local: local address
 #
 # Since: 1.5
@@ -316,16 +326,14 @@
 #
 # Configuration info for stdio chardevs.
 #
-# @signal: Allow signals (such as SIGINT triggered by ^C)
-#          be delivered to qemu.  Default: true in -nographic mode,
-#          false otherwise.
+# @signal: Allow signals (such as SIGINT triggered by ^C) be delivered
+#     to qemu.  Default: true.
 #
 # Since: 1.5
 ##
 { 'struct': 'ChardevStdio',
   'data': { '*signal': 'bool' },
   'base': 'ChardevCommon' }
-
 
 ##
 # @ChardevSpiceChannel:
@@ -339,7 +347,7 @@
 { 'struct': 'ChardevSpiceChannel',
   'data': { 'type': 'str' },
   'base': 'ChardevCommon',
-  'if': 'defined(CONFIG_SPICE)' }
+  'if': 'CONFIG_SPICE' }
 
 ##
 # @ChardevSpicePort:
@@ -353,17 +361,34 @@
 { 'struct': 'ChardevSpicePort',
   'data': { 'fqdn': 'str' },
   'base': 'ChardevCommon',
-  'if': 'defined(CONFIG_SPICE)' }
+  'if': 'CONFIG_SPICE' }
+
+##
+# @ChardevDBus:
+#
+# Configuration info for DBus chardevs.
+#
+# @name: name of the channel (following docs/spice-port-fqdn.txt)
+#
+# Since: 7.0
+##
+{ 'struct': 'ChardevDBus',
+  'data': { 'name': 'str' },
+  'base': 'ChardevCommon',
+  'if': 'CONFIG_DBUS_DISPLAY' }
 
 ##
 # @ChardevVC:
 #
 # Configuration info for virtual console chardevs.
 #
-# @width:  console width,  in pixels
+# @width: console width, in pixels
+#
 # @height: console height, in pixels
-# @cols:   console width,  in chars
-# @rows:   console height, in chars
+#
+# @cols: console width, in chars
+#
+# @rows: console height, in chars
 #
 # Since: 1.5
 ##
@@ -388,44 +413,237 @@
   'base': 'ChardevCommon' }
 
 ##
+# @ChardevQemuVDAgent:
+#
+# Configuration info for qemu vdagent implementation.
+#
+# @mouse: enable/disable mouse, default is enabled.
+#
+# @clipboard: enable/disable clipboard, default is disabled.
+#
+# Since: 6.1
+##
+{ 'struct': 'ChardevQemuVDAgent',
+  'data': { '*mouse': 'bool',
+            '*clipboard': 'bool' },
+  'base': 'ChardevCommon',
+  'if': 'CONFIG_SPICE_PROTOCOL' }
+
+##
+# @ChardevBackendKind:
+#
+# @pipe: Since 1.5
+#
+# @udp: Since 1.5
+#
+# @mux: Since 1.5
+#
+# @msmouse: Since 1.5
+#
+# @wctablet: Since 2.9
+#
+# @braille: Since 1.5
+#
+# @testdev: Since 2.2
+#
+# @stdio: Since 1.5
+#
+# @console: Since 1.5
+#
+# @spicevmc: Since 1.5
+#
+# @spiceport: Since 1.5
+#
+# @qemu-vdagent: Since 6.1
+#
+# @dbus: Since 7.0
+#
+# @vc: v1.5
+#
+# @ringbuf: Since 1.6
+#
+# @memory: Since 1.5
+#
+# Since: 1.4
+##
+{ 'enum': 'ChardevBackendKind',
+  'data': [ 'file',
+            'serial',
+            'parallel',
+            'pipe',
+            'socket',
+            'udp',
+            'pty',
+            'null',
+            'mux',
+            'msmouse',
+            'wctablet',
+            'braille',
+            'testdev',
+            'stdio',
+            'console',
+            { 'name': 'spicevmc', 'if': 'CONFIG_SPICE' },
+            { 'name': 'spiceport', 'if': 'CONFIG_SPICE' },
+            { 'name': 'qemu-vdagent', 'if': 'CONFIG_SPICE_PROTOCOL' },
+            { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' },
+            'vc',
+            'ringbuf',
+            # next one is just for compatibility
+            'memory' ] }
+
+##
+# @ChardevFileWrapper:
+#
+# Since: 1.4
+##
+{ 'struct': 'ChardevFileWrapper',
+  'data': { 'data': 'ChardevFile' } }
+
+##
+# @ChardevHostdevWrapper:
+#
+# Since: 1.4
+##
+{ 'struct': 'ChardevHostdevWrapper',
+  'data': { 'data': 'ChardevHostdev' } }
+
+##
+# @ChardevSocketWrapper:
+#
+# Since: 1.4
+##
+{ 'struct': 'ChardevSocketWrapper',
+  'data': { 'data': 'ChardevSocket' } }
+
+##
+# @ChardevUdpWrapper:
+#
+# Since: 1.5
+##
+{ 'struct': 'ChardevUdpWrapper',
+  'data': { 'data': 'ChardevUdp' } }
+
+##
+# @ChardevCommonWrapper:
+#
+# Since: 2.6
+##
+{ 'struct': 'ChardevCommonWrapper',
+  'data': { 'data': 'ChardevCommon' } }
+
+##
+# @ChardevMuxWrapper:
+#
+# Since: 1.5
+##
+{ 'struct': 'ChardevMuxWrapper',
+  'data': { 'data': 'ChardevMux' } }
+
+##
+# @ChardevStdioWrapper:
+#
+# Since: 1.5
+##
+{ 'struct': 'ChardevStdioWrapper',
+  'data': { 'data': 'ChardevStdio' } }
+
+##
+# @ChardevSpiceChannelWrapper:
+#
+# Since: 1.5
+##
+{ 'struct': 'ChardevSpiceChannelWrapper',
+  'data': { 'data': 'ChardevSpiceChannel' },
+  'if': 'CONFIG_SPICE' }
+
+##
+# @ChardevSpicePortWrapper:
+#
+# Since: 1.5
+##
+{ 'struct': 'ChardevSpicePortWrapper',
+  'data': { 'data': 'ChardevSpicePort' },
+  'if': 'CONFIG_SPICE' }
+
+##
+# @ChardevQemuVDAgentWrapper:
+#
+# Since: 6.1
+##
+{ 'struct': 'ChardevQemuVDAgentWrapper',
+  'data': { 'data': 'ChardevQemuVDAgent' },
+  'if': 'CONFIG_SPICE_PROTOCOL' }
+
+##
+# @ChardevDBusWrapper:
+#
+# Since: 7.0
+##
+{ 'struct': 'ChardevDBusWrapper',
+  'data': { 'data': 'ChardevDBus' },
+  'if': 'CONFIG_DBUS_DISPLAY' }
+
+##
+# @ChardevVCWrapper:
+#
+# Since: 1.5
+##
+{ 'struct': 'ChardevVCWrapper',
+  'data': { 'data': 'ChardevVC' } }
+
+##
+# @ChardevRingbufWrapper:
+#
+# Since: 1.5
+##
+{ 'struct': 'ChardevRingbufWrapper',
+  'data': { 'data': 'ChardevRingbuf' } }
+
+##
 # @ChardevBackend:
 #
 # Configuration info for the new chardev backend.
 #
-# Since: 1.4 (testdev since 2.2, wctablet since 2.9)
+# Since: 1.4
 ##
 { 'union': 'ChardevBackend',
-  'data': { 'file': 'ChardevFile',
-            'serial': 'ChardevHostdev',
-            'parallel': 'ChardevHostdev',
-            'pipe': 'ChardevHostdev',
-            'socket': 'ChardevSocket',
-            'udp': 'ChardevUdp',
-            'pty': 'ChardevCommon',
-            'null': 'ChardevCommon',
-            'mux': 'ChardevMux',
-            'msmouse': 'ChardevCommon',
-            'wctablet': 'ChardevCommon',
-            'braille': 'ChardevCommon',
-            'testdev': 'ChardevCommon',
-            'stdio': 'ChardevStdio',
-            'console': 'ChardevCommon',
-            'spicevmc': { 'type': 'ChardevSpiceChannel',
-                          'if': 'defined(CONFIG_SPICE)' },
-            'spiceport': { 'type': 'ChardevSpicePort',
-                           'if': 'defined(CONFIG_SPICE)' },
-            'vc': 'ChardevVC',
-            'ringbuf': 'ChardevRingbuf',
+  'base': { 'type': 'ChardevBackendKind' },
+  'discriminator': 'type',
+  'data': { 'file': 'ChardevFileWrapper',
+            'serial': 'ChardevHostdevWrapper',
+            'parallel': 'ChardevHostdevWrapper',
+            'pipe': 'ChardevHostdevWrapper',
+            'socket': 'ChardevSocketWrapper',
+            'udp': 'ChardevUdpWrapper',
+            'pty': 'ChardevCommonWrapper',
+            'null': 'ChardevCommonWrapper',
+            'mux': 'ChardevMuxWrapper',
+            'msmouse': 'ChardevCommonWrapper',
+            'wctablet': 'ChardevCommonWrapper',
+            'braille': 'ChardevCommonWrapper',
+            'testdev': 'ChardevCommonWrapper',
+            'stdio': 'ChardevStdioWrapper',
+            'console': 'ChardevCommonWrapper',
+            'spicevmc': { 'type': 'ChardevSpiceChannelWrapper',
+                          'if': 'CONFIG_SPICE' },
+            'spiceport': { 'type': 'ChardevSpicePortWrapper',
+                           'if': 'CONFIG_SPICE' },
+            'qemu-vdagent': { 'type': 'ChardevQemuVDAgentWrapper',
+                              'if': 'CONFIG_SPICE_PROTOCOL' },
+            'dbus': { 'type': 'ChardevDBusWrapper',
+                      'if': 'CONFIG_DBUS_DISPLAY' },
+            'vc': 'ChardevVCWrapper',
+            'ringbuf': 'ChardevRingbufWrapper',
             # next one is just for compatibility
-            'memory': 'ChardevRingbuf' } }
+            'memory': 'ChardevRingbufWrapper' } }
 
 ##
 # @ChardevReturn:
 #
 # Return info about the chardev backend just created.
 #
-# @pty: name of the slave pseudoterminal device, present if
-#       and only if a chardev of type 'pty' was created
+# @pty: name of the slave pseudoterminal device, present if and only
+#     if a chardev of type 'pty' was created
 #
 # Since: 1.4
 ##
@@ -438,13 +656,14 @@
 # Add a character device backend
 #
 # @id: the chardev's ID, must be unique
+#
 # @backend: backend type and parameters
 #
 # Returns: ChardevReturn.
 #
 # Since: 1.4
 #
-# Example:
+# Examples:
 #
 # -> { "execute" : "chardev-add",
 #      "arguments" : { "id" : "foo",
@@ -461,7 +680,6 @@
 #      "arguments" : { "id" : "baz",
 #                      "backend" : { "type" : "pty", "data" : {} } } }
 # <- { "return": { "pty" : "/dev/pty/42" } }
-#
 ##
 { 'command': 'chardev-add',
   'data': { 'id': 'str',
@@ -474,13 +692,14 @@
 # Change a character device backend
 #
 # @id: the chardev's ID, must exist
+#
 # @backend: new backend type and parameters
 #
 # Returns: ChardevReturn.
 #
 # Since: 2.10
 #
-# Example:
+# Examples:
 #
 # -> { "execute" : "chardev-change",
 #      "arguments" : { "id" : "baz",
@@ -502,7 +721,6 @@
 #                  "server" : true,
 #                  "wait" : false }}}}
 # <- {"return": {}}
-#
 ##
 { 'command': 'chardev-change',
   'data': { 'id': 'str',
@@ -524,7 +742,6 @@
 #
 # -> { "execute": "chardev-remove", "arguments": { "id" : "foo" } }
 # <- { "return": {} }
-#
 ##
 { 'command': 'chardev-remove',
   'data': { 'id': 'str' } }
@@ -544,7 +761,6 @@
 #
 # -> { "execute": "chardev-send-break", "arguments": { "id" : "foo" } }
 # <- { "return": {} }
-#
 ##
 { 'command': 'chardev-send-break',
   'data': { 'id': 'str' } }
@@ -558,6 +774,8 @@
 #
 # @open: true if the guest has opened the virtio-serial port
 #
+# Note: This event is rate-limited.
+#
 # Since: 2.1
 #
 # Example:
@@ -565,7 +783,6 @@
 # <- { "event": "VSERPORT_CHANGE",
 #      "data": { "id": "channel0", "open": true },
 #      "timestamp": { "seconds": 1401385907, "microseconds": 422329 } }
-#
 ##
 { 'event': 'VSERPORT_CHANGE',
   'data': { 'id': 'str',

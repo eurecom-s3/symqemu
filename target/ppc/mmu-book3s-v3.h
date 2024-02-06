@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -21,6 +21,7 @@
 #define PPC_MMU_BOOK3S_V3_H
 
 #include "mmu-hash64.h"
+#include "mmu-books.h"
 
 #ifndef CONFIG_USER_ONLY
 
@@ -49,6 +50,21 @@ struct prtb_entry {
 
 #ifdef TARGET_PPC64
 
+/*
+ * tlbie[l] helper flags
+ *
+ * RIC, PRS, R and local are passed as flags in the last argument.
+ */
+#define TLBIE_F_RIC_SHIFT       0
+#define TLBIE_F_PRS_SHIFT       2
+#define TLBIE_F_R_SHIFT         3
+#define TLBIE_F_LOCAL_SHIFT     4
+
+#define TLBIE_F_RIC_MASK        (3 << TLBIE_F_RIC_SHIFT)
+#define TLBIE_F_PRS             (1 << TLBIE_F_PRS_SHIFT)
+#define TLBIE_F_R               (1 << TLBIE_F_R_SHIFT)
+#define TLBIE_F_LOCAL           (1 << TLBIE_F_LOCAL_SHIFT)
+
 static inline bool ppc64_use_proc_tbl(PowerPCCPU *cpu)
 {
     return !!(cpu->env.spr[SPR_LPCR] & LPCR_UPRT);
@@ -66,11 +82,6 @@ static inline bool ppc64_v3_radix(PowerPCCPU *cpu)
 {
     return !!(cpu->env.spr[SPR_LPCR] & LPCR_HR);
 }
-
-hwaddr ppc64_v3_get_phys_page_debug(PowerPCCPU *cpu, vaddr eaddr);
-
-int ppc64_v3_handle_mmu_fault(PowerPCCPU *cpu, vaddr eaddr, int rwx,
-                              int mmu_idx);
 
 static inline hwaddr ppc_hash64_hpt_base(PowerPCCPU *cpu)
 {

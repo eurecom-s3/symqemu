@@ -50,12 +50,33 @@ All these migration protocols use the same infrastructure to
 save/restore state devices.  This infrastructure is shared with the
 savevm/loadvm functionality.
 
+Debugging
+=========
+
+The migration stream can be analyzed thanks to ``scripts/analyze-migration.py``.
+
+Example usage:
+
+.. code-block:: shell
+
+  $ qemu-system-x86_64 -display none -monitor stdio
+  (qemu) migrate "exec:cat > mig"
+  (qemu) q
+  $ ./scripts/analyze-migration.py -f mig
+  {
+    "ram (3)": {
+        "section sizes": {
+            "pc.ram": "0x0000000008000000",
+  ...
+
+See also ``analyze-migration.py -h`` help for more options.
+
 Common infrastructure
 =====================
 
 The files, sockets or fd's that carry the migration stream are abstracted by
-the  ``QEMUFile`` type (see `migration/qemu-file.h`).  In most cases this
-is connected to a subtype of ``QIOChannel`` (see `io/`).
+the  ``QEMUFile`` type (see ``migration/qemu-file.h``).  In most cases this
+is connected to a subtype of ``QIOChannel`` (see ``io/``).
 
 
 Saving the state of one device
@@ -145,14 +166,14 @@ An example (from hw/input/pckbd.c)
   };
 
 We are declaring the state with name "pckbd".
-The `version_id` is 3, and the fields are 4 uint8_t in a KBDState structure.
+The ``version_id`` is 3, and the fields are 4 uint8_t in a KBDState structure.
 We registered this with:
 
 .. code:: c
 
     vmstate_register(NULL, 0, &vmstate_kbd, s);
 
-For devices that are `qdev` based, we can register the device in the class
+For devices that are ``qdev`` based, we can register the device in the class
 init function:
 
 .. code:: c
@@ -183,16 +204,15 @@ another to load the state back.
 
 .. code:: c
 
-  int register_savevm_live(DeviceState *dev,
-                           const char *idstr,
+  int register_savevm_live(const char *idstr,
                            int instance_id,
                            int version_id,
                            SaveVMHandlers *ops,
                            void *opaque);
 
-Two functions in the ``ops`` structure are the `save_state`
-and `load_state` functions.  Notice that `load_state` receives a version_id
-parameter to know what state format is receiving.  `save_state` doesn't
+Two functions in the ``ops`` structure are the ``save_state``
+and ``load_state`` functions.  Notice that ``load_state`` receives a version_id
+parameter to know what state format is receiving.  ``save_state`` doesn't
 have a version_id parameter because it always uses the latest version.
 
 Note that because the VMState macros still save the data in a raw
@@ -314,7 +334,7 @@ For example:
 
    a) Add a new property using ``DEFINE_PROP_BOOL`` - e.g. support-foo and
       default it to true.
-   b) Add an entry to the ``HW_COMPAT_`` for the previous version that sets
+   b) Add an entry to the ``hw_compat_`` for the previous version that sets
       the property to false.
    c) Add a static bool  support_foo function that tests the property.
    d) Add a subsection with a .needed set to the support_foo function
@@ -365,23 +385,17 @@ migration of a device, and using them breaks backward-migration
 compatibility; in general most changes can be made by adding Subsections
 (see above) or _TEST macros (see above) which won't break compatibility.
 
-Each version is associated with a series of fields saved.  The `save_state` always saves
-the state as the newer version.  But `load_state` sometimes is able to
+Each version is associated with a series of fields saved.  The ``save_state`` always saves
+the state as the newer version.  But ``load_state`` sometimes is able to
 load state from an older version.
 
-You can see that there are several version fields:
+You can see that there are two version fields:
 
-- `version_id`: the maximum version_id supported by VMState for that device.
-- `minimum_version_id`: the minimum version_id that VMState is able to understand
+- ``version_id``: the maximum version_id supported by VMState for that device.
+- ``minimum_version_id``: the minimum version_id that VMState is able to understand
   for that device.
-- `minimum_version_id_old`: For devices that were not able to port to vmstate, we can
-  assign a function that knows how to read this old state. This field is
-  ignored if there is no `load_state_old` handler.
 
-VMState is able to read versions from minimum_version_id to
-version_id.  And the function ``load_state_old()`` (if present) is able to
-load state from minimum_version_id_old to minimum_version_id.  This
-function is deprecated and will be removed when no more users are left.
+VMState is able to read versions from minimum_version_id to version_id.
 
 There are *_V* forms of many ``VMSTATE_`` macros to load fields for version dependent fields,
 e.g.
@@ -434,7 +448,7 @@ data and then transferred to the main structure.
 
 If you use memory API functions that update memory layout outside
 initialization (i.e., in response to a guest action), this is a strong
-indication that you need to call these functions in a `post_load` callback.
+indication that you need to call these functions in a ``post_load`` callback.
 Examples of such memory API functions are:
 
   - memory_region_add_subregion()
@@ -468,15 +482,17 @@ An iterative device must provide:
   - A ``load_setup`` function that initialises the data structures on the
     destination.
 
-  - A ``save_live_pending`` function that is called repeatedly and must
-    indicate how much more data the iterative data must save.  The core
-    migration code will use this to determine when to pause the CPUs
-    and complete the migration.
+  - A ``state_pending_exact`` function that indicates how much more
+    data we must save.  The core migration code will use this to
+    determine when to pause the CPUs and complete the migration.
 
-  - A ``save_live_iterate`` function (called after ``save_live_pending``
-    when there is significant data still to be sent).  It should send
-    a chunk of data until the point that stream bandwidth limits tell it
-    to stop.  Each call generates one section.
+  - A ``state_pending_estimate`` function that indicates how much more
+    data we must save.  When the estimated amount is smaller than the
+    threshold, we call ``state_pending_exact``.
+
+  - A ``save_live_iterate`` function should send a chunk of data until
+    the point that stream bandwidth limits tell it to stop.  Each call
+    generates one section.
 
   - A ``save_live_complete_precopy`` function that must transmit the
     last section for the device containing any remaining data.
@@ -578,8 +594,7 @@ Postcopy
 'Postcopy' migration is a way to deal with migrations that refuse to converge
 (or take too long to converge) its plus side is that there is an upper bound on
 the amount of migration traffic and time it takes, the down side is that during
-the postcopy phase, a failure of *either* side or the network connection causes
-the guest to be lost.
+the postcopy phase, a failure of *either* side causes the guest to be lost.
 
 In postcopy the destination CPUs are started before all the memory has been
 transferred, and accesses to pages that are yet to be transferred cause
@@ -606,7 +621,7 @@ It can be issued immediately after migration is started or any
 time later on.  Issuing it after the end of a migration is harmless.
 
 Blocktime is a postcopy live migration metric, intended to show how
-long the vCPU was in state of interruptable sleep due to pagefault.
+long the vCPU was in state of interruptible sleep due to pagefault.
 That metric is calculated both for all vCPUs as overlapped value, and
 separately for each vCPU. These values are calculated on destination
 side.  To enable postcopy blocktime calculation, enter following
@@ -621,7 +636,7 @@ time per vCPU.
 
 .. note::
   During the postcopy phase, the bandwidth limits set using
-  ``migrate_set_speed`` is ignored (to avoid delaying requested pages that
+  ``migrate_set_parameter`` is ignored (to avoid delaying requested pages that
   the destination is waiting for).
 
 Postcopy device transfer
@@ -705,6 +720,42 @@ processing.
    is no longer used by migration, while the listen thread carries on servicing
    page data until the end of migration.
 
+Postcopy Recovery
+-----------------
+
+Comparing to precopy, postcopy is special on error handlings.  When any
+error happens (in this case, mostly network errors), QEMU cannot easily
+fail a migration because VM data resides in both source and destination
+QEMU instances.  On the other hand, when issue happens QEMU on both sides
+will go into a paused state.  It'll need a recovery phase to continue a
+paused postcopy migration.
+
+The recovery phase normally contains a few steps:
+
+  - When network issue occurs, both QEMU will go into PAUSED state
+
+  - When the network is recovered (or a new network is provided), the admin
+    can setup the new channel for migration using QMP command
+    'migrate-recover' on destination node, preparing for a resume.
+
+  - On source host, the admin can continue the interrupted postcopy
+    migration using QMP command 'migrate' with resume=true flag set.
+
+  - After the connection is re-established, QEMU will continue the postcopy
+    migration on both sides.
+
+During a paused postcopy migration, the VM can logically still continue
+running, and it will not be impacted from any page access to pages that
+were already migrated to destination VM before the interruption happens.
+However, if any of the missing pages got accessed on destination VM, the VM
+thread will be halted waiting for the page to be migrated, it means it can
+be halted until the recovery is complete.
+
+The impact of accessing missing pages can be relevant to different
+configurations of the guest.  For example, when with async page fault
+enabled, logically the guest can proactively schedule out the threads
+accessing missing pages.
+
 Postcopy states
 ---------------
 
@@ -749,36 +800,31 @@ ADVISE->DISCARD->LISTEN->RUNNING->END
     (although it can't do the cleanup it would do as it
     finishes a normal migration).
 
+ - Paused
+
+    Postcopy can run into a paused state (normally on both sides when
+    happens), where all threads will be temporarily halted mostly due to
+    network errors.  When reaching paused state, migration will make sure
+    the qemu binary on both sides maintain the data without corrupting
+    the VM.  To continue the migration, the admin needs to fix the
+    migration channel using the QMP command 'migrate-recover' on the
+    destination node, then resume the migration using QMP command 'migrate'
+    again on source node, with resume=true flag set.
+
  - End
 
     The listen thread can now quit, and perform the cleanup of migration
     state, the migration is now complete.
 
-Source side page maps
----------------------
+Source side page map
+--------------------
 
-The source side keeps two bitmaps during postcopy; 'the migration bitmap'
-and 'unsent map'.  The 'migration bitmap' is basically the same as in
-the precopy case, and holds a bit to indicate that page is 'dirty' -
-i.e. needs sending.  During the precopy phase this is updated as the CPU
-dirties pages, however during postcopy the CPUs are stopped and nothing
-should dirty anything any more.
-
-The 'unsent map' is used for the transition to postcopy. It is a bitmap that
-has a bit cleared whenever a page is sent to the destination, however during
-the transition to postcopy mode it is combined with the migration bitmap
-to form a set of pages that:
-
-   a) Have been sent but then redirtied (which must be discarded)
-   b) Have not yet been sent - which also must be discarded to cause any
-      transparent huge pages built during precopy to be broken.
-
-Note that the contents of the unsentmap are sacrificed during the calculation
-of the discard set and thus aren't valid once in postcopy.  The dirtymap
-is still valid and is used to ensure that no page is sent more than once.  Any
-request for a page that has already been sent is ignored.  Duplicate requests
-such as this can happen as a page is sent at about the same time the
-destination accesses it.
+The 'migration bitmap' in postcopy is basically the same as in the precopy,
+where each of the bit to indicate that page is 'dirty' - i.e. needs
+sending.  During the precopy phase this is updated as the CPU dirties
+pages, however during postcopy the CPUs are stopped and nothing should
+dirty anything any more. Instead, dirty bits are cleared when the relevant
+pages are sent during postcopy.
 
 Postcopy with hugepages
 -----------------------
@@ -803,12 +849,12 @@ Postcopy migration with shared memory needs explicit support from the other
 processes that share memory and from QEMU. There are restrictions on the type of
 memory that userfault can support shared.
 
-The Linux kernel userfault support works on `/dev/shm` memory and on `hugetlbfs`
-(although the kernel doesn't provide an equivalent to `madvise(MADV_DONTNEED)`
+The Linux kernel userfault support works on ``/dev/shm`` memory and on ``hugetlbfs``
+(although the kernel doesn't provide an equivalent to ``madvise(MADV_DONTNEED)``
 for hugetlbfs which may be a problem in some configurations).
 
 The vhost-user code in QEMU supports clients that have Postcopy support,
-and the `vhost-user-bridge` (in `tests/`) and the DPDK package have changes
+and the ``vhost-user-bridge`` (in ``tests/``) and the DPDK package have changes
 to support postcopy.
 
 The client needs to open a userfaultfd and register the areas
@@ -836,6 +882,16 @@ Retro-fitting postcopy to existing clients is possible:
      identified and the implication understood; for example if the
      guest memory access is made while holding a lock then all other
      threads waiting for that lock will also be blocked.
+
+Postcopy Preemption Mode
+------------------------
+
+Postcopy preempt is a new capability introduced in 8.0 QEMU release, it
+allows urgent pages (those got page fault requested from destination QEMU
+explicitly) to be sent in a separate preempt channel, rather than queued in
+the background migration channel.  Anyone who cares about latencies of page
+faults during a postcopy migration should enable this feature.  By default,
+it's not enabled.
 
 Firmware
 ========

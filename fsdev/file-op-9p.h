@@ -16,8 +16,16 @@
 
 #include <dirent.h>
 #include <utime.h>
-#include <sys/vfs.h>
 #include "qemu-fsdev-throttle.h"
+#include "p9array.h"
+
+#ifdef CONFIG_LINUX
+# include <sys/vfs.h>
+#endif
+#ifdef CONFIG_DARWIN
+# include <sys/param.h>
+# include <sys/mount.h>
+#endif
 
 #define SM_LOCAL_MODE_BITS    0600
 #define SM_LOCAL_DIR_MODE_BITS    0700
@@ -59,6 +67,15 @@ typedef struct ExtendedOps {
 #define V9FS_RDONLY                 0x00000040
 #define V9FS_PROXY_SOCK_FD          0x00000080
 #define V9FS_PROXY_SOCK_NAME        0x00000100
+/*
+ * multidevs option (either one of the two applies exclusively)
+ */
+#define V9FS_REMAP_INODES           0x00000200
+#define V9FS_FORBID_MULTIDEVS       0x00000400
+/*
+ * Disables certain performance warnings from being logged on host side.
+ */
+#define V9FS_NO_PERF_WARN           0x00000800
 
 #define V9FS_SEC_MASK               0x0000003C
 
@@ -96,13 +113,13 @@ struct V9fsPath {
     uint16_t size;
     char *data;
 };
+P9ARRAY_DECLARE_TYPE(V9fsPath);
 
 typedef union V9fsFidOpenState V9fsFidOpenState;
 
 void cred_init(FsCred *);
 
-struct FileOperations
-{
+struct FileOperations {
     int (*parse_opts)(QemuOpts *, FsDriverEntry *, Error **errp);
     int (*init)(FsContext *, Error **errp);
     void (*cleanup)(FsContext *);

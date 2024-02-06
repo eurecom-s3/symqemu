@@ -20,6 +20,7 @@
 #define BITS_PER_LONG           (sizeof (unsigned long) * BITS_PER_BYTE)
 
 #define BIT(nr)                 (1UL << (nr))
+#define BIT_ULL(nr)             (1ULL << (nr))
 #define BIT_MASK(nr)            (1UL << ((nr) % BITS_PER_LONG))
 #define BIT_WORD(nr)            ((nr) / BITS_PER_LONG)
 #define BITS_TO_LONGS(nr)       DIV_ROUND_UP(nr, BITS_PER_BYTE * sizeof(long))
@@ -50,7 +51,7 @@ static inline void set_bit_atomic(long nr, unsigned long *addr)
     unsigned long mask = BIT_MASK(nr);
     unsigned long *p = addr + BIT_WORD(nr);
 
-    atomic_or(p, mask);
+    qatomic_or(p, mask);
 }
 
 /**
@@ -139,7 +140,8 @@ static inline int test_bit(long nr, const unsigned long *addr)
  * @addr: The address to start the search at
  * @size: The maximum size to search
  *
- * Returns the bit number of the first set bit, or size.
+ * Returns the bit number of the last set bit,
+ * or @size if there is no set bit in the bitmap.
  */
 unsigned long find_last_bit(const unsigned long *addr,
                             unsigned long size);
@@ -149,6 +151,9 @@ unsigned long find_last_bit(const unsigned long *addr,
  * @addr: The address to base the search on
  * @offset: The bitnumber to start searching at
  * @size: The bitmap size in bits
+ *
+ * Returns the bit number of the next set bit,
+ * or @size if there are no further set bits in the bitmap.
  */
 unsigned long find_next_bit(const unsigned long *addr,
                             unsigned long size,
@@ -159,6 +164,9 @@ unsigned long find_next_bit(const unsigned long *addr,
  * @addr: The address to base the search on
  * @offset: The bitnumber to start searching at
  * @size: The bitmap size in bits
+ *
+ * Returns the bit number of the next cleared bit,
+ * or @size if there are no further clear bits in the bitmap.
  */
 
 unsigned long find_next_zero_bit(const unsigned long *addr,
@@ -170,7 +178,8 @@ unsigned long find_next_zero_bit(const unsigned long *addr,
  * @addr: The address to start the search at
  * @size: The maximum size to search
  *
- * Returns the bit number of the first set bit.
+ * Returns the bit number of the first set bit,
+ * or @size if there is no set bit in the bitmap.
  */
 static inline unsigned long find_first_bit(const unsigned long *addr,
                                            unsigned long size)
@@ -193,7 +202,8 @@ static inline unsigned long find_first_bit(const unsigned long *addr,
  * @addr: The address to start the search at
  * @size: The maximum size to search
  *
- * Returns the bit number of the first cleared bit.
+ * Returns the bit number of the first cleared bit,
+ * or @size if there is no clear bit in the bitmap.
  */
 static inline unsigned long find_first_zero_bit(const unsigned long *addr,
                                                 unsigned long size)
@@ -208,7 +218,7 @@ static inline unsigned long find_first_zero_bit(const unsigned long *addr,
  */
 static inline uint8_t rol8(uint8_t word, unsigned int shift)
 {
-    return (word << shift) | (word >> ((8 - shift) & 7));
+    return (word << (shift & 7)) | (word >> (-shift & 7));
 }
 
 /**
@@ -218,7 +228,7 @@ static inline uint8_t rol8(uint8_t word, unsigned int shift)
  */
 static inline uint8_t ror8(uint8_t word, unsigned int shift)
 {
-    return (word >> shift) | (word << ((8 - shift) & 7));
+    return (word >> (shift & 7)) | (word << (-shift & 7));
 }
 
 /**
@@ -228,7 +238,7 @@ static inline uint8_t ror8(uint8_t word, unsigned int shift)
  */
 static inline uint16_t rol16(uint16_t word, unsigned int shift)
 {
-    return (word << shift) | (word >> ((16 - shift) & 15));
+    return (word << (shift & 15)) | (word >> (-shift & 15));
 }
 
 /**
@@ -238,7 +248,7 @@ static inline uint16_t rol16(uint16_t word, unsigned int shift)
  */
 static inline uint16_t ror16(uint16_t word, unsigned int shift)
 {
-    return (word >> shift) | (word << ((16 - shift) & 15));
+    return (word >> (shift & 15)) | (word << (-shift & 15));
 }
 
 /**
@@ -248,7 +258,7 @@ static inline uint16_t ror16(uint16_t word, unsigned int shift)
  */
 static inline uint32_t rol32(uint32_t word, unsigned int shift)
 {
-    return (word << shift) | (word >> ((32 - shift) & 31));
+    return (word << (shift & 31)) | (word >> (-shift & 31));
 }
 
 /**
@@ -258,7 +268,7 @@ static inline uint32_t rol32(uint32_t word, unsigned int shift)
  */
 static inline uint32_t ror32(uint32_t word, unsigned int shift)
 {
-    return (word >> shift) | (word << ((32 - shift) & 31));
+    return (word >> (shift & 31)) | (word << (-shift & 31));
 }
 
 /**
@@ -268,7 +278,7 @@ static inline uint32_t ror32(uint32_t word, unsigned int shift)
  */
 static inline uint64_t rol64(uint64_t word, unsigned int shift)
 {
-    return (word << shift) | (word >> ((64 - shift) & 63));
+    return (word << (shift & 63)) | (word >> (-shift & 63));
 }
 
 /**
@@ -278,7 +288,36 @@ static inline uint64_t rol64(uint64_t word, unsigned int shift)
  */
 static inline uint64_t ror64(uint64_t word, unsigned int shift)
 {
-    return (word >> shift) | (word << ((64 - shift) & 63));
+    return (word >> (shift & 63)) | (word << (-shift & 63));
+}
+
+/**
+ * hswap32 - swap 16-bit halfwords within a 32-bit value
+ * @h: value to swap
+ */
+static inline uint32_t hswap32(uint32_t h)
+{
+    return rol32(h, 16);
+}
+
+/**
+ * hswap64 - swap 16-bit halfwords within a 64-bit value
+ * @h: value to swap
+ */
+static inline uint64_t hswap64(uint64_t h)
+{
+    uint64_t m = 0x0000ffff0000ffffull;
+    h = rol64(h, 32);
+    return ((h & m) << 16) | ((h >> 16) & m);
+}
+
+/**
+ * wswap64 - swap 32-bit words within a 64-bit value
+ * @h: value to swap
+ */
+static inline uint64_t wswap64(uint64_t h)
+{
+    return rol64(h, 32);
 }
 
 /**
@@ -298,6 +337,44 @@ static inline uint32_t extract32(uint32_t value, int start, int length)
 {
     assert(start >= 0 && length > 0 && length <= 32 - start);
     return (value >> start) & (~0U >> (32 - length));
+}
+
+/**
+ * extract8:
+ * @value: the value to extract the bit field from
+ * @start: the lowest bit in the bit field (numbered from 0)
+ * @length: the length of the bit field
+ *
+ * Extract from the 8 bit input @value the bit field specified by the
+ * @start and @length parameters, and return it. The bit field must
+ * lie entirely within the 8 bit word. It is valid to request that
+ * all 8 bits are returned (ie @length 8 and @start 0).
+ *
+ * Returns: the value of the bit field extracted from the input value.
+ */
+static inline uint8_t extract8(uint8_t value, int start, int length)
+{
+    assert(start >= 0 && length > 0 && length <= 8 - start);
+    return extract32(value, start, length);
+}
+
+/**
+ * extract16:
+ * @value: the value to extract the bit field from
+ * @start: the lowest bit in the bit field (numbered from 0)
+ * @length: the length of the bit field
+ *
+ * Extract from the 16 bit input @value the bit field specified by the
+ * @start and @length parameters, and return it. The bit field must
+ * lie entirely within the 16 bit word. It is valid to request that
+ * all 16 bits are returned (ie @length 16 and @start 0).
+ *
+ * Returns: the value of the bit field extracted from the input value.
+ */
+static inline uint16_t extract16(uint16_t value, int start, int length)
+{
+    assert(start >= 0 && length > 0 && length <= 16 - start);
+    return extract32(value, start, length);
 }
 
 /**
@@ -423,13 +500,16 @@ static inline uint64_t deposit64(uint64_t value, int start, int length,
 
 /**
  * half_shuffle32:
- * @value: 32-bit value (of which only the bottom 16 bits are of interest)
+ * @x: 32-bit value (of which only the bottom 16 bits are of interest)
  *
- * Given an input value:
- *  xxxx xxxx xxxx xxxx ABCD EFGH IJKL MNOP
+ * Given an input value::
+ *
+ *   xxxx xxxx xxxx xxxx ABCD EFGH IJKL MNOP
+ *
  * return the value where the bottom 16 bits are spread out into
- * the odd bits in the word, and the even bits are zeroed:
- *  0A0B 0C0D 0E0F 0G0H 0I0J 0K0L 0M0N 0O0P
+ * the odd bits in the word, and the even bits are zeroed::
+ *
+ *   0A0B 0C0D 0E0F 0G0H 0I0J 0K0L 0M0N 0O0P
  *
  * Any bits set in the top half of the input are ignored.
  *
@@ -449,13 +529,16 @@ static inline uint32_t half_shuffle32(uint32_t x)
 
 /**
  * half_shuffle64:
- * @value: 64-bit value (of which only the bottom 32 bits are of interest)
+ * @x: 64-bit value (of which only the bottom 32 bits are of interest)
  *
- * Given an input value:
- *  xxxx xxxx xxxx .... xxxx xxxx ABCD EFGH IJKL MNOP QRST UVWX YZab cdef
+ * Given an input value::
+ *
+ *   xxxx xxxx xxxx .... xxxx xxxx ABCD EFGH IJKL MNOP QRST UVWX YZab cdef
+ *
  * return the value where the bottom 32 bits are spread out into
- * the odd bits in the word, and the even bits are zeroed:
- *  0A0B 0C0D 0E0F 0G0H 0I0J 0K0L 0M0N .... 0U0V 0W0X 0Y0Z 0a0b 0c0d 0e0f
+ * the odd bits in the word, and the even bits are zeroed::
+ *
+ *   0A0B 0C0D 0E0F 0G0H 0I0J 0K0L 0M0N .... 0U0V 0W0X 0Y0Z 0a0b 0c0d 0e0f
  *
  * Any bits set in the top half of the input are ignored.
  *
@@ -476,13 +559,16 @@ static inline uint64_t half_shuffle64(uint64_t x)
 
 /**
  * half_unshuffle32:
- * @value: 32-bit value (of which only the odd bits are of interest)
+ * @x: 32-bit value (of which only the odd bits are of interest)
  *
- * Given an input value:
- *  xAxB xCxD xExF xGxH xIxJ xKxL xMxN xOxP
+ * Given an input value::
+ *
+ *   xAxB xCxD xExF xGxH xIxJ xKxL xMxN xOxP
+ *
  * return the value where all the odd bits are compressed down
- * into the low half of the word, and the high half is zeroed:
- *  0000 0000 0000 0000 ABCD EFGH IJKL MNOP
+ * into the low half of the word, and the high half is zeroed::
+ *
+ *   0000 0000 0000 0000 ABCD EFGH IJKL MNOP
  *
  * Any even bits set in the input are ignored.
  *
@@ -503,13 +589,16 @@ static inline uint32_t half_unshuffle32(uint32_t x)
 
 /**
  * half_unshuffle64:
- * @value: 64-bit value (of which only the odd bits are of interest)
+ * @x: 64-bit value (of which only the odd bits are of interest)
  *
- * Given an input value:
- *  xAxB xCxD xExF xGxH xIxJ xKxL xMxN .... xUxV xWxX xYxZ xaxb xcxd xexf
+ * Given an input value::
+ *
+ *   xAxB xCxD xExF xGxH xIxJ xKxL xMxN .... xUxV xWxX xYxZ xaxb xcxd xexf
+ *
  * return the value where all the odd bits are compressed down
- * into the low half of the word, and the high half is zeroed:
- *  0000 0000 0000 .... 0000 0000 ABCD EFGH IJKL MNOP QRST UVWX YZab cdef
+ * into the low half of the word, and the high half is zeroed::
+ *
+ *   0000 0000 0000 .... 0000 0000 ABCD EFGH IJKL MNOP QRST UVWX YZab cdef
  *
  * Any even bits set in the input are ignored.
  *

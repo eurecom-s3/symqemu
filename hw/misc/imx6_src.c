@@ -10,12 +10,13 @@
 
 #include "qemu/osdep.h"
 #include "hw/misc/imx6_src.h"
-#include "sysemu/sysemu.h"
+#include "migration/vmstate.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
-#include "arm-powerctl.h"
-#include "qom/cpu.h"
+#include "target/arm/arm-powerctl.h"
+#include "hw/core/cpu.h"
 
 #ifndef DEBUG_IMX6_SRC
 #define DEBUG_IMX6_SRC 0
@@ -67,7 +68,7 @@ static const char *imx6_src_reg_name(uint32_t reg)
     case SRC_GPR10:
         return "SRC_GPR10";
     default:
-        sprintf(unknown, "%d ?", reg);
+        sprintf(unknown, "%u ?", reg);
         return unknown;
     }
 }
@@ -150,7 +151,7 @@ static void imx6_defer_clear_reset_bit(int cpuid,
         return;
     }
 
-    ri = g_malloc(sizeof(struct SRCSCRResetInfo));
+    ri = g_new(struct SRCSCRResetInfo, 1);
     ri->s = s;
     ri->reset_bit = reset_shift;
 

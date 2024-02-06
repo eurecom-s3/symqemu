@@ -5,7 +5,7 @@
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
- * as published by the Free Software Foundation; either version 2 of
+ * as published by the Free Software Foundation; either version 2.1 of
  * the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful, but
@@ -21,31 +21,33 @@
 #define PPC_PNV_CORE_H
 
 #include "hw/cpu/core.h"
+#include "target/ppc/cpu.h"
+#include "hw/ppc/pnv.h"
+#include "qom/object.h"
 
 #define TYPE_PNV_CORE "powernv-cpu-core"
-#define PNV_CORE(obj) \
-    OBJECT_CHECK(PnvCore, (obj), TYPE_PNV_CORE)
-#define PNV_CORE_CLASS(klass) \
-     OBJECT_CLASS_CHECK(PnvCoreClass, (klass), TYPE_PNV_CORE)
-#define PNV_CORE_GET_CLASS(obj) \
-     OBJECT_GET_CLASS(PnvCoreClass, (obj), TYPE_PNV_CORE)
+OBJECT_DECLARE_TYPE(PnvCore, PnvCoreClass,
+                    PNV_CORE)
 
-typedef struct PnvCore {
+struct PnvCore {
     /*< private >*/
     CPUCore parent_obj;
 
     /*< public >*/
     PowerPCCPU **threads;
     uint32_t pir;
+    uint64_t hrmor;
+    PnvChip *chip;
 
     MemoryRegion xscom_regs;
-} PnvCore;
+};
 
-typedef struct PnvCoreClass {
+struct PnvCoreClass {
     DeviceClass parent_class;
 
     const MemoryRegionOps *xscom_ops;
-} PnvCoreClass;
+    uint64_t xscom_size;
+};
 
 #define PNV_CORE_TYPE_SUFFIX "-" TYPE_PNV_CORE
 #define PNV_CORE_TYPE_NAME(cpu_model) cpu_model PNV_CORE_TYPE_SUFFIX
@@ -59,14 +61,28 @@ static inline PnvCPUState *pnv_cpu_state(PowerPCCPU *cpu)
     return (PnvCPUState *)cpu->machine_data;
 }
 
-#define TYPE_PNV_QUAD "powernv-cpu-quad"
-#define PNV_QUAD(obj) \
-    OBJECT_CHECK(PnvQuad, (obj), TYPE_PNV_QUAD)
+struct PnvQuadClass {
+    DeviceClass parent_class;
 
-typedef struct PnvQuad {
+    const MemoryRegionOps *xscom_ops;
+    uint64_t xscom_size;
+
+    const MemoryRegionOps *xscom_qme_ops;
+    uint64_t xscom_qme_size;
+};
+
+#define TYPE_PNV_QUAD "powernv-cpu-quad"
+
+#define PNV_QUAD_TYPE_SUFFIX "-" TYPE_PNV_QUAD
+#define PNV_QUAD_TYPE_NAME(cpu_model) cpu_model PNV_QUAD_TYPE_SUFFIX
+
+OBJECT_DECLARE_TYPE(PnvQuad, PnvQuadClass, PNV_QUAD)
+
+struct PnvQuad {
     DeviceState parent_obj;
 
-    uint32_t id;
+    uint32_t quad_id;
     MemoryRegion xscom_regs;
-} PnvQuad;
+    MemoryRegion xscom_qme_regs;
+};
 #endif /* PPC_PNV_CORE_H */

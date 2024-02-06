@@ -1,6 +1,7 @@
 #include "qemu/osdep.h"
+#include "qemu/error-report.h"
 #include "qemu/module.h"
-#include "sysemu/sysemu.h"
+#include "qapi/error.h"
 #include "ui/console.h"
 #include "ui/egl-helpers.h"
 #include "ui/egl-context.h"
@@ -38,12 +39,12 @@ static void egl_gfx_switch(DisplayChangeListener *dcl,
     edpy->ds = new_surface;
 }
 
-static QEMUGLContext egl_create_context(DisplayChangeListener *dcl,
+static QEMUGLContext egl_create_context(DisplayGLCtx *dgc,
                                         QEMUGLParams *params)
 {
     eglMakeCurrent(qemu_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
                    qemu_egl_rn_ctx);
-    return qemu_egl_create_context(dcl, params);
+    return qemu_egl_create_context(dgc, params);
 }
 
 static void egl_scanout_disable(DisplayChangeListener *dcl)
@@ -60,7 +61,8 @@ static void egl_scanout_texture(DisplayChangeListener *dcl,
                                 uint32_t backing_width,
                                 uint32_t backing_height,
                                 uint32_t x, uint32_t y,
-                                uint32_t w, uint32_t h)
+                                uint32_t w, uint32_t h,
+                                void *d3d_tex2d)
 {
     egl_dpy *edpy = container_of(dcl, egl_dpy, dcl);
 
@@ -78,6 +80,8 @@ static void egl_scanout_texture(DisplayChangeListener *dcl,
     }
 }
 
+#ifdef CONFIG_GBM
+
 static void egl_scanout_dmabuf(DisplayChangeListener *dcl,
                                QemuDmaBuf *dmabuf)
 {
@@ -88,7 +92,7 @@ static void egl_scanout_dmabuf(DisplayChangeListener *dcl,
 
     egl_scanout_texture(dcl, dmabuf->texture,
                         false, dmabuf->width, dmabuf->height,
-                        0, 0, dmabuf->width, dmabuf->height);
+                        0, 0, dmabuf->width, dmabuf->height, NULL);
 }
 
 static void egl_cursor_dmabuf(DisplayChangeListener *dcl,
@@ -109,6 +113,14 @@ static void egl_cursor_dmabuf(DisplayChangeListener *dcl,
     }
 }
 
+static void egl_release_dmabuf(DisplayChangeListener *dcl,
+                               QemuDmaBuf *dmabuf)
+{
+    egl_dmabuf_release_texture(dmabuf);
+}
+
+#endif
+
 static void egl_cursor_position(DisplayChangeListener *dcl,
                                 uint32_t pos_x, uint32_t pos_y)
 {
@@ -116,12 +128,6 @@ static void egl_cursor_position(DisplayChangeListener *dcl,
 
     edpy->pos_x = pos_x;
     edpy->pos_y = pos_y;
-}
-
-static void egl_release_dmabuf(DisplayChangeListener *dcl,
-                               QemuDmaBuf *dmabuf)
-{
-    egl_dmabuf_release_texture(dmabuf);
 }
 
 static void egl_scanout_flush(DisplayChangeListener *dcl,
@@ -133,8 +139,6 @@ static void egl_scanout_flush(DisplayChangeListener *dcl,
     if (!edpy->guest_fb.texture || !edpy->ds) {
         return;
     }
-    assert(surface_width(edpy->ds)  == edpy->guest_fb.width);
-    assert(surface_height(edpy->ds) == edpy->guest_fb.height);
     assert(surface_format(edpy->ds) == PIXMAN_x8r8g8b8);
 
     if (edpy->cursor_fb.texture) {
@@ -149,7 +153,7 @@ static void egl_scanout_flush(DisplayChangeListener *dcl,
         egl_fb_blit(&edpy->blit_fb, &edpy->guest_fb, edpy->y_0_top);
     }
 
-    egl_fb_read(surface_data(edpy->ds), &edpy->blit_fb);
+    egl_fb_read(edpy->ds, &edpy->blit_fb);
     dpy_gfx_update(edpy->dcl.con, x, y, w, h);
 }
 
@@ -159,38 +163,59 @@ static const DisplayChangeListenerOps egl_ops = {
     .dpy_gfx_update          = egl_gfx_update,
     .dpy_gfx_switch          = egl_gfx_switch,
 
+    .dpy_gl_scanout_disable  = egl_scanout_disable,
+    .dpy_gl_scanout_texture  = egl_scanout_texture,
+#ifdef CONFIG_GBM
+    .dpy_gl_scanout_dmabuf   = egl_scanout_dmabuf,
+    .dpy_gl_cursor_dmabuf    = egl_cursor_dmabuf,
+    .dpy_gl_release_dmabuf   = egl_release_dmabuf,
+#endif
+    .dpy_gl_cursor_position  = egl_cursor_position,
+    .dpy_gl_update           = egl_scanout_flush,
+};
+
+static bool
+egl_is_compatible_dcl(DisplayGLCtx *dgc,
+                      DisplayChangeListener *dcl)
+{
+    if (!dcl->ops->dpy_gl_update) {
+        /*
+         * egl-headless is compatible with all 2d listeners, as it blits the GL
+         * updates on the 2d console surface.
+         */
+        return true;
+    }
+
+    return dcl->ops == &egl_ops;
+}
+
+static const DisplayGLCtxOps eglctx_ops = {
+    .dpy_gl_ctx_is_compatible_dcl = egl_is_compatible_dcl,
     .dpy_gl_ctx_create       = egl_create_context,
     .dpy_gl_ctx_destroy      = qemu_egl_destroy_context,
     .dpy_gl_ctx_make_current = qemu_egl_make_context_current,
-    .dpy_gl_ctx_get_current  = qemu_egl_get_current_context,
-
-    .dpy_gl_scanout_disable  = egl_scanout_disable,
-    .dpy_gl_scanout_texture  = egl_scanout_texture,
-    .dpy_gl_scanout_dmabuf   = egl_scanout_dmabuf,
-    .dpy_gl_cursor_dmabuf    = egl_cursor_dmabuf,
-    .dpy_gl_cursor_position  = egl_cursor_position,
-    .dpy_gl_release_dmabuf   = egl_release_dmabuf,
-    .dpy_gl_update           = egl_scanout_flush,
 };
 
 static void early_egl_headless_init(DisplayOptions *opts)
 {
-    display_opengl = 1;
+    DisplayGLMode mode = DISPLAYGL_MODE_ON;
+
+    if (opts->has_gl) {
+        mode = opts->gl;
+    }
+
+    egl_init(opts->u.egl_headless.rendernode, mode, &error_fatal);
 }
 
 static void egl_headless_init(DisplayState *ds, DisplayOptions *opts)
 {
-    DisplayGLMode mode = opts->has_gl ? opts->gl : DISPLAYGL_MODE_ON;
     QemuConsole *con;
     egl_dpy *edpy;
     int idx;
 
-    if (egl_rendernode_init(opts->u.egl_headless.rendernode, mode) < 0) {
-        error_report("egl: render node init failed");
-        exit(1);
-    }
-
     for (idx = 0;; idx++) {
+        DisplayGLCtx *ctx;
+
         con = qemu_console_lookup_by_index(idx);
         if (!con || !qemu_console_is_graphic(con)) {
             break;
@@ -200,6 +225,9 @@ static void egl_headless_init(DisplayState *ds, DisplayOptions *opts)
         edpy->dcl.con = con;
         edpy->dcl.ops = &egl_ops;
         edpy->gls = qemu_gl_init_shader();
+        ctx = g_new0(DisplayGLCtx, 1);
+        ctx->ops = &eglctx_ops;
+        qemu_console_set_display_gl_ctx(con, ctx);
         register_displaychangelistener(&edpy->dcl);
     }
 }
@@ -216,3 +244,5 @@ static void register_egl(void)
 }
 
 type_init(register_egl);
+
+module_dep("ui-opengl");

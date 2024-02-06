@@ -16,17 +16,17 @@
 #include "qapi/error.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/module.h"
+#include "qom/object.h"
 
 #define TYPE_RNG_EGD "rng-egd"
-#define RNG_EGD(obj) OBJECT_CHECK(RngEgd, (obj), TYPE_RNG_EGD)
+OBJECT_DECLARE_SIMPLE_TYPE(RngEgd, RNG_EGD)
 
-typedef struct RngEgd
-{
+struct RngEgd {
     RngBackend parent;
 
     CharBackend chr;
     char *chr_name;
-} RngEgd;
+};
 
 static void rng_egd_request_entropy(RngBackend *b, RngRequest *req)
 {
@@ -116,7 +116,7 @@ static void rng_egd_set_chardev(Object *obj, const char *value, Error **errp)
     RngEgd *s = RNG_EGD(b);
 
     if (b->opened) {
-        error_setg(errp, QERR_PERMISSION_DENIED);
+        error_setg(errp, "Property 'chardev' can no longer be set");
     } else {
         g_free(s->chr_name);
         s->chr_name = g_strdup(value);
@@ -135,13 +135,6 @@ static char *rng_egd_get_chardev(Object *obj, Error **errp)
     return NULL;
 }
 
-static void rng_egd_init(Object *obj)
-{
-    object_property_add_str(obj, "chardev",
-                            rng_egd_get_chardev, rng_egd_set_chardev,
-                            NULL);
-}
-
 static void rng_egd_finalize(Object *obj)
 {
     RngEgd *s = RNG_EGD(obj);
@@ -156,6 +149,8 @@ static void rng_egd_class_init(ObjectClass *klass, void *data)
 
     rbc->request_entropy = rng_egd_request_entropy;
     rbc->opened = rng_egd_opened;
+    object_class_property_add_str(klass, "chardev",
+                                  rng_egd_get_chardev, rng_egd_set_chardev);
 }
 
 static const TypeInfo rng_egd_info = {
@@ -163,7 +158,6 @@ static const TypeInfo rng_egd_info = {
     .parent = TYPE_RNG_BACKEND,
     .instance_size = sizeof(RngEgd),
     .class_init = rng_egd_class_init,
-    .instance_init = rng_egd_init,
     .instance_finalize = rng_egd_finalize,
 };
 

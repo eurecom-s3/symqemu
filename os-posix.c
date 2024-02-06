@@ -29,17 +29,20 @@
 #include <grp.h>
 #include <libgen.h>
 
-#include "qemu-common.h"
 /* Needed early for CONFIG_BSD etc. */
-#include "sysemu/sysemu.h"
 #include "net/slirp.h"
-#include "qemu-options.h"
+#include "qemu/qemu-options.h"
 #include "qemu/error-report.h"
 #include "qemu/log.h"
+#include "sysemu/runstate.h"
 #include "qemu/cutils.h"
+#include "qemu/config-file.h"
+#include "qemu/option.h"
+#include "qemu/module.h"
 
 #ifdef CONFIG_LINUX
 #include <sys/prctl.h>
+#include "qemu/async-teardown.h"
 #endif
 
 /*
@@ -79,42 +82,6 @@ void os_setup_signal_handling(void)
     sigaction(SIGHUP,  &act, NULL);
     sigaction(SIGTERM, &act, NULL);
 }
-
-/* Find a likely location for support files using the location of the binary.
-   For installed binaries this will be "$bindir/../share/qemu".  When
-   running from the build tree this will be "$bindir/../pc-bios".  */
-#define SHARE_SUFFIX "/share/qemu"
-#define BUILD_SUFFIX "/pc-bios"
-char *os_find_datadir(void)
-{
-    char *dir, *exec_dir;
-    char *res;
-    size_t max_len;
-
-    exec_dir = qemu_get_exec_dir();
-    if (exec_dir == NULL) {
-        return NULL;
-    }
-    dir = g_path_get_dirname(exec_dir);
-
-    max_len = strlen(dir) +
-        MAX(strlen(SHARE_SUFFIX), strlen(BUILD_SUFFIX)) + 1;
-    res = g_malloc0(max_len);
-    snprintf(res, max_len, "%s%s", dir, SHARE_SUFFIX);
-    if (access(res, R_OK)) {
-        snprintf(res, max_len, "%s%s", dir, BUILD_SUFFIX);
-        if (access(res, R_OK)) {
-            g_free(res);
-            res = NULL;
-        }
-    }
-
-    g_free(dir);
-    g_free(exec_dir);
-    return res;
-}
-#undef SHARE_SUFFIX
-#undef BUILD_SUFFIX
 
 void os_set_proc_name(const char *s)
 {
@@ -182,16 +149,36 @@ int os_parse_cmd_args(int index, const char *optarg)
         }
         break;
     case QEMU_OPTION_chroot:
+        warn_report("option is deprecated, use '-run-with chroot=...' instead");
         chroot_dir = optarg;
         break;
     case QEMU_OPTION_daemonize:
         daemonize = 1;
         break;
 #if defined(CONFIG_LINUX)
-    case QEMU_OPTION_enablefips:
-        fips_set_state(true);
+    /* deprecated */
+    case QEMU_OPTION_asyncteardown:
+        init_async_teardown();
         break;
 #endif
+    case QEMU_OPTION_run_with: {
+        const char *str;
+        QemuOpts *opts = qemu_opts_parse_noisily(qemu_find_opts("run-with"),
+                                                 optarg, false);
+        if (!opts) {
+            exit(1);
+        }
+#if defined(CONFIG_LINUX)
+        if (qemu_opt_get_bool(opts, "async-teardown", false)) {
+            init_async_teardown();
+        }
+#endif
+        str = qemu_opt_get(opts, "chroot");
+        if (str) {
+            chroot_dir = str;
+        }
+        break;
+    }
     default:
         return -1;
     }
@@ -257,7 +244,7 @@ void os_daemonize(void)
         pid_t pid;
         int fds[2];
 
-        if (pipe(fds) == -1) {
+        if (!g_unix_open_pipe(fds, FD_CLOEXEC, NULL)) {
             exit(1);
         }
 
@@ -282,7 +269,6 @@ void os_daemonize(void)
 
         close(fds[0]);
         daemon_pipe = fds[1];
-        qemu_set_cloexec(daemon_pipe);
 
         setsid();
 
@@ -309,7 +295,7 @@ void os_setup_post(void)
             error_report("not able to chdir to /: %s", strerror(errno));
             exit(1);
         }
-        TFR(fd = qemu_open("/dev/null", O_RDWR));
+        fd = RETRY_ON_EINTR(qemu_open_old("/dev/null", O_RDWR));
         if (fd == -1) {
             exit(1);
         }
@@ -325,7 +311,7 @@ void os_setup_post(void)
         dup2(fd, 0);
         dup2(fd, 1);
         /* In case -D is given do not redirect stderr to /dev/null */
-        if (!qemu_logfile) {
+        if (!qemu_log_enabled()) {
             dup2(fd, 2);
         }
 
@@ -350,8 +336,15 @@ bool is_daemonized(void)
     return daemonize;
 }
 
+int os_set_daemonize(bool d)
+{
+    daemonize = d;
+    return 0;
+}
+
 int os_mlock(void)
 {
+#ifdef HAVE_MLOCKALL
     int ret = 0;
 
     ret = mlockall(MCL_CURRENT | MCL_FUTURE);
@@ -360,4 +353,31 @@ int os_mlock(void)
     }
 
     return ret;
+#else
+    return -ENOSYS;
+#endif
 }
+
+static QemuOptsList qemu_run_with_opts = {
+    .name = "run-with",
+    .head = QTAILQ_HEAD_INITIALIZER(qemu_run_with_opts.head),
+    .desc = {
+#if defined(CONFIG_LINUX)
+        {
+            .name = "async-teardown",
+            .type = QEMU_OPT_BOOL,
+        },
+#endif
+        {
+            .name = "chroot",
+            .type = QEMU_OPT_STRING,
+        },
+        { /* end of list */ }
+    },
+};
+
+static void register_runwith(void)
+{
+    qemu_add_opts(&qemu_run_with_opts);
+}
+opts_init(register_runwith);

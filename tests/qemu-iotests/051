@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw
 #
 # Test command line configuration of block devices and driver-specific options
 #
@@ -39,8 +40,15 @@ trap "_cleanup; exit \$status" 0 1 2 3 15
 _supported_fmt qcow2
 _supported_proto file
 # A compat=0.10 image is created in this test which does not support anything
-# other than refcount_bits=16
-_unsupported_imgopts 'refcount_bits=\([^1]\|.\([^6]\|$\)\)'
+# other than refcount_bits=16;
+# it also will not support an external data file and compression type
+_unsupported_imgopts 'refcount_bits=\([^1]\|.\([^6]\|$\)\)' data_file \
+    compression_type
+_require_drivers nbd
+
+if [ "$QEMU_DEFAULT_MACHINE" = "pc" ]; then
+    _require_devices lsi53c895a
+fi
 
 do_run_qemu()
 {
@@ -68,7 +76,7 @@ device_id="drive0"
 _make_test_img $size
 cp "$TEST_IMG" "$TEST_IMG.orig"
 mv "$TEST_IMG" "$TEST_IMG.base"
-_make_test_img -b "$TEST_IMG.base" $size
+_make_test_img -b "$TEST_IMG.base" -F $IMGFMT $size
 
 echo
 echo === Unknown option ===
@@ -116,17 +124,7 @@ echo
 echo === Device without drive ===
 echo
 
-case "$QEMU_DEFAULT_MACHINE" in
-  s390-ccw-virtio)
-      virtio_scsi=virtio-scsi-ccw
-      ;;
-  *)
-      virtio_scsi=virtio-scsi-pci
-      ;;
-esac
-
-run_qemu -device $virtio_scsi -device scsi-hd |
-    sed -e "s/$virtio_scsi/VIRTIO_SCSI/"
+run_qemu -device virtio-scsi -device scsi-hd
 
 echo
 echo === Overriding backing file ===
@@ -157,7 +155,7 @@ echo
 echo === With version 2 images enabling lazy refcounts must fail ===
 echo
 
-_make_test_img -ocompat=0.10 $size
+_make_test_img -o compat=0.10 $size
 
 run_qemu -drive file="$TEST_IMG",format=qcow2,lazy-refcounts=on
 run_qemu -drive file="$TEST_IMG",format=qcow2,lazy-refcounts=off
@@ -182,9 +180,7 @@ case "$QEMU_DEFAULT_MACHINE" in
     pc)
         run_qemu -drive if=none,id=disk -device ide-cd,drive=disk
         run_qemu -drive if=none,id=disk -device lsi53c895a -device scsi-cd,drive=disk
-        run_qemu -drive if=none,id=disk -device ide-drive,drive=disk
         run_qemu -drive if=none,id=disk -device ide-hd,drive=disk
-        run_qemu -drive if=none,id=disk -device lsi53c895a -device scsi-disk,drive=disk
         run_qemu -drive if=none,id=disk -device lsi53c895a -device scsi-hd,drive=disk
         ;;
      *)
@@ -208,7 +204,7 @@ case "$QEMU_DEFAULT_MACHINE" in
         # virtio-blk enables the iothread only when the driver initialises the
         # device, so a second virtio-blk device can't be added even with the
         # same iothread. virtio-scsi allows this.
-        run_qemu $iothread -device virtio-blk-pci,drive=disk,iohtread=iothread0,share-rw=on
+        run_qemu $iothread -device virtio-blk-pci,drive=disk,iothread=thread0,share-rw=on
         run_qemu $iothread -device virtio-scsi,id=virtio-scsi1,iothread=thread0 -device scsi-hd,bus=virtio-scsi1.0,drive=disk,share-rw=on
         ;;
      *)
@@ -235,9 +231,7 @@ case "$QEMU_DEFAULT_MACHINE" in
     pc)
         run_qemu -drive file="$TEST_IMG",if=none,id=disk,readonly=on -device ide-cd,drive=disk
         run_qemu -drive file="$TEST_IMG",if=none,id=disk,readonly=on -device lsi53c895a -device scsi-cd,drive=disk
-        run_qemu -drive file="$TEST_IMG",if=none,id=disk,readonly=on -device ide-drive,drive=disk
         run_qemu -drive file="$TEST_IMG",if=none,id=disk,readonly=on -device ide-hd,drive=disk
-        run_qemu -drive file="$TEST_IMG",if=none,id=disk,readonly=on -device lsi53c895a -device scsi-disk,drive=disk
         run_qemu -drive file="$TEST_IMG",if=none,id=disk,readonly=on -device lsi53c895a -device scsi-hd,drive=disk
         ;;
      *)
@@ -377,7 +371,12 @@ printf %b "qemu-io $device_id \"write -P 0x33 0 4k\"\ncommit $device_id\n" |
 $QEMU_IO -c "read -P 0x33 0 4k" "$TEST_IMG" | _filter_qemu_io
 
 # Using snapshot=on with a non-existent TMPDIR
-TMPDIR=/nonexistent run_qemu -drive driver=null-co,snapshot=on
+if [ "${VALGRIND_QEMU_VM}" == "y" ]; then
+    _casenotrun "Valgrind needs a valid TMPDIR for itself"
+fi
+VALGRIND_QEMU_VM= \
+TMPDIR=/nonexistent run_qemu -drive driver=null-co,snapshot=on |
+    sed -e "s#'[^']*/vl\.[A-Za-z0-9]\{6\}'#SNAPSHOT_PATH#g"
 
 # Using snapshot=on together with read-only=on
 echo "info block" |

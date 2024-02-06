@@ -34,27 +34,35 @@
  */
 
 #include "qemu/osdep.h"
+#include "qom/object.h"
 #ifndef CONFIG_WIN32
 #include <poll.h>
 #endif
 #include <libusb.h>
 
+#ifdef CONFIG_LINUX
+#include <sys/ioctl.h>
+#include <linux/usbdevice_fs.h>
+#endif
+
 #include "qapi/error.h"
+#include "migration/vmstate.h"
 #include "monitor/monitor.h"
 #include "qemu/error-report.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
+#include "sysemu/runstate.h"
 #include "sysemu/sysemu.h"
 #include "trace.h"
 
+#include "hw/qdev-properties.h"
 #include "hw/usb.h"
 
 /* ------------------------------------------------------------------------ */
 
 #define TYPE_USB_HOST_DEVICE "usb-host"
-#define USB_HOST_DEVICE(obj) \
-     OBJECT_CHECK(USBHostDevice, (obj), TYPE_USB_HOST_DEVICE)
+OBJECT_DECLARE_SIMPLE_TYPE(USBHostDevice, USB_HOST_DEVICE)
 
-typedef struct USBHostDevice USBHostDevice;
 typedef struct USBHostRequest USBHostRequest;
 typedef struct USBHostIsoXfer USBHostIsoXfer;
 typedef struct USBHostIsoRing USBHostIsoRing;
@@ -76,13 +84,17 @@ struct USBHostDevice {
 
     /* properties */
     struct USBAutoFilter             match;
+    char                             *hostdevice;
     int32_t                          bootindex;
     uint32_t                         iso_urb_count;
     uint32_t                         iso_urb_frames;
     uint32_t                         options;
     uint32_t                         loglevel;
     bool                             needs_autoscan;
-    bool                             allow_guest_reset;
+    bool                             allow_one_guest_reset;
+    bool                             allow_all_guest_resets;
+    bool                             suppress_remote_wake;
+
     /* state */
     QTAILQ_ENTRY(USBHostDevice)      next;
     int                              seen, errcount;
@@ -90,6 +102,7 @@ struct USBHostDevice {
     int                              addr;
     char                             port[16];
 
+    int                              hostfd;
     libusb_device                    *dev;
     libusb_device_handle             *dh;
     struct libusb_device_descriptor  ddesc;
@@ -166,6 +179,9 @@ static void usb_host_attach_kernel(USBHostDevice *s);
 #if LIBUSB_API_VERSION >= 0x01000103
 # define HAVE_STREAMS 1
 #endif
+#if LIBUSB_API_VERSION >= 0x01000106
+# define HAVE_SUPER_PLUS 1
+#endif
 
 static const char *speed_name[] = {
     [LIBUSB_SPEED_UNKNOWN] = "?",
@@ -173,6 +189,9 @@ static const char *speed_name[] = {
     [LIBUSB_SPEED_FULL]    = "12",
     [LIBUSB_SPEED_HIGH]    = "480",
     [LIBUSB_SPEED_SUPER]   = "5000",
+#ifdef HAVE_SUPER_PLUS
+    [LIBUSB_SPEED_SUPER_PLUS] = "5000+",
+#endif
 };
 
 static const unsigned int speed_map[] = {
@@ -180,6 +199,9 @@ static const unsigned int speed_map[] = {
     [LIBUSB_SPEED_FULL]    = USB_SPEED_FULL,
     [LIBUSB_SPEED_HIGH]    = USB_SPEED_HIGH,
     [LIBUSB_SPEED_SUPER]   = USB_SPEED_SUPER,
+#ifdef HAVE_SUPER_PLUS
+    [LIBUSB_SPEED_SUPER_PLUS] = USB_SPEED_SUPER,
+#endif
 };
 
 static const unsigned int status_map[] = {
@@ -232,6 +254,29 @@ static void usb_host_del_fd(int fd, void *user_data)
     qemu_set_fd_handler(fd, NULL, NULL, NULL);
 }
 
+#else
+
+static QEMUTimer *poll_timer;
+static uint32_t request_count;
+
+static void usb_host_timer_kick(void)
+{
+    int64_t delay_ns;
+
+    delay_ns = request_count
+        ? (NANOSECONDS_PER_SECOND / 100)  /* 10 ms interval with active req */
+        : (NANOSECONDS_PER_SECOND);       /* 1 sec interval otherwise */
+    timer_mod(poll_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + delay_ns);
+}
+
+static void usb_host_timer(void *opaque)
+{
+    struct timeval tv = { 0, 0 };
+
+    libusb_handle_events_timeout(ctx, &tv);
+    usb_host_timer_kick();
+}
+
 #endif /* !CONFIG_WIN32 */
 
 static int usb_host_init(void)
@@ -254,7 +299,8 @@ static int usb_host_init(void)
     libusb_set_debug(ctx, loglevel);
 #endif
 #ifdef CONFIG_WIN32
-    /* FIXME: add support for Windows. */
+    poll_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, usb_host_timer, NULL);
+    usb_host_timer_kick();
 #else
     libusb_set_pollfd_notifiers(ctx, usb_host_add_fd,
                                 usb_host_del_fd,
@@ -342,14 +388,19 @@ static USBHostRequest *usb_host_req_alloc(USBHostDevice *s, USBPacket *p,
         r->buffer = g_malloc(bufsize);
     }
     QTAILQ_INSERT_TAIL(&s->requests, r, next);
+#ifdef CONFIG_WIN32
+    request_count++;
+    usb_host_timer_kick();
+#endif
     return r;
 }
 
 static void usb_host_req_free(USBHostRequest *r)
 {
-    if (r->host) {
-        QTAILQ_REMOVE(&r->host->requests, r, next);
-    }
+#ifdef CONFIG_WIN32
+    request_count--;
+#endif
+    QTAILQ_REMOVE(&r->host->requests, r, next);
     libusb_free_transfer(r->xfer);
     g_free(r->buffer);
     g_free(r);
@@ -380,6 +431,8 @@ static void LIBUSB_CALL usb_host_req_complete_ctrl(struct libusb_transfer *xfer)
     r->p->status = status_map[xfer->status];
     r->p->actual_length = xfer->actual_length;
     if (r->in && xfer->actual_length) {
+        USBDevice *udev = USB_DEVICE(s);
+        struct libusb_config_descriptor *conf = (void *)r->cbuf;
         memcpy(r->cbuf, r->buffer + 8, xfer->actual_length);
 
         /* Fix up USB-3 ep0 maxpacket size to allow superspeed connected devices
@@ -387,6 +440,21 @@ static void LIBUSB_CALL usb_host_req_complete_ctrl(struct libusb_transfer *xfer)
         if (r->usb3ep0quirk && xfer->actual_length >= 18 &&
             r->cbuf[7] == 9) {
             r->cbuf[7] = 64;
+        }
+        /*
+         *If this is GET_DESCRIPTOR request for configuration descriptor,
+         * remove 'remote wakeup' flag from it to prevent idle power down
+         * in Windows guest
+         */
+        if (s->suppress_remote_wake &&
+            udev->setup_buf[0] == USB_DIR_IN &&
+            udev->setup_buf[1] == USB_REQ_GET_DESCRIPTOR &&
+            udev->setup_buf[3] == USB_DT_CONFIG && udev->setup_buf[2] == 0 &&
+            xfer->actual_length >
+                offsetof(struct libusb_config_descriptor, bmAttributes) &&
+            (conf->bmAttributes & USB_CFG_ATT_WAKEUP)) {
+                trace_usb_host_remote_wakeup_removed(s->bus_num, s->addr);
+                conf->bmAttributes &= ~USB_CFG_ATT_WAKEUP;
         }
     }
     trace_usb_host_req_complete(s->bus_num, s->addr, r->p,
@@ -444,12 +512,7 @@ static void usb_host_req_abort(USBHostRequest *r)
             usb_packet_complete(USB_DEVICE(s), r->p);
         }
         r->p = NULL;
-    }
 
-    QTAILQ_REMOVE(&r->host->requests, r, next);
-    r->host = NULL;
-
-    if (inflight) {
         libusb_cancel_transfer(r->xfer);
     }
 }
@@ -738,6 +801,13 @@ static void usb_host_speed_compat(USBHostDevice *s)
         for (i = 0; i < conf->bNumInterfaces; i++) {
             for (a = 0; a < conf->interface[i].num_altsetting; a++) {
                 intf = &conf->interface[i].altsetting[a];
+
+                if (intf->bInterfaceClass == LIBUSB_CLASS_MASS_STORAGE &&
+                    intf->bInterfaceSubClass == 6) { /* SCSI */
+                    udev->flags |= (1 << USB_DEV_FLAG_IS_SCSI_STORAGE);
+                    break;
+                }
+
                 for (e = 0; e < intf->bNumEndpoints; e++) {
                     endp = &intf->endpoint[e];
                     type = endp->bmAttributes & 0x3;
@@ -804,7 +874,7 @@ static void usb_host_ep_update(USBHostDevice *s)
     struct libusb_ss_endpoint_companion_descriptor *endp_ss_comp;
 #endif
     uint8_t devep, type;
-    int pid, ep;
+    int pid, ep, alt;
     int rc, i, e;
 
     usb_ep_reset(udev);
@@ -816,8 +886,20 @@ static void usb_host_ep_update(USBHostDevice *s)
                                 conf->bConfigurationValue, true);
 
     for (i = 0; i < conf->bNumInterfaces; i++) {
-        assert(udev->altsetting[i] < conf->interface[i].num_altsetting);
-        intf = &conf->interface[i].altsetting[udev->altsetting[i]];
+        /*
+         * The udev->altsetting array indexes alternate settings
+         * by the interface number. Get the 0th alternate setting
+         * first so that we can grab the interface number, and
+         * then correct the alternate setting value if necessary.
+         */
+        intf = &conf->interface[i].altsetting[0];
+        alt = udev->altsetting[intf->bInterfaceNumber];
+
+        if (alt != 0) {
+            assert(alt < conf->interface[i].num_altsetting);
+            intf = &conf->interface[i].altsetting[alt];
+        }
+
         trace_usb_host_parse_interface(s->bus_num, s->addr,
                                        intf->bInterfaceNumber,
                                        intf->bAlternateSetting, true);
@@ -863,26 +945,46 @@ static void usb_host_ep_update(USBHostDevice *s)
     libusb_free_config_descriptor(conf);
 }
 
-static int usb_host_open(USBHostDevice *s, libusb_device *dev)
+static int usb_host_open(USBHostDevice *s, libusb_device *dev, int hostfd)
 {
     USBDevice *udev = USB_DEVICE(s);
-    int bus_num = libusb_get_bus_number(dev);
-    int addr    = libusb_get_device_address(dev);
+    int libusb_speed;
+    int bus_num = 0;
+    int addr = 0;
     int rc;
     Error *local_err = NULL;
 
     if (s->bh_postld_pending) {
         return -1;
     }
-
-    trace_usb_host_open_started(bus_num, addr);
-
     if (s->dh != NULL) {
         goto fail;
     }
-    rc = libusb_open(dev, &s->dh);
-    if (rc != 0) {
-        goto fail;
+
+    if (dev) {
+        bus_num = libusb_get_bus_number(dev);
+        addr = libusb_get_device_address(dev);
+        trace_usb_host_open_started(bus_num, addr);
+
+        rc = libusb_open(dev, &s->dh);
+        if (rc != 0) {
+            goto fail;
+        }
+    } else {
+#if LIBUSB_API_VERSION >= 0x01000107 && !defined(CONFIG_WIN32)
+        trace_usb_host_open_hostfd(hostfd);
+
+        rc = libusb_wrap_sys_device(ctx, hostfd, &s->dh);
+        if (rc != 0) {
+            goto fail;
+        }
+        s->hostfd  = hostfd;
+        dev = libusb_get_device(s->dh);
+        bus_num = libusb_get_bus_number(dev);
+        addr = libusb_get_device_address(dev);
+#else
+        g_assert_not_reached();
+#endif
     }
 
     s->dev     = dev;
@@ -897,7 +999,43 @@ static int usb_host_open(USBHostDevice *s, libusb_device *dev)
     usb_ep_init(udev);
     usb_host_ep_update(s);
 
-    udev->speed     = speed_map[libusb_get_device_speed(dev)];
+    libusb_speed = libusb_get_device_speed(dev);
+#if LIBUSB_API_VERSION >= 0x01000107 && defined(CONFIG_LINUX) && \
+        defined(USBDEVFS_GET_SPEED)
+    if (hostfd && libusb_speed == 0) {
+        /*
+         * Workaround libusb bug: libusb_get_device_speed() does not
+         * work for libusb_wrap_sys_device() devices in v1.0.23.
+         *
+         * Speeds are defined in linux/usb/ch9.h, file not included
+         * due to name conflicts.
+         */
+        int rc = ioctl(hostfd, USBDEVFS_GET_SPEED, NULL);
+        switch (rc) {
+        case 1: /* low */
+            libusb_speed = LIBUSB_SPEED_LOW;
+            break;
+        case 2: /* full */
+            libusb_speed = LIBUSB_SPEED_FULL;
+            break;
+        case 3: /* high */
+        case 4: /* wireless */
+            libusb_speed = LIBUSB_SPEED_HIGH;
+            break;
+        case 5: /* super */
+            libusb_speed = LIBUSB_SPEED_SUPER;
+            break;
+        case 6: /* super plus */
+#ifdef HAVE_SUPER_PLUS
+            libusb_speed = LIBUSB_SPEED_SUPER_PLUS;
+#else
+            libusb_speed = LIBUSB_SPEED_SUPER;
+#endif
+            break;
+        }
+    }
+#endif
+    udev->speed = speed_map[libusb_speed];
     usb_host_speed_compat(s);
 
     if (s->ddesc.iProduct) {
@@ -934,9 +1072,30 @@ fail:
 static void usb_host_abort_xfers(USBHostDevice *s)
 {
     USBHostRequest *r, *rtmp;
+    int limit = 100;
 
     QTAILQ_FOREACH_SAFE(r, &s->requests, next, rtmp) {
         usb_host_req_abort(r);
+    }
+
+    while (QTAILQ_FIRST(&s->requests) != NULL) {
+        struct timeval tv;
+        memset(&tv, 0, sizeof(tv));
+        tv.tv_usec = 2500;
+        libusb_handle_events_timeout(ctx, &tv);
+        if (--limit == 0) {
+            /*
+             * Don't wait forever for libusb calling the complete
+             * callback (which will unlink and free the request).
+             *
+             * Leaking memory here, to make sure libusb will not
+             * access memory which we have released already.
+             */
+            QTAILQ_FOREACH_SAFE(r, &s->requests, next, rtmp) {
+                QTAILQ_REMOVE(&s->requests, r, next);
+            }
+            return;
+        }
     }
 }
 
@@ -964,6 +1123,11 @@ static int usb_host_close(USBHostDevice *s)
     s->dh = NULL;
     s->dev = NULL;
 
+    if (s->hostfd != -1) {
+        close(s->hostfd);
+        s->hostfd = -1;
+    }
+
     usb_host_auto_check(NULL);
     return 0;
 }
@@ -977,7 +1141,8 @@ static void usb_host_nodev_bh(void *opaque)
 static void usb_host_nodev(USBHostDevice *s)
 {
     if (!s->bh_nodev) {
-        s->bh_nodev = qemu_bh_new(usb_host_nodev_bh, s);
+        s->bh_nodev = qemu_bh_new_guarded(usb_host_nodev_bh, s,
+                                          &DEVICE(s)->mem_reentrancy_guard);
     }
     qemu_bh_schedule(s->bh_nodev);
 }
@@ -987,6 +1152,7 @@ static void usb_host_exit_notifier(struct Notifier *n, void *data)
     USBHostDevice *s = container_of(n, USBHostDevice, exit);
 
     if (s->dh) {
+        usb_host_abort_xfers(s);
         usb_host_release_interfaces(s);
         libusb_reset_device(s->dh);
         usb_host_attach_kernel(s);
@@ -1000,9 +1166,6 @@ static libusb_device *usb_host_find_ref(int bus, int addr)
     libusb_device *ret = NULL;
     int i, n;
 
-    if (usb_host_init() != 0) {
-        return NULL;
-    }
     n = libusb_get_device_list(ctx, &devs);
     for (i = 0; i < n; i++) {
         if (libusb_get_bus_number(devs[i]) == bus &&
@@ -1021,6 +1184,10 @@ static void usb_host_realize(USBDevice *udev, Error **errp)
     libusb_device *ldev;
     int rc;
 
+    if (usb_host_init() != 0) {
+        error_setg(errp, "failed to init libusb");
+        return;
+    }
     if (s->match.vendor_id > 0xffff) {
         error_setg(errp, "vendorid out of range");
         return;
@@ -1039,7 +1206,24 @@ static void usb_host_realize(USBDevice *udev, Error **errp)
     udev->auto_attach = 0;
     QTAILQ_INIT(&s->requests);
     QTAILQ_INIT(&s->isorings);
+    s->hostfd = -1;
 
+#if LIBUSB_API_VERSION >= 0x01000107 && !defined(CONFIG_WIN32)
+    if (s->hostdevice) {
+        int fd;
+        s->needs_autoscan = false;
+        fd = qemu_open_old(s->hostdevice, O_RDWR);
+        if (fd < 0) {
+            error_setg_errno(errp, errno, "failed to open %s", s->hostdevice);
+            return;
+        }
+        rc = usb_host_open(s, NULL, fd);
+        if (rc < 0) {
+            error_setg(errp, "failed to open host usb device %s", s->hostdevice);
+            return;
+        }
+    } else
+#endif
     if (s->match.addr && s->match.bus_num &&
         !s->match.vendor_id &&
         !s->match.product_id &&
@@ -1052,7 +1236,7 @@ static void usb_host_realize(USBDevice *udev, Error **errp)
                        s->match.bus_num, s->match.addr);
             return;
         }
-        rc = usb_host_open(s, ldev);
+        rc = usb_host_open(s, ldev, 0);
         libusb_unref_device(ldev);
         if (rc < 0) {
             error_setg(errp, "failed to open host usb device %d:%d",
@@ -1076,10 +1260,10 @@ static void usb_host_instance_init(Object *obj)
 
     device_add_bootindex_property(obj, &s->bootindex,
                                   "bootindex", NULL,
-                                  &udev->qdev, NULL);
+                                  &udev->qdev);
 }
 
-static void usb_host_unrealize(USBDevice *udev, Error **errp)
+static void usb_host_unrealize(USBDevice *udev)
 {
     USBHostDevice *s = USB_HOST_DEVICE(udev);
 
@@ -1458,10 +1642,10 @@ static void usb_host_handle_reset(USBDevice *udev)
     USBHostDevice *s = USB_HOST_DEVICE(udev);
     int rc;
 
-    if (!s->allow_guest_reset) {
+    if (!s->allow_one_guest_reset && !s->allow_all_guest_resets) {
         return;
     }
-    if (udev->addr == 0) {
+    if (!s->allow_all_guest_resets && udev->addr == 0) {
         return;
     }
 
@@ -1523,7 +1707,7 @@ static void usb_host_free_streams(USBDevice *udev, USBEndpoint **eps,
 /*
  * This is *NOT* about restoring state.  We have absolutely no idea
  * what state the host device is in at the moment and whenever it is
- * still present in the first place.  Attemping to contine where we
+ * still present in the first place.  Attempting to continue where we
  * left off is impossible.
  *
  * What we are going to do here is emulate a surprise removal of
@@ -1556,7 +1740,8 @@ static int usb_host_post_load(void *opaque, int version_id)
     USBHostDevice *dev = opaque;
 
     if (!dev->bh_postld) {
-        dev->bh_postld = qemu_bh_new(usb_host_post_load_bh, dev);
+        dev->bh_postld = qemu_bh_new_guarded(usb_host_post_load_bh, dev,
+                                             &DEVICE(dev)->mem_reentrancy_guard);
     }
     qemu_bh_schedule(dev->bh_postld);
     dev->bh_postld_pending = true;
@@ -1580,13 +1765,21 @@ static Property usb_host_dev_properties[] = {
     DEFINE_PROP_STRING("hostport", USBHostDevice, match.port),
     DEFINE_PROP_UINT32("vendorid",  USBHostDevice, match.vendor_id,  0),
     DEFINE_PROP_UINT32("productid", USBHostDevice, match.product_id, 0),
+#if LIBUSB_API_VERSION >= 0x01000107
+    DEFINE_PROP_STRING("hostdevice", USBHostDevice, hostdevice),
+#endif
     DEFINE_PROP_UINT32("isobufs",  USBHostDevice, iso_urb_count,    4),
     DEFINE_PROP_UINT32("isobsize", USBHostDevice, iso_urb_frames,   32),
-    DEFINE_PROP_BOOL("guest-reset", USBHostDevice, allow_guest_reset, true),
+    DEFINE_PROP_BOOL("guest-reset", USBHostDevice,
+                     allow_one_guest_reset, true),
+    DEFINE_PROP_BOOL("guest-resets-all", USBHostDevice,
+                     allow_all_guest_resets, false),
     DEFINE_PROP_UINT32("loglevel",  USBHostDevice, loglevel,
                        LIBUSB_LOG_LEVEL_WARNING),
     DEFINE_PROP_BIT("pipeline",    USBHostDevice, options,
                     USB_HOST_OPT_PIPELINE, true),
+    DEFINE_PROP_BOOL("suppress-remote-wake", USBHostDevice,
+                     suppress_remote_wake, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -1606,21 +1799,24 @@ static void usb_host_class_initfn(ObjectClass *klass, void *data)
     uc->alloc_streams  = usb_host_alloc_streams;
     uc->free_streams   = usb_host_free_streams;
     dc->vmsd = &vmstate_usb_host;
-    dc->props = usb_host_dev_properties;
+    device_class_set_props(dc, usb_host_dev_properties);
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
 }
 
-static TypeInfo usb_host_dev_info = {
+static const TypeInfo usb_host_dev_info = {
     .name          = TYPE_USB_HOST_DEVICE,
     .parent        = TYPE_USB_DEVICE,
     .instance_size = sizeof(USBHostDevice),
     .class_init    = usb_host_class_initfn,
     .instance_init = usb_host_instance_init,
 };
+module_obj(TYPE_USB_HOST_DEVICE);
+module_kconfig(USB);
 
 static void usb_host_register_types(void)
 {
     type_register_static(&usb_host_dev_info);
+    monitor_register_hmp("usbhost", true, hmp_info_usbhost);
 }
 
 type_init(usb_host_register_types)
@@ -1630,7 +1826,7 @@ type_init(usb_host_register_types)
 static QEMUTimer *usb_auto_timer;
 static VMChangeStateEntry *usb_vmstate;
 
-static void usb_host_vm_state(void *unused, int running, RunState state)
+static void usb_host_vm_state(void *unused, bool running, RunState state)
 {
     if (running) {
         usb_host_auto_check(unused);
@@ -1643,7 +1839,6 @@ static void usb_host_auto_check(void *unused)
     struct USBAutoFilter *f;
     libusb_device **devs = NULL;
     struct libusb_device_descriptor ddesc;
-    int unconnected = 0;
     int i, n;
 
     if (usb_host_init() != 0) {
@@ -1693,7 +1888,7 @@ static void usb_host_auto_check(void *unused)
                 if (s->dh != NULL) {
                     continue;
                 }
-                if (usb_host_open(s, devs[i]) < 0) {
+                if (usb_host_open(s, devs[i], 0) < 0) {
                     s->errcount++;
                     continue;
                 }
@@ -1703,9 +1898,6 @@ static void usb_host_auto_check(void *unused)
         libusb_free_device_list(devs, 1);
 
         QTAILQ_FOREACH(s, &hostdevs, next) {
-            if (s->dh == NULL) {
-                unconnected++;
-            }
             if (s->seen == 0) {
                 if (s->dh) {
                     usb_host_close(s);
@@ -1714,17 +1906,6 @@ static void usb_host_auto_check(void *unused)
             }
             s->seen = 0;
         }
-
-#if 0
-        if (unconnected == 0) {
-            /* nothing to watch */
-            if (usb_auto_timer) {
-                timer_del(usb_auto_timer);
-                trace_usb_host_auto_scan_disabled();
-            }
-            return;
-        }
-#endif
     }
 
     if (!usb_vmstate) {
@@ -1738,35 +1919,6 @@ static void usb_host_auto_check(void *unused)
         trace_usb_host_auto_scan_enabled();
     }
     timer_mod(usb_auto_timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + 2000);
-}
-
-/**
- * Check whether USB host device has a USB mass storage SCSI interface
- */
-bool usb_host_dev_is_scsi_storage(USBDevice *ud)
-{
-    USBHostDevice *uhd = USB_HOST_DEVICE(ud);
-    struct libusb_config_descriptor *conf;
-    const struct libusb_interface_descriptor *intf;
-    bool is_scsi_storage = false;
-    int i;
-
-    if (!uhd || libusb_get_active_config_descriptor(uhd->dev, &conf) != 0) {
-        return false;
-    }
-
-    for (i = 0; i < conf->bNumInterfaces; i++) {
-        intf = &conf->interface[i].altsetting[ud->altsetting[i]];
-        if (intf->bInterfaceClass == LIBUSB_CLASS_MASS_STORAGE &&
-            intf->bInterfaceSubClass == 6) {                 /* 6 means SCSI */
-            is_scsi_storage = true;
-            break;
-        }
-    }
-
-    libusb_free_config_descriptor(conf);
-
-    return is_scsi_storage;
 }
 
 void hmp_info_usbhost(Monitor *mon, const QDict *qdict)

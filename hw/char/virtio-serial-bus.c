@@ -21,11 +21,13 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/iov.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
+#include "migration/qemu-file-types.h"
 #include "monitor/monitor.h"
 #include "qemu/error-report.h"
 #include "qemu/queue.h"
-#include "hw/sysbus.h"
+#include "hw/qdev-properties.h"
 #include "trace.h"
 #include "hw/virtio/virtio-serial.h"
 #include "hw/virtio/virtio-access.h"
@@ -705,7 +707,7 @@ static void virtio_serial_save_device(VirtIODevice *vdev, QEMUFile *f)
         if (elem_popped) {
             qemu_put_be32s(f, &port->iov_idx);
             qemu_put_be64s(f, &port->iov_offset);
-            qemu_put_virtqueue_element(f, port->elem);
+            qemu_put_virtqueue_element(vdev, f, port->elem);
         }
     }
 }
@@ -738,7 +740,6 @@ static void virtio_serial_post_load_timer_cb(void *opaque)
         }
     }
     g_free(s->post_load->connected);
-    timer_del(s->post_load->timer);
     timer_free(s->post_load->timer);
     g_free(s->post_load);
     s->post_load = NULL;
@@ -840,10 +841,6 @@ static Property virtser_props[] = {
     DEFINE_PROP_END_OF_LIST()
 };
 
-#define TYPE_VIRTIO_SERIAL_BUS "virtio-serial-bus"
-#define VIRTIO_SERIAL_BUS(obj) \
-      OBJECT_CHECK(VirtIOSerialBus, (obj), TYPE_VIRTIO_SERIAL_BUS)
-
 static void virtser_bus_class_init(ObjectClass *klass, void *data)
 {
     BusClass *k = BUS_CLASS(klass);
@@ -940,7 +937,6 @@ static void virtser_port_device_realize(DeviceState *dev, Error **errp)
     Error *err = NULL;
 
     port->vser = bus->vser;
-    port->bh = qemu_bh_new(flush_queued_data_bh, port);
 
     assert(vsc->have_data);
 
@@ -989,6 +985,8 @@ static void virtser_port_device_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    port->bh = qemu_bh_new_guarded(flush_queued_data_bh, port,
+                                   &dev->mem_reentrancy_guard);
     port->elem = NULL;
 }
 
@@ -1007,7 +1005,7 @@ static void virtser_port_device_plug(HotplugHandler *hotplug_dev,
     virtio_notify_config(VIRTIO_DEVICE(hotplug_dev));
 }
 
-static void virtser_port_device_unrealize(DeviceState *dev, Error **errp)
+static void virtser_port_device_unrealize(DeviceState *dev)
 {
     VirtIOSerialPort *port = VIRTIO_SERIAL_PORT(dev);
     VirtIOSerialPortClass *vsc = VIRTIO_SERIAL_PORT_GET_CLASS(dev);
@@ -1019,7 +1017,7 @@ static void virtser_port_device_unrealize(DeviceState *dev, Error **errp)
     QTAILQ_REMOVE(&vser->ports, port, next);
 
     if (vsc->unrealize) {
-        vsc->unrealize(dev, errp);
+        vsc->unrealize(dev);
     }
 }
 
@@ -1047,21 +1045,18 @@ static void virtio_serial_device_realize(DeviceState *dev, Error **errp)
                             VIRTIO_CONSOLE_F_EMERG_WRITE)) {
         config_size = offsetof(struct virtio_console_config, emerg_wr);
     }
-    virtio_init(vdev, "virtio-serial", VIRTIO_ID_CONSOLE,
-                config_size);
+    virtio_init(vdev, VIRTIO_ID_CONSOLE, config_size);
 
     /* Spawn a new virtio-serial bus on which the ports will ride as devices */
-    qbus_create_inplace(&vser->bus, sizeof(vser->bus), TYPE_VIRTIO_SERIAL_BUS,
-                        dev, vdev->bus_name);
-    qbus_set_hotplug_handler(BUS(&vser->bus), OBJECT(vser), errp);
+    qbus_init(&vser->bus, sizeof(vser->bus), TYPE_VIRTIO_SERIAL_BUS,
+              dev, vdev->bus_name);
+    qbus_set_hotplug_handler(BUS(&vser->bus), OBJECT(vser));
     vser->bus.vser = vser;
     QTAILQ_INIT(&vser->ports);
 
     vser->bus.max_nr_ports = vser->serial.max_virtserial_ports;
-    vser->ivqs = g_malloc(vser->serial.max_virtserial_ports
-                          * sizeof(VirtQueue *));
-    vser->ovqs = g_malloc(vser->serial.max_virtserial_ports
-                          * sizeof(VirtQueue *));
+    vser->ivqs = g_new(VirtQueue *, vser->serial.max_virtserial_ports);
+    vser->ovqs = g_new(VirtQueue *, vser->serial.max_virtserial_ports);
 
     /* Add a queue for host to guest transfers for port 0 (backward compat) */
     vser->ivqs[0] = virtio_add_queue(vdev, 128, handle_input);
@@ -1107,7 +1102,7 @@ static void virtio_serial_port_class_init(ObjectClass *klass, void *data)
     k->bus_type = TYPE_VIRTIO_SERIAL_BUS;
     k->realize = virtser_port_device_realize;
     k->unrealize = virtser_port_device_unrealize;
-    k->props = virtser_props;
+    device_class_set_props(k, virtser_props);
 }
 
 static const TypeInfo virtio_serial_port_type_info = {
@@ -1119,24 +1114,31 @@ static const TypeInfo virtio_serial_port_type_info = {
     .class_init = virtio_serial_port_class_init,
 };
 
-static void virtio_serial_device_unrealize(DeviceState *dev, Error **errp)
+static void virtio_serial_device_unrealize(DeviceState *dev)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VirtIOSerial *vser = VIRTIO_SERIAL(dev);
+    int i;
 
     QLIST_REMOVE(vser, next);
+
+    virtio_delete_queue(vser->c_ivq);
+    virtio_delete_queue(vser->c_ovq);
+    for (i = 0; i < vser->bus.max_nr_ports; i++) {
+        virtio_delete_queue(vser->ivqs[i]);
+        virtio_delete_queue(vser->ovqs[i]);
+    }
 
     g_free(vser->ivqs);
     g_free(vser->ovqs);
     g_free(vser->ports_map);
     if (vser->post_load) {
         g_free(vser->post_load->connected);
-        timer_del(vser->post_load->timer);
         timer_free(vser->post_load->timer);
         g_free(vser->post_load);
     }
 
-    qbus_set_hotplug_handler(BUS(&vser->bus), NULL, errp);
+    qbus_set_hotplug_handler(BUS(&vser->bus), NULL);
 
     virtio_cleanup(vdev);
 }
@@ -1168,7 +1170,7 @@ static void virtio_serial_class_init(ObjectClass *klass, void *data)
 
     QLIST_INIT(&vserdevices.devices);
 
-    dc->props = virtio_serial_properties;
+    device_class_set_props(dc, virtio_serial_properties);
     dc->vmsd = &vmstate_virtio_console;
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
     vdc->realize = virtio_serial_device_realize;

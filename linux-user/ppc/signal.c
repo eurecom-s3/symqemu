@@ -18,6 +18,7 @@
  */
 #include "qemu/osdep.h"
 #include "qemu.h"
+#include "user-internals.h"
 #include "signal-common.h"
 #include "linux-user/trace.h"
 
@@ -35,12 +36,26 @@ struct target_mcontext {
     target_ulong mc_gregs[48];
     /* Includes fpscr.  */
     uint64_t mc_fregs[33];
+
 #if defined(TARGET_PPC64)
     /* Pointer to the vector regs */
     target_ulong v_regs;
+    /*
+     * On ppc64, this mcontext structure is naturally *unaligned*,
+     * or rather it is aligned on a 8 bytes boundary but not on
+     * a 16 byte boundary.  This pad fixes it up.  This is why we
+     * cannot use ppc_avr_t, which would force alignment.  This is
+     * also why the vector regs are referenced in the ABI by the
+     * v_regs pointer above so any amount of padding can be added here.
+     */
+    target_ulong pad;
+    /* VSCR and VRSAVE are saved separately.  Also reserve space for VSX. */
+    struct {
+        uint64_t altivec[34 + 16][2];
+    } mc_vregs;
 #else
     target_ulong mc_pad[2];
-#endif
+
     /* We need to handle Altivec and SPE at the same time, which no
        kernel needs to do.  Fortunately, the kernel defines this bit to
        be Altivec-register-large all the time, rather than trying to
@@ -48,32 +63,14 @@ struct target_mcontext {
     union {
         /* SPE vector registers.  One extra for SPEFSCR.  */
         uint32_t spe[33];
-        /* Altivec vector registers.  The packing of VSCR and VRSAVE
-           varies depending on whether we're PPC64 or not: PPC64 splits
-           them apart; PPC32 stuffs them together.
-           We also need to account for the VSX registers on PPC64
-        */
-#if defined(TARGET_PPC64)
-#define QEMU_NVRREG (34 + 16)
-        /* On ppc64, this mcontext structure is naturally *unaligned*,
-         * or rather it is aligned on a 8 bytes boundary but not on
-         * a 16 bytes one. This pad fixes it up. This is also why the
-         * vector regs are referenced by the v_regs pointer above so
-         * any amount of padding can be added here
+        /*
+         * Altivec vector registers.  One extra for VRSAVE.
+         * On ppc32, we are already aligned to 16 bytes.  We could
+         * use ppc_avr_t, but choose to share the same type as ppc64.
          */
-        target_ulong pad;
-#else
-        /* On ppc32, we are already aligned to 16 bytes */
-#define QEMU_NVRREG 33
-#endif
-        /* We cannot use ppc_avr_t here as we do *not* want the implied
-         * 16-bytes alignment that would result from it. This would have
-         * the effect of making the whole struct target_mcontext aligned
-         * which breaks the layout of struct target_ucontext on ppc64.
-         */
-        uint64_t altivec[QEMU_NVRREG][2];
-#undef QEMU_NVRREG
+        uint64_t altivec[33][2];
     } mc_vregs;
+#endif
 };
 
 /* See arch/powerpc/include/asm/sigcontext.h.  */
@@ -206,9 +203,6 @@ struct target_func_ptr {
 
 #endif
 
-/* We use the mc_pad field for the signal return trampoline.  */
-#define tramp mc_pad
-
 /* See arch/powerpc/kernel/signal.c.  */
 static target_ulong get_sigframe(struct target_sigaction *ka,
                                  CPUPPCState *env,
@@ -221,8 +215,7 @@ static target_ulong get_sigframe(struct target_sigaction *ka,
     return (oldsp - frame_size) & ~0xFUL;
 }
 
-#if ((defined(TARGET_WORDS_BIGENDIAN) && defined(HOST_WORDS_BIGENDIAN)) || \
-     (!defined(HOST_WORDS_BIGENDIAN) && !defined(TARGET_WORDS_BIGENDIAN)))
+#if TARGET_BIG_ENDIAN == HOST_BIG_ENDIAN
 #define PPC_VEC_HI      0
 #define PPC_VEC_LO      1
 #else
@@ -235,7 +228,7 @@ static void save_user_regs(CPUPPCState *env, struct target_mcontext *frame)
 {
     target_ulong msr = env->msr;
     int i;
-    target_ulong ccr = 0;
+    uint32_t ccr = 0;
 
     /* In general, the kernel attempts to be intelligent about what it
        needs to save for Altivec/FP/SPE registers.  We don't care that
@@ -248,11 +241,9 @@ static void save_user_regs(CPUPPCState *env, struct target_mcontext *frame)
     __put_user(env->nip, &frame->mc_gregs[TARGET_PT_NIP]);
     __put_user(env->ctr, &frame->mc_gregs[TARGET_PT_CTR]);
     __put_user(env->lr, &frame->mc_gregs[TARGET_PT_LNK]);
-    __put_user(env->xer, &frame->mc_gregs[TARGET_PT_XER]);
+    __put_user(cpu_read_xer(env), &frame->mc_gregs[TARGET_PT_XER]);
 
-    for (i = 0; i < ARRAY_SIZE(env->crf); i++) {
-        ccr |= env->crf[i] << (32 - ((i + 1) * 4));
-    }
+    ccr = ppc_get_cr(env);
     __put_user(ccr, &frame->mc_gregs[TARGET_PT_CCR]);
 
     /* Save Altivec registers if necessary.  */
@@ -265,9 +256,6 @@ static void save_user_regs(CPUPPCState *env, struct target_mcontext *frame)
             __put_user(avr->u64[PPC_VEC_HI], &vreg->u64[0]);
             __put_user(avr->u64[PPC_VEC_LO], &vreg->u64[1]);
         }
-        /* Set MSR_VR in the saved MSR value to indicate that
-           frame->mc_vregs contains valid data.  */
-        msr |= MSR_VR;
 #if defined(TARGET_PPC64)
         vrsave = (uint32_t *)&frame->mc_vregs.altivec[33];
         /* 64-bit needs to put a pointer to the vectors in the frame */
@@ -278,6 +266,7 @@ static void save_user_regs(CPUPPCState *env, struct target_mcontext *frame)
         __put_user((uint32_t)env->spr[SPR_VRSAVE], vrsave);
     }
 
+#if defined(TARGET_PPC64)
     /* Save VSX second halves */
     if (env->insns_flags2 & PPC2_VSX) {
         uint64_t *vsregs = (uint64_t *)&frame->mc_vregs.altivec[34];
@@ -286,6 +275,7 @@ static void save_user_regs(CPUPPCState *env, struct target_mcontext *frame)
             __put_user(*vsrl, &vsregs[i]);
         }
     }
+#endif
 
     /* Save floating point registers.  */
     if (env->insns_flags & PPC_FLOAT) {
@@ -296,22 +286,15 @@ static void save_user_regs(CPUPPCState *env, struct target_mcontext *frame)
         __put_user((uint64_t) env->fpscr, &frame->mc_fregs[32]);
     }
 
+#if !defined(TARGET_PPC64)
     /* Save SPE registers.  The kernel only saves the high half.  */
     if (env->insns_flags & PPC_SPE) {
-#if defined(TARGET_PPC64)
-        for (i = 0; i < ARRAY_SIZE(env->gpr); i++) {
-            __put_user(env->gpr[i] >> 32, &frame->mc_vregs.spe[i]);
-        }
-#else
         for (i = 0; i < ARRAY_SIZE(env->gprh); i++) {
             __put_user(env->gprh[i], &frame->mc_vregs.spe[i]);
         }
-#endif
-        /* Set MSR_SPE in the saved MSR value to indicate that
-           frame->mc_vregs contains valid data.  */
-        msr |= MSR_SPE;
         __put_user(env->spe_fscr, &frame->mc_vregs.spe[32]);
     }
+#endif
 
     /* Store MSR.  */
     __put_user(msr, &frame->mc_gregs[TARGET_PT_MSR]);
@@ -320,10 +303,8 @@ static void save_user_regs(CPUPPCState *env, struct target_mcontext *frame)
 static void encode_trampoline(int sigret, uint32_t *tramp)
 {
     /* Set up the sigreturn trampoline: li r0,sigret; sc.  */
-    if (sigret) {
-        __put_user(0x38000000 | sigret, &tramp[0]);
-        __put_user(0x44000002, &tramp[1]);
-    }
+    __put_user(0x38000000 | sigret, &tramp[0]);
+    __put_user(0x44000002, &tramp[1]);
 }
 
 static void restore_user_regs(CPUPPCState *env,
@@ -331,6 +312,7 @@ static void restore_user_regs(CPUPPCState *env,
 {
     target_ulong save_r2 = 0;
     target_ulong msr;
+    target_ulong xer;
     target_ulong ccr;
 
     int i;
@@ -346,13 +328,12 @@ static void restore_user_regs(CPUPPCState *env,
     __get_user(env->nip, &frame->mc_gregs[TARGET_PT_NIP]);
     __get_user(env->ctr, &frame->mc_gregs[TARGET_PT_CTR]);
     __get_user(env->lr, &frame->mc_gregs[TARGET_PT_LNK]);
-    __get_user(env->xer, &frame->mc_gregs[TARGET_PT_XER]);
+
+    __get_user(xer, &frame->mc_gregs[TARGET_PT_XER]);
+    cpu_write_xer(env, xer);
+
     __get_user(ccr, &frame->mc_gregs[TARGET_PT_CCR]);
-
-    for (i = 0; i < ARRAY_SIZE(env->crf); i++) {
-        env->crf[i] = (ccr >> (32 - ((i + 1) * 4))) & 0xf;
-    }
-
+    ppc_set_cr(env, ccr);
     if (!sig) {
         env->gpr[2] = save_r2;
     }
@@ -360,8 +341,10 @@ static void restore_user_regs(CPUPPCState *env,
     __get_user(msr, &frame->mc_gregs[TARGET_PT_MSR]);
 
     /* If doing signal return, restore the previous little-endian mode.  */
-    if (sig)
-        env->msr = (env->msr & ~(1ull << MSR_LE)) | (msr & (1ull << MSR_LE));
+    if (sig) {
+        ppc_store_msr(env, ((env->msr & ~(1ull << MSR_LE)) |
+                            (msr & (1ull << MSR_LE))));
+    }
 
     /* Restore Altivec registers if necessary.  */
     if (env->insns_flags & PPC_ALTIVEC) {
@@ -371,7 +354,7 @@ static void restore_user_regs(CPUPPCState *env,
         uint64_t v_addr;
         /* 64-bit needs to recover the pointer to the vectors from the frame */
         __get_user(v_addr, &frame->v_regs);
-        v_regs = g2h(v_addr);
+        v_regs = g2h(env_cpu(env), v_addr);
 #else
         v_regs = (ppc_avr_t *)frame->mc_vregs.altivec;
 #endif
@@ -382,8 +365,6 @@ static void restore_user_regs(CPUPPCState *env,
             __get_user(avr->u64[PPC_VEC_HI], &vreg->u64[0]);
             __get_user(avr->u64[PPC_VEC_LO], &vreg->u64[1]);
         }
-        /* Set MSR_VEC in the saved MSR value to indicate that
-           frame->mc_vregs contains valid data.  */
 #if defined(TARGET_PPC64)
         vrsave = (uint32_t *)&v_regs[33];
 #else
@@ -392,6 +373,7 @@ static void restore_user_regs(CPUPPCState *env,
         __get_user(env->spr[SPR_VRSAVE], vrsave);
     }
 
+#if defined(TARGET_PPC64)
     /* Restore VSX second halves */
     if (env->insns_flags2 & PPC2_VSX) {
         uint64_t *vsregs = (uint64_t *)&frame->mc_vregs.altivec[34];
@@ -400,6 +382,7 @@ static void restore_user_regs(CPUPPCState *env,
             __get_user(*vsrl, &vsregs[i]);
         }
     }
+#endif
 
     /* Restore floating point registers.  */
     if (env->insns_flags & PPC_FLOAT) {
@@ -412,22 +395,15 @@ static void restore_user_regs(CPUPPCState *env,
         env->fpscr = (uint32_t) fpscr;
     }
 
+#if !defined(TARGET_PPC64)
     /* Save SPE registers.  The kernel only saves the high half.  */
     if (env->insns_flags & PPC_SPE) {
-#if defined(TARGET_PPC64)
-        for (i = 0; i < ARRAY_SIZE(env->gpr); i++) {
-            uint32_t hi;
-
-            __get_user(hi, &frame->mc_vregs.spe[i]);
-            env->gpr[i] = ((uint64_t)hi << 32) | ((uint32_t) env->gpr[i]);
-        }
-#else
         for (i = 0; i < ARRAY_SIZE(env->gprh); i++) {
             __get_user(env->gprh[i], &frame->mc_vregs.spe[i]);
         }
-#endif
         __get_user(env->spe_fscr, &frame->mc_vregs.spe[32]);
     }
+#endif
 }
 
 #if !defined(TARGET_PPC64)
@@ -454,12 +430,7 @@ void setup_frame(int sig, struct target_sigaction *ka,
     /* Save user regs.  */
     save_user_regs(env, &frame->mctx);
 
-    /* Construct the trampoline code on the stack. */
-    encode_trampoline(TARGET_NR_sigreturn, (uint32_t *)&frame->mctx.tramp);
-
-    /* The kernel checks for the presence of a VDSO here.  We don't
-       emulate a vdso, so use a sigreturn system call.  */
-    env->lr = (target_ulong) h2g(frame->mctx.tramp);
+    env->lr = default_sigreturn;
 
     /* Turn off all fp exceptions.  */
     env->fpscr = 0;
@@ -479,7 +450,7 @@ void setup_frame(int sig, struct target_sigaction *ka,
     env->nip = (target_ulong) ka->_sa_handler;
 
     /* Signal handlers are entered in big-endian mode.  */
-    env->msr &= ~(1ull << MSR_LE);
+    ppc_store_msr(env, env->msr & ~(1ull << MSR_LE));
 
     unlock_user_struct(frame, frame_addr, 1);
     return;
@@ -495,7 +466,6 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
                     target_sigset_t *set, CPUPPCState *env)
 {
     struct target_rt_sigframe *rt_sf;
-    uint32_t *trampptr = 0;
     struct target_mcontext *mctx = 0;
     target_ulong rt_sf_addr, newsp = 0;
     int i, err = 0;
@@ -523,22 +493,17 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
 
 #if defined(TARGET_PPC64)
     mctx = &rt_sf->uc.tuc_sigcontext.mcontext;
-    trampptr = &rt_sf->trampoline[0];
 
     sc = &rt_sf->uc.tuc_sigcontext;
     __put_user(h2g(mctx), &sc->regs);
     __put_user(sig, &sc->signal);
 #else
     mctx = &rt_sf->uc.tuc_mcontext;
-    trampptr = (uint32_t *)&rt_sf->uc.tuc_mcontext.tramp;
 #endif
 
     save_user_regs(env, mctx);
-    encode_trampoline(TARGET_NR_rt_sigreturn, trampptr);
 
-    /* The kernel checks for the presence of a VDSO here.  We don't
-       emulate a vdso, so use a sigreturn system call.  */
-    env->lr = (target_ulong) h2g(trampptr);
+    env->lr = default_rt_sigreturn;
 
     /* Turn off all fp exceptions.  */
     env->fpscr = 0;
@@ -561,21 +526,24 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
     if (get_ppc64_abi(image) < 2) {
         /* ELFv1 PPC64 function pointers are pointers to OPD entries. */
         struct target_func_ptr *handler =
-            (struct target_func_ptr *)g2h(ka->_sa_handler);
+            (struct target_func_ptr *)g2h(env_cpu(env), ka->_sa_handler);
         env->nip = tswapl(handler->entry);
         env->gpr[2] = tswapl(handler->toc);
     } else {
-        /* ELFv2 PPC64 function pointers are entry points, but R12
-         * must also be set */
-        env->nip = tswapl((target_ulong) ka->_sa_handler);
-        env->gpr[12] = env->nip;
+        /* ELFv2 PPC64 function pointers are entry points. R12 must also be set. */
+        env->gpr[12] = env->nip = ka->_sa_handler;
     }
 #else
     env->nip = (target_ulong) ka->_sa_handler;
 #endif
 
+#if TARGET_BIG_ENDIAN
     /* Signal handlers are entered in big-endian mode.  */
-    env->msr &= ~(1ull << MSR_LE);
+    ppc_store_msr(env, env->msr & ~(1ull << MSR_LE));
+#else
+    /* Signal handlers are entered in little-endian mode.  */
+    ppc_store_msr(env, env->msr | (1ull << MSR_LE));
+#endif
 
     unlock_user_struct(rt_sf, rt_sf_addr, 1);
     return;
@@ -599,12 +567,9 @@ long do_sigreturn(CPUPPCState *env)
     if (!lock_user_struct(VERIFY_READ, sc, sc_addr, 1))
         goto sigsegv;
 
-#if defined(TARGET_PPC64)
-    set.sig[0] = sc->oldmask + ((uint64_t)(sc->_unused[3]) << 32);
-#else
     __get_user(set.sig[0], &sc->oldmask);
     __get_user(set.sig[1], &sc->_unused[3]);
-#endif
+
     target_to_host_sigset_internal(&blocked, &set);
     set_sigmask(&blocked);
 
@@ -615,13 +580,13 @@ long do_sigreturn(CPUPPCState *env)
 
     unlock_user_struct(sr, sr_addr, 1);
     unlock_user_struct(sc, sc_addr, 1);
-    return -TARGET_QEMU_ESIGRETURN;
+    return -QEMU_ESIGRETURN;
 
 sigsegv:
     unlock_user_struct(sr, sr_addr, 1);
     unlock_user_struct(sc, sc_addr, 1);
     force_sig(TARGET_SIGSEGV);
-    return -TARGET_QEMU_ESIGRETURN;
+    return -QEMU_ESIGRETURN;
 }
 #endif /* !defined(TARGET_PPC64) */
 
@@ -667,17 +632,15 @@ long do_rt_sigreturn(CPUPPCState *env)
     if (do_setcontext(&rt_sf->uc, env, 1))
         goto sigsegv;
 
-    do_sigaltstack(rt_sf_addr
-                   + offsetof(struct target_rt_sigframe, uc.tuc_stack),
-                   0, env->gpr[1]);
+    target_restore_altstack(&rt_sf->uc.tuc_stack, env);
 
     unlock_user_struct(rt_sf, rt_sf_addr, 1);
-    return -TARGET_QEMU_ESIGRETURN;
+    return -QEMU_ESIGRETURN;
 
 sigsegv:
     unlock_user_struct(rt_sf, rt_sf_addr, 1);
     force_sig(TARGET_SIGSEGV);
-    return -TARGET_QEMU_ESIGRETURN;
+    return -QEMU_ESIGRETURN;
 }
 
 /* This syscall implements {get,set,swap}context for userland.  */
@@ -730,8 +693,24 @@ abi_long do_swapcontext(CPUArchState *env, abi_ulong uold_ctx,
             /* We cannot return to a partially updated context.  */
             force_sig(TARGET_SIGSEGV);
         }
-        return -TARGET_QEMU_ESIGRETURN;
+        return -QEMU_ESIGRETURN;
     }
 
     return 0;
+}
+
+void setup_sigtramp(abi_ulong sigtramp_page)
+{
+    uint32_t *tramp = lock_user(VERIFY_WRITE, sigtramp_page, 2 * 8, 0);
+    assert(tramp != NULL);
+
+#ifdef TARGET_ARCH_HAS_SETUP_FRAME
+    default_sigreturn = sigtramp_page;
+    encode_trampoline(TARGET_NR_sigreturn, tramp + 0);
+#endif
+
+    default_rt_sigreturn = sigtramp_page + 8;
+    encode_trampoline(TARGET_NR_rt_sigreturn, tramp + 2);
+
+    unlock_user(tramp, sigtramp_page, 2 * 8);
 }

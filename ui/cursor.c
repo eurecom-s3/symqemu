@@ -46,6 +46,8 @@ static QEMUCursor *cursor_parse_xpm(const char *xpm[])
 
     /* parse pixel data */
     c = cursor_alloc(width, height);
+    assert(c != NULL);
+
     for (pixel = 0, y = 0; y < height; y++, line++) {
         for (x = 0; x < height; x++, pixel++) {
             idx = xpm[line][x];
@@ -88,10 +90,15 @@ QEMUCursor *cursor_builtin_left_ptr(void)
     return cursor_parse_xpm(cursor_left_ptr_xpm);
 }
 
-QEMUCursor *cursor_alloc(int width, int height)
+QEMUCursor *cursor_alloc(uint16_t width, uint16_t height)
 {
     QEMUCursor *c;
-    int datasize = width * height * sizeof(uint32_t);
+    size_t datasize = width * height * sizeof(uint32_t);
+
+    /* Modern physical hardware typically uses 512x512 sprites */
+    if (width > 512 || height > 512) {
+        return NULL;
+    }
 
     c = g_malloc0(sizeof(QEMUCursor) + datasize);
     c->width  = width;
@@ -100,12 +107,13 @@ QEMUCursor *cursor_alloc(int width, int height)
     return c;
 }
 
-void cursor_get(QEMUCursor *c)
+QEMUCursor *cursor_ref(QEMUCursor *c)
 {
     c->refcount++;
+    return c;
 }
 
-void cursor_put(QEMUCursor *c)
+void cursor_unref(QEMUCursor *c)
 {
     if (c == NULL)
         return;

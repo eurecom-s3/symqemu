@@ -20,7 +20,8 @@
 #ifndef QEMU_MIPS_CPU_QOM_H
 #define QEMU_MIPS_CPU_QOM_H
 
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
+#include "qom/object.h"
 
 #ifdef TARGET_MIPS64
 #define TYPE_MIPS_CPU "mips64-cpu"
@@ -28,30 +29,27 @@
 #define TYPE_MIPS_CPU "mips-cpu"
 #endif
 
-#define MIPS_CPU_CLASS(klass) \
-    OBJECT_CLASS_CHECK(MIPSCPUClass, (klass), TYPE_MIPS_CPU)
-#define MIPS_CPU(obj) \
-    OBJECT_CHECK(MIPSCPU, (obj), TYPE_MIPS_CPU)
-#define MIPS_CPU_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(MIPSCPUClass, (obj), TYPE_MIPS_CPU)
+OBJECT_DECLARE_CPU_TYPE(MIPSCPU, MIPSCPUClass, MIPS_CPU)
 
 /**
  * MIPSCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  *
  * A MIPS CPU model.
  */
-typedef struct MIPSCPUClass {
+struct MIPSCPUClass {
     /*< private >*/
     CPUClass parent_class;
     /*< public >*/
 
     DeviceRealize parent_realize;
-    void (*parent_reset)(CPUState *cpu);
+    ResettablePhases parent_phases;
     const struct mips_def_t *cpu_def;
-} MIPSCPUClass;
 
-typedef struct MIPSCPU MIPSCPU;
+    /* Used for the jazz board to modify mips_cpu_do_transaction_failed. */
+    bool no_data_aborts;
+};
+
 
 #endif

@@ -11,10 +11,9 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
+#include "qemu/cutils.h"
 #include "qapi/string-output-visitor.h"
 #include "qapi/visitor-impl.h"
-#include "qemu/host-utils.h"
 #include <math.h>
 #include "qemu/range.h"
 
@@ -123,7 +122,7 @@ static void format_string(StringOutputVisitor *sov, Range *r, bool next,
     }
 }
 
-static void print_type_int64(Visitor *v, const char *name, int64_t *obj,
+static bool print_type_int64(Visitor *v, const char *name, int64_t *obj,
                              Error **errp)
 {
     StringOutputVisitor *sov = to_sov(v);
@@ -138,7 +137,7 @@ static void print_type_int64(Visitor *v, const char *name, int64_t *obj,
         sov->range_start.s = *obj;
         sov->range_end.s = *obj;
         sov->list_mode = LM_IN_PROGRESS;
-        return;
+        return true;
 
     case LM_IN_PROGRESS:
         if (sov->range_end.s + 1 == *obj) {
@@ -155,7 +154,7 @@ static void print_type_int64(Visitor *v, const char *name, int64_t *obj,
             sov->range_start.s = *obj;
             sov->range_end.s = *obj;
         }
-        return;
+        return true;
 
     case LM_END:
         if (sov->range_end.s + 1 == *obj) {
@@ -197,17 +196,19 @@ static void print_type_int64(Visitor *v, const char *name, int64_t *obj,
         }
         g_string_append(sov->string, ")");
     }
+
+    return true;
 }
 
-static void print_type_uint64(Visitor *v, const char *name, uint64_t *obj,
+static bool print_type_uint64(Visitor *v, const char *name, uint64_t *obj,
                              Error **errp)
 {
     /* FIXME: print_type_int64 mishandles values over INT64_MAX */
     int64_t i = *obj;
-    print_type_int64(v, name, &i, errp);
+    return print_type_int64(v, name, &i, errp);
 }
 
-static void print_type_size(Visitor *v, const char *name, uint64_t *obj,
+static bool print_type_size(Visitor *v, const char *name, uint64_t *obj,
                             Error **errp)
 {
     StringOutputVisitor *sov = to_sov(v);
@@ -217,7 +218,7 @@ static void print_type_size(Visitor *v, const char *name, uint64_t *obj,
     if (!sov->human) {
         out = g_strdup_printf("%"PRIu64, *obj);
         string_output_set(sov, out);
-        return;
+        return true;
     }
 
     val = *obj;
@@ -226,16 +227,18 @@ static void print_type_size(Visitor *v, const char *name, uint64_t *obj,
     string_output_set(sov, out);
 
     g_free(psize);
+    return true;
 }
 
-static void print_type_bool(Visitor *v, const char *name, bool *obj,
+static bool print_type_bool(Visitor *v, const char *name, bool *obj,
                             Error **errp)
 {
     StringOutputVisitor *sov = to_sov(v);
     string_output_set(sov, g_strdup(*obj ? "true" : "false"));
+    return true;
 }
 
-static void print_type_str(Visitor *v, const char *name, char **obj,
+static bool print_type_str(Visitor *v, const char *name, char **obj,
                            Error **errp)
 {
     StringOutputVisitor *sov = to_sov(v);
@@ -247,16 +250,18 @@ static void print_type_str(Visitor *v, const char *name, char **obj,
         out = g_strdup(*obj ? *obj : "");
     }
     string_output_set(sov, out);
+    return true;
 }
 
-static void print_type_number(Visitor *v, const char *name, double *obj,
+static bool print_type_number(Visitor *v, const char *name, double *obj,
                               Error **errp)
 {
     StringOutputVisitor *sov = to_sov(v);
-    string_output_set(sov, g_strdup_printf("%f", *obj));
+    string_output_set(sov, g_strdup_printf("%.17g", *obj));
+    return true;
 }
 
-static void print_type_null(Visitor *v, const char *name, QNull **obj,
+static bool print_type_null(Visitor *v, const char *name, QNull **obj,
                             Error **errp)
 {
     StringOutputVisitor *sov = to_sov(v);
@@ -268,9 +273,10 @@ static void print_type_null(Visitor *v, const char *name, QNull **obj,
         out = g_strdup("");
     }
     string_output_set(sov, out);
+    return true;
 }
 
-static void
+static bool
 start_list(Visitor *v, const char *name, GenericList **list, size_t size,
            Error **errp)
 {
@@ -285,6 +291,7 @@ start_list(Visitor *v, const char *name, GenericList **list, size_t size,
     if (*list && (*list)->next) {
         sov->list_mode = LM_STARTED;
     }
+    return true;
 }
 
 static GenericList *next_list(Visitor *v, GenericList *tail, size_t size)

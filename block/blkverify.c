@@ -10,12 +10,14 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/sockets.h" /* for EINPROGRESS on Windows */
+#include "block/block-io.h"
 #include "block/block_int.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qstring.h"
 #include "qemu/cutils.h"
 #include "qemu/module.h"
 #include "qemu/option.h"
+#include "qemu/memalign.h"
 
 typedef struct {
     BdrvChild *test_file;
@@ -31,7 +33,7 @@ typedef struct BlkverifyRequest {
     uint64_t bytes;
     int flags;
 
-    int (*request_fn)(BdrvChild *, int64_t, unsigned int, QEMUIOVector *,
+    int (*request_fn)(BdrvChild *, int64_t, int64_t, QEMUIOVector *,
                       BdrvRequestFlags);
 
     int ret;                    /* test image result */
@@ -43,7 +45,7 @@ typedef struct BlkverifyRequest {
     QEMUIOVector *raw_qiov;     /* cloned I/O vector for raw file */
 } BlkverifyRequest;
 
-static void GCC_FMT_ATTR(2, 3) blkverify_err(BlkverifyRequest *r,
+static void G_GNUC_PRINTF(2, 3) blkverify_err(BlkverifyRequest *r,
                                              const char *fmt, ...)
 {
     va_list ap;
@@ -112,33 +114,27 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
 {
     BDRVBlkverifyState *s = bs->opaque;
     QemuOpts *opts;
-    Error *local_err = NULL;
     int ret;
 
     opts = qemu_opts_create(&runtime_opts, NULL, 0, &error_abort);
-    qemu_opts_absorb_qdict(opts, options, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!qemu_opts_absorb_qdict(opts, options, errp)) {
         ret = -EINVAL;
         goto fail;
     }
 
     /* Open the raw file */
-    bs->file = bdrv_open_child(qemu_opt_get(opts, "x-raw"), options, "raw",
-                               bs, &child_file, false, &local_err);
-    if (local_err) {
-        ret = -EINVAL;
-        error_propagate(errp, local_err);
+    ret = bdrv_open_file_child(qemu_opt_get(opts, "x-raw"), options, "raw",
+                               bs, errp);
+    if (ret < 0) {
         goto fail;
     }
 
     /* Open the test file */
     s->test_file = bdrv_open_child(qemu_opt_get(opts, "x-image"), options,
-                                   "test", bs, &child_format, false,
-                                   &local_err);
-    if (local_err) {
+                                   "test", bs, &child_of_bds, BDRV_CHILD_DATA,
+                                   false, errp);
+    if (!s->test_file) {
         ret = -EINVAL;
-        error_propagate(errp, local_err);
         goto fail;
     }
 
@@ -159,11 +155,12 @@ static void blkverify_close(BlockDriverState *bs)
     s->test_file = NULL;
 }
 
-static int64_t blkverify_getlength(BlockDriverState *bs)
+static int64_t coroutine_fn GRAPH_RDLOCK
+blkverify_co_getlength(BlockDriverState *bs)
 {
     BDRVBlkverifyState *s = bs->opaque;
 
-    return bdrv_getlength(s->test_file->bs);
+    return bdrv_co_getlength(s->test_file->bs);
 }
 
 static void coroutine_fn blkverify_do_test_req(void *opaque)
@@ -224,8 +221,8 @@ blkverify_co_prwv(BlockDriverState *bs, BlkverifyRequest *r, uint64_t offset,
 }
 
 static int coroutine_fn
-blkverify_co_preadv(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
-                    QEMUIOVector *qiov, int flags)
+blkverify_co_preadv(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                    QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
     BlkverifyRequest r;
     QEMUIOVector raw_qiov;
@@ -237,8 +234,8 @@ blkverify_co_preadv(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
     qemu_iovec_init(&raw_qiov, qiov->niov);
     qemu_iovec_clone(&raw_qiov, qiov, buf);
 
-    ret = blkverify_co_prwv(bs, &r, offset, bytes, qiov, &raw_qiov, flags,
-                            false);
+    ret = blkverify_co_prwv(bs, &r, offset, bytes, qiov, &raw_qiov,
+                            flags & ~BDRV_REQ_REGISTERED_BUF, false);
 
     cmp_offset = qemu_iovec_compare(qiov, &raw_qiov);
     if (cmp_offset != -1) {
@@ -253,14 +250,14 @@ blkverify_co_preadv(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
 }
 
 static int coroutine_fn
-blkverify_co_pwritev(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
-                     QEMUIOVector *qiov, int flags)
+blkverify_co_pwritev(BlockDriverState *bs, int64_t offset, int64_t bytes,
+                     QEMUIOVector *qiov, BdrvRequestFlags flags)
 {
     BlkverifyRequest r;
     return blkverify_co_prwv(bs, &r, offset, bytes, qiov, qiov, flags, true);
 }
 
-static int blkverify_co_flush(BlockDriverState *bs)
+static int coroutine_fn GRAPH_RDLOCK blkverify_co_flush(BlockDriverState *bs)
 {
     BDRVBlkverifyState *s = bs->opaque;
 
@@ -268,18 +265,19 @@ static int blkverify_co_flush(BlockDriverState *bs)
     return bdrv_co_flush(s->test_file->bs);
 }
 
-static bool blkverify_recurse_is_first_non_filter(BlockDriverState *bs,
-                                                  BlockDriverState *candidate)
+static bool GRAPH_RDLOCK
+blkverify_recurse_can_replace(BlockDriverState *bs,
+                              BlockDriverState *to_replace)
 {
     BDRVBlkverifyState *s = bs->opaque;
 
-    bool perm = bdrv_recurse_is_first_non_filter(bs->file->bs, candidate);
-
-    if (perm) {
-        return true;
-    }
-
-    return bdrv_recurse_is_first_non_filter(s->test_file->bs, candidate);
+    /*
+     * blkverify quits the whole qemu process if there is a mismatch
+     * between bs->file->bs and s->test_file->bs.  Therefore, we know
+     * know that both must match bs and we can recurse down to either.
+     */
+    return bdrv_recurse_can_replace(bs->file->bs, to_replace) ||
+           bdrv_recurse_can_replace(s->test_file->bs, to_replace);
 }
 
 static void blkverify_refresh_filename(BlockDriverState *bs)
@@ -317,8 +315,8 @@ static BlockDriver bdrv_blkverify = {
     .bdrv_parse_filename              = blkverify_parse_filename,
     .bdrv_file_open                   = blkverify_open,
     .bdrv_close                       = blkverify_close,
-    .bdrv_child_perm                  = bdrv_filter_default_perms,
-    .bdrv_getlength                   = blkverify_getlength,
+    .bdrv_child_perm                  = bdrv_default_perms,
+    .bdrv_co_getlength                = blkverify_co_getlength,
     .bdrv_refresh_filename            = blkverify_refresh_filename,
     .bdrv_dirname                     = blkverify_dirname,
 
@@ -327,7 +325,7 @@ static BlockDriver bdrv_blkverify = {
     .bdrv_co_flush                    = blkverify_co_flush,
 
     .is_filter                        = true,
-    .bdrv_recurse_is_first_non_filter = blkverify_recurse_is_first_non_filter,
+    .bdrv_recurse_can_replace         = blkverify_recurse_can_replace,
 };
 
 static void bdrv_blkverify_init(void)

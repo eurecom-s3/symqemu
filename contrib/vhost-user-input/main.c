@@ -6,14 +6,13 @@
 
 #include "qemu/osdep.h"
 
-#include <glib.h>
-#include <linux/input.h>
+#include <sys/ioctl.h>
 
 #include "qemu/iov.h"
 #include "qemu/bswap.h"
 #include "qemu/sockets.h"
-#include "contrib/libvhost-user/libvhost-user.h"
-#include "contrib/libvhost-user/libvhost-user-glib.h"
+#include "libvhost-user-glib.h"
+#include "standard-headers/linux/input.h"
 #include "standard-headers/linux/virtio_input.h"
 #include "qapi/error.h"
 
@@ -77,7 +76,7 @@ static void vi_input_send(VuInput *vi, struct virtio_input_event *event)
         len = iov_from_buf(elem->in_sg, elem->in_num,
                            0, &vi->queue[i].event, sizeof(virtio_input_event));
         vu_queue_push(dev, vq, elem, len);
-        g_free(elem);
+        free(elem);
     }
 
     vu_queue_notify(&vi->dev.parent, vq);
@@ -115,13 +114,16 @@ vi_evdev_watch(VuDev *dev, int condition, void *data)
 static void vi_handle_status(VuInput *vi, virtio_input_event *event)
 {
     struct input_event evdev;
+    struct timeval tval;
     int rc;
 
-    if (gettimeofday(&evdev.time, NULL)) {
+    if (gettimeofday(&tval, NULL)) {
         perror("vi_handle_status: gettimeofday");
         return;
     }
 
+    evdev.input_event_sec = tval.tv_sec;
+    evdev.input_event_usec = tval.tv_usec;
     evdev.type = le16toh(event->type);
     evdev.code = le16toh(event->code);
     evdev.value = le32toh(event->value);
@@ -153,7 +155,7 @@ static void vi_handle_sts(VuDev *dev, int qidx)
                          0, &event, sizeof(event));
         vi_handle_status(vi, &event);
         vu_queue_push(dev, vq, elem, len);
-        g_free(elem);
+        free(elem);
     }
 
     vu_queue_notify(&vi->dev.parent, vq);
@@ -187,7 +189,7 @@ vi_queue_set_started(VuDev *dev, int qidx, bool started)
     }
 
     if (!started && vi->evsrc) {
-        g_source_destroy(vi->evsrc);
+        vug_source_destroy(vi->evsrc);
         vi->evsrc = NULL;
     }
 }
@@ -212,7 +214,9 @@ static int vi_get_config(VuDev *dev, uint8_t *config, uint32_t len)
 {
     VuInput *vi = container_of(dev, VuInput, dev.parent);
 
-    g_return_val_if_fail(len <= sizeof(*vi->sel_config), -1);
+    if (len > sizeof(*vi->sel_config)) {
+        return -1;
+    }
 
     if (vi->sel_config) {
         memcpy(config, vi->sel_config, len);
@@ -401,9 +405,7 @@ main(int argc, char *argv[])
 
     vug_deinit(&vi.dev);
 
-    if (vi.evsrc) {
-        g_source_unref(vi.evsrc);
-    }
+    vug_source_destroy(vi.evsrc);
     g_array_free(vi.config, TRUE);
     g_free(vi.queue);
     return 0;

@@ -13,12 +13,18 @@
 #include "qemu/osdep.h"
 
 #include "vss-common.h"
-#include <inc/win2003/vscoordint.h>
+#include "vss-debug.h"
+#ifdef HAVE_VSS_SDK
+#include <vscoordint.h>
+#else
+#include <vsadmin.h>
+#endif
 #include "install.h"
 #include <wbemidl.h>
 #include <comdef.h>
 #include <comutil.h>
 #include <sddl.h>
+#include <winsvc.h>
 
 #define BUFFER_SIZE 1024
 
@@ -41,14 +47,15 @@ void errmsg(DWORD err, const char *text)
      * If text doesn't contains '(', negative precision is given, which is
      * treated as though it were missing.
      */
-    char *msg = NULL, *nul = strchr(text, '(');
+    char *msg = NULL;
+    const char *nul = strchr(text, '(');
     int len = nul ? nul - text : -1;
 
     FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
                   FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                   NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                   (char *)&msg, 0, NULL);
-    fprintf(stderr, "%.*s. (Error: %lx) %s\n", len, text, err, msg);
+    qga_debug("%.*s. (Error: %lx) %s", len, text, err, msg);
     LocalFree(msg);
 }
 
@@ -93,6 +100,8 @@ HRESULT put_Value(ICatalogObject *pObj, LPCWSTR name, T val)
 /* Lookup Administrators group name from winmgmt */
 static HRESULT GetAdminName(_bstr_t *name)
 {
+    qga_debug_begin;
+
     HRESULT hr;
     COMPointer<IWbemLocator> pLoc;
     COMPointer<IWbemServices> pSvc;
@@ -135,6 +144,7 @@ static HRESULT GetAdminName(_bstr_t *name)
     }
 
 out:
+    qga_debug_end;
     return hr;
 }
 
@@ -142,6 +152,8 @@ out:
 static HRESULT getNameByStringSID(
     const wchar_t *sid, LPWSTR buffer, LPDWORD bufferLen)
 {
+    qga_debug_begin;
+
     HRESULT hr = S_OK;
     PSID psid = NULL;
     SID_NAME_USE groupType;
@@ -161,6 +173,7 @@ static HRESULT getNameByStringSID(
     LocalFree(psid);
 
 out:
+    qga_debug_end;
     return hr;
 }
 
@@ -168,6 +181,8 @@ out:
 static HRESULT QGAProviderFind(
     HRESULT (*found)(ICatalogCollection *, int, void *), void *arg)
 {
+    qga_debug_begin;
+
     HRESULT hr;
     COMInitializer initializer;
     COMPointer<IUnknown> pUnknown;
@@ -198,41 +213,53 @@ static HRESULT QGAProviderFind(
     chk(pColl->SaveChanges(&n));
 
 out:
+    qga_debug_end;
     return hr;
 }
 
 /* Count QGA VSS provider in COM+ Application Catalog */
 static HRESULT QGAProviderCount(ICatalogCollection *coll, int i, void *arg)
 {
+    qga_debug_begin;
+
     (*(int *)arg)++;
+
+    qga_debug_end;
     return S_OK;
 }
 
 /* Remove QGA VSS provider from COM+ Application Catalog Collection */
 static HRESULT QGAProviderRemove(ICatalogCollection *coll, int i, void *arg)
 {
+    qga_debug_begin;
     HRESULT hr;
 
-    fprintf(stderr, "Removing COM+ Application: %s\n", QGA_PROVIDER_NAME);
+    qga_debug("Removing COM+ Application: %s", QGA_PROVIDER_NAME);
     chk(coll->Remove(i));
 out:
+    qga_debug_end;
     return hr;
 }
 
 /* Unregister this module from COM+ Applications Catalog */
 STDAPI COMUnregister(void)
 {
+    qga_debug_begin;
+
     HRESULT hr;
 
     DllUnregisterServer();
     chk(QGAProviderFind(QGAProviderRemove, NULL));
 out:
+    qga_debug_end;
     return hr;
 }
 
 /* Register this module to COM+ Applications Catalog */
 STDAPI COMRegister(void)
 {
+    qga_debug_begin;
+
     HRESULT hr;
     COMInitializer initializer;
     COMPointer<IUnknown> pUnknown;
@@ -252,12 +279,14 @@ STDAPI COMRegister(void)
 
     if (!g_hinstDll) {
         errmsg(E_FAIL, "Failed to initialize DLL");
+        qga_debug_end;
         return E_FAIL;
     }
 
     chk(QGAProviderFind(QGAProviderCount, (void *)&count));
     if (count) {
         errmsg(E_ABORT, "QGA VSS Provider is already installed");
+        qga_debug_end;
         return E_ABORT;
     }
 
@@ -298,9 +327,8 @@ STDAPI COMRegister(void)
     }
     strcpy(tlbPath, dllPath);
     strcpy(tlbPath+n-3, "tlb");
-    fprintf(stderr, "Registering " QGA_PROVIDER_NAME ":\n");
-    fprintf(stderr, "  %s\n", dllPath);
-    fprintf(stderr, "  %s\n", tlbPath);
+    qga_debug("Registering " QGA_PROVIDER_NAME ": %s %s",
+              dllPath, tlbPath);
     if (!PathFileExists(tlbPath)) {
         hr = HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
         errmsg(hr, "Failed to lookup tlb");
@@ -348,12 +376,24 @@ out:
         COMUnregister();
     }
 
+    qga_debug_end;
     return hr;
 }
 
+STDAPI_(void) CALLBACK DLLCOMRegister(HWND, HINSTANCE, LPSTR, int)
+{
+    COMRegister();
+}
+
+STDAPI_(void) CALLBACK DLLCOMUnregister(HWND, HINSTANCE, LPSTR, int)
+{
+    COMUnregister();
+}
 
 static BOOL CreateRegistryKey(LPCTSTR key, LPCTSTR value, LPCTSTR data)
 {
+    qga_debug_begin;
+
     HKEY  hKey;
     LONG  ret;
     DWORD size;
@@ -374,6 +414,7 @@ static BOOL CreateRegistryKey(LPCTSTR key, LPCTSTR value, LPCTSTR data)
     RegCloseKey(hKey);
 
 out:
+    qga_debug_end;
     if (ret != ERROR_SUCCESS) {
         /* As we cannot printf within DllRegisterServer(), show a dialog. */
         errmsg_dialog(ret, "Cannot add registry", key);
@@ -385,6 +426,8 @@ out:
 /* Register this dll as a VSS provider */
 STDAPI DllRegisterServer(void)
 {
+    qga_debug_begin;
+
     COMInitializer initializer;
     COMPointer<IVssAdmin> pVssAdmin;
     HRESULT hr = E_FAIL;
@@ -443,6 +486,17 @@ STDAPI DllRegisterServer(void)
                                      VSS_PROV_SOFTWARE,
                                      const_cast<WCHAR*>(QGA_PROVIDER_VERSION),
                                      g_gProviderVersion);
+    if (hr == (long int) VSS_E_PROVIDER_ALREADY_REGISTERED) {
+        DllUnregisterServer();
+        hr = pVssAdmin->RegisterProvider(g_gProviderId, CLSID_QGAVSSProvider,
+                                         const_cast<WCHAR * >
+                                         (QGA_PROVIDER_LNAME),
+                                         VSS_PROV_SOFTWARE,
+                                         const_cast<WCHAR * >
+                                         (QGA_PROVIDER_VERSION),
+                                         g_gProviderVersion);
+    }
+
     if (FAILED(hr)) {
         errmsg_dialog(hr, "RegisterProvider failed");
     }
@@ -452,12 +506,15 @@ out:
         DllUnregisterServer();
     }
 
+    qga_debug_end;
     return hr;
 }
 
 /* Unregister this VSS hardware provider from the system */
 STDAPI DllUnregisterServer(void)
 {
+    qga_debug_begin;
+
     TCHAR key[256];
     COMInitializer initializer;
     COMPointer<IVssAdmin> pVssAdmin;
@@ -475,6 +532,7 @@ STDAPI DllUnregisterServer(void)
     SHDeleteKey(HKEY_CLASSES_ROOT, key);
     SHDeleteKey(HKEY_CLASSES_ROOT, g_szProgid);
 
+    qga_debug_end;
     return S_OK; /* Uninstall should never fail */
 }
 
@@ -491,33 +549,42 @@ namespace _com_util
         }
 
         if (mbstowcs(bstr, ascii, len) == (size_t)-1) {
-            fprintf(stderr, "Failed to convert string '%s' into BSTR", ascii);
+            qga_debug("Failed to convert string '%s' into BSTR", ascii);
             bstr[0] = 0;
         }
         return bstr;
     }
 }
 
-/* Stop QGA VSS provider service from COM+ Application Admin Catalog */
-
+/* Stop QGA VSS provider service using Winsvc API  */
 STDAPI StopService(void)
 {
-    HRESULT hr;
-    COMInitializer initializer;
-    COMPointer<IUnknown> pUnknown;
-    COMPointer<ICOMAdminCatalog2> pCatalog;
+    qga_debug_begin;
 
-    int count = 0;
+    HRESULT hr = S_OK;
+    SC_HANDLE manager = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS);
+    SC_HANDLE service = NULL;
 
-    chk(QGAProviderFind(QGAProviderCount, (void *)&count));
-    if (count) {
-        chk(CoCreateInstance(CLSID_COMAdminCatalog, NULL, CLSCTX_INPROC_SERVER,
-            IID_IUnknown, (void **)pUnknown.replace()));
-        chk(pUnknown->QueryInterface(IID_ICOMAdminCatalog2,
-            (void **)pCatalog.replace()));
-        chk(pCatalog->ShutdownApplication(_bstr_t(QGA_PROVIDER_LNAME)));
+    if (!manager) {
+        errmsg(E_FAIL, "Failed to open service manager");
+        hr = E_FAIL;
+        goto out;
+    }
+    service = OpenService(manager, QGA_PROVIDER_NAME, SC_MANAGER_ALL_ACCESS);
+
+    if (!service) {
+        errmsg(E_FAIL, "Failed to open service");
+        hr =  E_FAIL;
+        goto out;
+    }
+    if (!(ControlService(service, SERVICE_CONTROL_STOP, NULL))) {
+        errmsg(E_FAIL, "Failed to stop service");
+        hr = E_FAIL;
     }
 
 out:
+    CloseServiceHandle(service);
+    CloseServiceHandle(manager);
+    qga_debug_end;
     return hr;
 }

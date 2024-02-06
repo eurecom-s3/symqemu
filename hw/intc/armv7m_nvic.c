@@ -12,12 +12,17 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "cpu.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "qemu/timer.h"
 #include "hw/intc/armv7m_nvic.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
+#include "sysemu/tcg.h"
+#include "sysemu/runstate.h"
 #include "target/arm/cpu.h"
 #include "exec/exec-all.h"
+#include "exec/memop.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "trace.h"
@@ -59,6 +64,20 @@
 static const uint8_t nvic_id[] = {
     0x00, 0xb0, 0x1b, 0x00, 0x0d, 0xe0, 0x05, 0xb1
 };
+
+static void signal_sysresetreq(NVICState *s)
+{
+    if (qemu_irq_is_connected(s->sysresetreq)) {
+        qemu_irq_pulse(s->sysresetreq);
+    } else {
+        /*
+         * Default behaviour if the SoC doesn't need to wire up
+         * SYSRESETREQ (eg to a system reset controller of some kind):
+         * perform a system reset via the usual QEMU API.
+         */
+        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+    }
+}
 
 static int nvic_pending_prio(NVICState *s)
 {
@@ -109,14 +128,13 @@ static bool nvic_isrpending(NVICState *s)
 {
     int irq;
 
-    /* We can shortcut if the highest priority pending interrupt
-     * happens to be external or if there is nothing pending.
+    /*
+     * We can shortcut if the highest priority pending interrupt
+     * happens to be external; if not we need to check the whole
+     * vectors[] array.
      */
     if (s->vectpending > NVIC_FIRST_IRQ) {
         return true;
-    }
-    if (s->vectpending == 0) {
-        return false;
     }
 
     for (irq = NVIC_FIRST_IRQ; irq < s->num_irq; irq++) {
@@ -372,7 +390,7 @@ static inline int nvic_exec_prio(NVICState *s)
     return MIN(running, s->exception_prio);
 }
 
-bool armv7m_nvic_neg_prio_requested(void *opaque, bool secure)
+bool armv7m_nvic_neg_prio_requested(NVICState *s, bool secure)
 {
     /* Return true if the requested execution priority is negative
      * for the specified security state, ie that security state
@@ -382,8 +400,6 @@ bool armv7m_nvic_neg_prio_requested(void *opaque, bool secure)
      * mean we don't allow FAULTMASK_NS to actually make the execution
      * priority negative). Compare pseudocode IsReqExcPriNeg().
      */
-    NVICState *s = opaque;
-
     if (s->cpu->env.v7m.faultmask[secure]) {
         return true;
     }
@@ -401,17 +417,13 @@ bool armv7m_nvic_neg_prio_requested(void *opaque, bool secure)
     return false;
 }
 
-bool armv7m_nvic_can_take_pending_exception(void *opaque)
+bool armv7m_nvic_can_take_pending_exception(NVICState *s)
 {
-    NVICState *s = opaque;
-
     return nvic_exec_prio(s) > nvic_pending_prio(s);
 }
 
-int armv7m_nvic_raw_execution_priority(void *opaque)
+int armv7m_nvic_raw_execution_priority(NVICState *s)
 {
-    NVICState *s = opaque;
-
     return s->exception_prio;
 }
 
@@ -489,9 +501,8 @@ static void nvic_irq_update(NVICState *s)
  * if @secure is true and @irq does not specify one of the fixed set
  * of architecturally banked exceptions.
  */
-static void armv7m_nvic_clear_pending(void *opaque, int irq, bool secure)
+static void armv7m_nvic_clear_pending(NVICState *s, int irq, bool secure)
 {
-    NVICState *s = (NVICState *)opaque;
     VecInfo *vec;
 
     assert(irq > ARMV7M_EXCP_RESET && irq < s->num_irq);
@@ -567,7 +578,7 @@ static void do_armv7m_nvic_set_pending(void *opaque, int irq, bool secure,
              * which saves having to have an extra argument is_terminal
              * that we'd only use in one place.
              */
-            cpu_abort(&s->cpu->parent_obj,
+            cpu_abort(CPU(s->cpu),
                       "Lockup: can't take terminal derived exception "
                       "(original exception priority %d)\n",
                       s->vectpending_prio);
@@ -633,7 +644,7 @@ static void do_armv7m_nvic_set_pending(void *opaque, int irq, bool secure,
                  * Lockup condition due to a guest bug. We don't model
                  * Lockup, so report via cpu_abort() instead.
                  */
-                cpu_abort(&s->cpu->parent_obj,
+                cpu_abort(CPU(s->cpu),
                           "Lockup: can't escalate %d to HardFault "
                           "(current priority %d)\n", irq, running);
             }
@@ -649,17 +660,17 @@ static void do_armv7m_nvic_set_pending(void *opaque, int irq, bool secure,
     }
 }
 
-void armv7m_nvic_set_pending(void *opaque, int irq, bool secure)
+void armv7m_nvic_set_pending(NVICState *s, int irq, bool secure)
 {
-    do_armv7m_nvic_set_pending(opaque, irq, secure, false);
+    do_armv7m_nvic_set_pending(s, irq, secure, false);
 }
 
-void armv7m_nvic_set_pending_derived(void *opaque, int irq, bool secure)
+void armv7m_nvic_set_pending_derived(NVICState *s, int irq, bool secure)
 {
-    do_armv7m_nvic_set_pending(opaque, irq, secure, true);
+    do_armv7m_nvic_set_pending(s, irq, secure, true);
 }
 
-void armv7m_nvic_set_pending_lazyfp(void *opaque, int irq, bool secure)
+void armv7m_nvic_set_pending_lazyfp(NVICState *s, int irq, bool secure)
 {
     /*
      * Pend an exception during lazy FP stacking. This differs
@@ -667,7 +678,6 @@ void armv7m_nvic_set_pending_lazyfp(void *opaque, int irq, bool secure)
      * whether we should escalate depends on the saved context
      * in the FPCCR register, not on the current state of the CPU/NVIC.
      */
-    NVICState *s = (NVICState *)opaque;
     bool banked = exc_is_banked(irq);
     VecInfo *vec;
     bool targets_secure;
@@ -732,7 +742,7 @@ void armv7m_nvic_set_pending_lazyfp(void *opaque, int irq, bool secure)
              * We want to escalate to HardFault but the context the
              * FP state belongs to prevents the exception pre-empting.
              */
-            cpu_abort(&s->cpu->parent_obj,
+            cpu_abort(CPU(s->cpu),
                       "Lockup: can't escalate to HardFault during "
                       "lazy FP register stacking\n");
         }
@@ -756,9 +766,8 @@ void armv7m_nvic_set_pending_lazyfp(void *opaque, int irq, bool secure)
 }
 
 /* Make pending IRQ active.  */
-void armv7m_nvic_acknowledge_irq(void *opaque)
+void armv7m_nvic_acknowledge_irq(NVICState *s)
 {
-    NVICState *s = (NVICState *)opaque;
     CPUARMState *env = &s->cpu->env;
     const int pending = s->vectpending;
     const int running = nvic_exec_prio(s);
@@ -787,21 +796,25 @@ void armv7m_nvic_acknowledge_irq(void *opaque)
     nvic_irq_update(s);
 }
 
-void armv7m_nvic_get_pending_irq_info(void *opaque,
+static bool vectpending_targets_secure(NVICState *s)
+{
+    /* Return true if s->vectpending targets Secure state */
+    if (s->vectpending_is_s_banked) {
+        return true;
+    }
+    return !exc_is_banked(s->vectpending) &&
+        exc_targets_secure(s, s->vectpending);
+}
+
+void armv7m_nvic_get_pending_irq_info(NVICState *s,
                                       int *pirq, bool *ptargets_secure)
 {
-    NVICState *s = (NVICState *)opaque;
     const int pending = s->vectpending;
     bool targets_secure;
 
     assert(pending > ARMV7M_EXCP_RESET && pending < s->num_irq);
 
-    if (s->vectpending_is_s_banked) {
-        targets_secure = true;
-    } else {
-        targets_secure = !exc_is_banked(pending) &&
-            exc_targets_secure(s, pending);
-    }
+    targets_secure = vectpending_targets_secure(s);
 
     trace_nvic_get_pending_irq_info(pending, targets_secure);
 
@@ -809,13 +822,42 @@ void armv7m_nvic_get_pending_irq_info(void *opaque,
     *pirq = pending;
 }
 
-int armv7m_nvic_complete_irq(void *opaque, int irq, bool secure)
+int armv7m_nvic_complete_irq(NVICState *s, int irq, bool secure)
 {
-    NVICState *s = (NVICState *)opaque;
     VecInfo *vec = NULL;
-    int ret;
+    int ret = 0;
 
     assert(irq > ARMV7M_EXCP_RESET && irq < s->num_irq);
+
+    trace_nvic_complete_irq(irq, secure);
+
+    if (secure && exc_is_banked(irq)) {
+        vec = &s->sec_vectors[irq];
+    } else {
+        vec = &s->vectors[irq];
+    }
+
+    /*
+     * Identify illegal exception return cases. We can't immediately
+     * return at this point because we still need to deactivate
+     * (either this exception or NMI/HardFault) first.
+     */
+    if (!exc_is_banked(irq) && exc_targets_secure(s, irq) != secure) {
+        /*
+         * Return from a configurable exception targeting the opposite
+         * security state from the one we're trying to complete it for.
+         * Clear vec because it's not really the VecInfo for this
+         * (irq, secstate) so we mustn't deactivate it.
+         */
+        ret = -1;
+        vec = NULL;
+    } else if (!vec->active) {
+        /* Return from an inactive interrupt */
+        ret = -1;
+    } else {
+        /* Legal return, we will return the RETTOBASE bit value to the caller */
+        ret = nvic_rettobase(s);
+    }
 
     /*
      * For negative priorities, v8M will forcibly deactivate the appropriate
@@ -846,38 +888,13 @@ int armv7m_nvic_complete_irq(void *opaque, int irq, bool secure)
     }
 
     if (!vec) {
-        if (secure && exc_is_banked(irq)) {
-            vec = &s->sec_vectors[irq];
-        } else {
-            vec = &s->vectors[irq];
-        }
-    }
-
-    trace_nvic_complete_irq(irq, secure);
-
-    if (!vec->active) {
-        /* Tell the caller this was an illegal exception return */
-        return -1;
-    }
-
-    /*
-     * If this is a configurable exception and it is currently
-     * targeting the opposite security state from the one we're trying
-     * to complete it for, this counts as an illegal exception return.
-     * We still need to deactivate whatever vector the logic above has
-     * selected, though, as it might not be the same as the one for the
-     * requested exception number.
-     */
-    if (!exc_is_banked(irq) && exc_targets_secure(s, irq) != secure) {
-        ret = -1;
-    } else {
-        ret = nvic_rettobase(s);
+        return ret;
     }
 
     vec->active = 0;
     if (vec->level) {
         /* Re-pend the exception if it's still held high; only
-         * happens for extenal IRQs
+         * happens for external IRQs
          */
         assert(irq >= NVIC_FIRST_IRQ);
         vec->pending = 1;
@@ -888,7 +905,7 @@ int armv7m_nvic_complete_irq(void *opaque, int irq, bool secure)
     return ret;
 }
 
-bool armv7m_nvic_get_ready_status(void *opaque, int irq, bool secure)
+bool armv7m_nvic_get_ready_status(NVICState *s, int irq, bool secure)
 {
     /*
      * Return whether an exception is "ready", i.e. it is enabled and is
@@ -899,7 +916,6 @@ bool armv7m_nvic_get_ready_status(void *opaque, int irq, bool secure)
      * for non-banked exceptions secure is always false; for banked exceptions
      * it indicates which of the exceptions is required.
      */
-    NVICState *s = (NVICState *)opaque;
     bool banked = exc_is_banked(irq);
     VecInfo *vec;
     int running = nvic_exec_prio(s);
@@ -1006,13 +1022,30 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
         }
         return val;
     }
+    case 0xcfc:
+        if (!arm_feature(&cpu->env, ARM_FEATURE_V8_1M)) {
+            goto bad_offset;
+        }
+        return cpu->revidr;
     case 0xd00: /* CPUID Base.  */
         return cpu->midr;
     case 0xd04: /* Interrupt Control State (ICSR) */
         /* VECTACTIVE */
         val = cpu->env.v7m.exception;
         /* VECTPENDING */
-        val |= (s->vectpending & 0xff) << 12;
+        if (s->vectpending) {
+            /*
+             * From v8.1M VECTPENDING must read as 1 if accessed as
+             * NonSecure and the highest priority pending and enabled
+             * exception targets Secure.
+             */
+            int vp = s->vectpending;
+            if (!attrs.secure && arm_feature(&cpu->env, ARM_FEATURE_V8_1M) &&
+                vectpending_targets_secure(s)) {
+                vp = 1;
+            }
+            val |= (vp & 0x1ff) << 12;
+        }
         /* ISRPENDING - set if any external IRQ is pending */
         if (nvic_isrpending(s)) {
             val |= (1 << 22);
@@ -1071,11 +1104,18 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
         }
         return cpu->env.v7m.scr[attrs.secure];
     case 0xd14: /* Configuration Control.  */
-        /* The BFHFNMIGN bit is the only non-banked bit; we
-         * keep it in the non-secure copy of the register.
+        /*
+         * Non-banked bits: BFHFNMIGN (stored in the NS copy of the register)
+         * and TRD (stored in the S copy of the register)
          */
         val = cpu->env.v7m.ccr[attrs.secure];
         val |= cpu->env.v7m.ccr[M_REG_NS] & R_V7M_CCR_BFHFNMIGN_MASK;
+        /* BFHFNMIGN is RAZ/WI from NS if AIRCR.BFHFNMINS is 0 */
+        if (!attrs.secure) {
+            if (!(cpu->env.v7m.aircr & R_V7M_AIRCR_BFHFNMINS_MASK)) {
+                val &= ~R_V7M_CCR_BFHFNMIGN_MASK;
+            }
+        }
         return val;
     case 0xd24: /* System Handler Control and State (SHCSR) */
         if (!arm_feature(&cpu->env, ARM_FEATURE_V7)) {
@@ -1219,32 +1259,74 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
                       "Aux Fault status registers unimplemented\n");
         return 0;
     case 0xd40: /* PFR0.  */
-        return cpu->id_pfr0;
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
+        return cpu->isar.id_pfr0;
     case 0xd44: /* PFR1.  */
-        return cpu->id_pfr1;
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
+        return cpu->isar.id_pfr1;
     case 0xd48: /* DFR0.  */
-        return cpu->id_dfr0;
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
+        return cpu->isar.id_dfr0;
     case 0xd4c: /* AFR0.  */
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
         return cpu->id_afr0;
     case 0xd50: /* MMFR0.  */
-        return cpu->id_mmfr0;
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
+        return cpu->isar.id_mmfr0;
     case 0xd54: /* MMFR1.  */
-        return cpu->id_mmfr1;
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
+        return cpu->isar.id_mmfr1;
     case 0xd58: /* MMFR2.  */
-        return cpu->id_mmfr2;
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
+        return cpu->isar.id_mmfr2;
     case 0xd5c: /* MMFR3.  */
-        return cpu->id_mmfr3;
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
+        return cpu->isar.id_mmfr3;
     case 0xd60: /* ISAR0.  */
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
         return cpu->isar.id_isar0;
     case 0xd64: /* ISAR1.  */
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
         return cpu->isar.id_isar1;
     case 0xd68: /* ISAR2.  */
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
         return cpu->isar.id_isar2;
     case 0xd6c: /* ISAR3.  */
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
         return cpu->isar.id_isar3;
     case 0xd70: /* ISAR4.  */
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
         return cpu->isar.id_isar4;
     case 0xd74: /* ISAR5.  */
+        if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
+            goto bad_offset;
+        }
         return cpu->isar.id_isar5;
     case 0xd78: /* CLIDR */
         return cpu->clidr;
@@ -1258,12 +1340,12 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
     case 0xd84: /* CSSELR */
         return cpu->env.v7m.csselr[attrs.secure];
     case 0xd88: /* CPACR */
-        if (!arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
+        if (!cpu_isar_feature(aa32_vfp_simd, cpu)) {
             return 0;
         }
         return cpu->env.v7m.cpacr[attrs.secure];
     case 0xd8c: /* NSACR */
-        if (!attrs.secure || !arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
+        if (!attrs.secure || !cpu_isar_feature(aa32_vfp_simd, cpu)) {
             return 0;
         }
         return cpu->env.v7m.nsacr;
@@ -1271,7 +1353,6 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
     case 0xd90: /* MPU_TYPE */
         /* Unified MPU; if the MPU is not present this value is zero */
         return cpu->pmsav7_dregion << 8;
-        break;
     case 0xd94: /* MPU_CTRL */
         return cpu->env.v7m.mpu_ctrl[attrs.secure];
     case 0xd98: /* MPU_RNR */
@@ -1412,8 +1493,14 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
             return 0;
         }
         return cpu->env.v7m.sfar;
+    case 0xf04: /* RFSR */
+        if (!cpu_isar_feature(aa32_ras, cpu)) {
+            goto bad_offset;
+        }
+        /* We provide minimal-RAS only: RFSR is RAZ/WI */
+        return 0;
     case 0xf34: /* FPCCR */
-        if (!arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
+        if (!cpu_isar_feature(aa32_vfp_simd, cpu)) {
             return 0;
         }
         if (attrs.secure) {
@@ -1440,12 +1527,12 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
             return value;
         }
     case 0xf38: /* FPCAR */
-        if (!arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
+        if (!cpu_isar_feature(aa32_vfp_simd, cpu)) {
             return 0;
         }
         return cpu->env.v7m.fpcar[attrs.secure];
     case 0xf3c: /* FPDSCR */
-        if (!arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
+        if (!cpu_isar_feature(aa32_vfp_simd, cpu)) {
             return 0;
         }
         return cpu->env.v7m.fpdscr[attrs.secure];
@@ -1520,7 +1607,7 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
             if (value & R_V7M_AIRCR_SYSRESETREQ_MASK) {
                 if (attrs.secure ||
                     !(cpu->env.v7m.aircr & R_V7M_AIRCR_SYSRESETREQS_MASK)) {
-                    qemu_irq_pulse(s->sysresetreq);
+                    signal_sysresetreq(s);
                 }
             }
             if (value & R_V7M_AIRCR_VECTCLRACTIVE_MASK) {
@@ -1540,6 +1627,7 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
                               R_V7M_AIRCR_PRIGROUP_SHIFT,
                               R_V7M_AIRCR_PRIGROUP_LENGTH);
             }
+            /* AIRCR.IESB is RAZ/WI because we implement only minimal RAS */
             if (attrs.secure) {
                 /* These bits are only writable by secure */
                 cpu->env.v7m.aircr = value &
@@ -1574,17 +1662,25 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
         cpu->env.v7m.scr[attrs.secure] = value;
         break;
     case 0xd14: /* Configuration Control.  */
+    {
+        uint32_t mask;
+
         if (!arm_feature(&cpu->env, ARM_FEATURE_M_MAIN)) {
             goto bad_offset;
         }
 
         /* Enforce RAZ/WI on reserved and must-RAZ/WI bits */
-        value &= (R_V7M_CCR_STKALIGN_MASK |
-                  R_V7M_CCR_BFHFNMIGN_MASK |
-                  R_V7M_CCR_DIV_0_TRP_MASK |
-                  R_V7M_CCR_UNALIGN_TRP_MASK |
-                  R_V7M_CCR_USERSETMPEND_MASK |
-                  R_V7M_CCR_NONBASETHRDENA_MASK);
+        mask = R_V7M_CCR_STKALIGN_MASK |
+            R_V7M_CCR_BFHFNMIGN_MASK |
+            R_V7M_CCR_DIV_0_TRP_MASK |
+            R_V7M_CCR_UNALIGN_TRP_MASK |
+            R_V7M_CCR_USERSETMPEND_MASK |
+            R_V7M_CCR_NONBASETHRDENA_MASK;
+        if (arm_feature(&cpu->env, ARM_FEATURE_V8_1M) && attrs.secure) {
+            /* TRD is always RAZ/WI from NS */
+            mask |= R_V7M_CCR_TRD_MASK;
+        }
+        value &= mask;
 
         if (arm_feature(&cpu->env, ARM_FEATURE_V8)) {
             /* v8M makes NONBASETHRDENA and STKALIGN be RES1 */
@@ -1597,10 +1693,20 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
                 (cpu->env.v7m.ccr[M_REG_NS] & ~R_V7M_CCR_BFHFNMIGN_MASK)
                 | (value & R_V7M_CCR_BFHFNMIGN_MASK);
             value &= ~R_V7M_CCR_BFHFNMIGN_MASK;
+        } else {
+            /*
+             * BFHFNMIGN is RAZ/WI from NS if AIRCR.BFHFNMINS is 0, so
+             * preserve the state currently in the NS element of the array
+             */
+            if (!(cpu->env.v7m.aircr & R_V7M_AIRCR_BFHFNMINS_MASK)) {
+                value &= ~R_V7M_CCR_BFHFNMIGN_MASK;
+                value |= cpu->env.v7m.ccr[M_REG_NS] & R_V7M_CCR_BFHFNMIGN_MASK;
+            }
         }
 
         cpu->env.v7m.ccr[attrs.secure] = value;
         break;
+    }
     case 0xd24: /* System Handler Control and State (SHCSR) */
         if (!arm_feature(&cpu->env, ARM_FEATURE_V7)) {
             goto bad_offset;
@@ -1707,13 +1813,13 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
         }
         break;
     case 0xd88: /* CPACR */
-        if (arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
+        if (cpu_isar_feature(aa32_vfp_simd, cpu)) {
             /* We implement only the Floating Point extension's CP10/CP11 */
             cpu->env.v7m.cpacr[attrs.secure] = value & (0xf << 20);
         }
         break;
     case 0xd8c: /* NSACR */
-        if (attrs.secure && arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
+        if (attrs.secure && cpu_isar_feature(aa32_vfp_simd, cpu)) {
             /* We implement only the Floating Point extension's CP10/CP11 */
             cpu->env.v7m.nsacr = value & (3 << 10);
         }
@@ -1946,8 +2052,14 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
         }
         break;
     }
+    case 0xf04: /* RFSR */
+        if (!cpu_isar_feature(aa32_ras, cpu)) {
+            goto bad_offset;
+        }
+        /* We provide minimal-RAS only: RFSR is RAZ/WI */
+        break;
     case 0xf34: /* FPCCR */
-        if (arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
+        if (cpu_isar_feature(aa32_vfp_simd, cpu)) {
             /* Not all bits here are banked. */
             uint32_t fpccr_s;
 
@@ -2001,14 +2113,21 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
         }
         break;
     case 0xf38: /* FPCAR */
-        if (arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
+        if (cpu_isar_feature(aa32_vfp_simd, cpu)) {
             value &= ~7;
             cpu->env.v7m.fpcar[attrs.secure] = value;
         }
         break;
     case 0xf3c: /* FPDSCR */
-        if (arm_feature(&cpu->env, ARM_FEATURE_VFP)) {
-            value &= 0x07c00000;
+        if (cpu_isar_feature(aa32_vfp_simd, cpu)) {
+            uint32_t mask = FPCR_AHP | FPCR_DN | FPCR_FZ | FPCR_RMODE_MASK;
+            if (cpu_isar_feature(any_fp16, cpu)) {
+                mask |= FPCR_FZ16;
+            }
+            value &= mask;
+            if (cpu_isar_feature(aa32_lob, cpu)) {
+                value |= 4 << FPCR_LTPSIZE_SHIFT;
+            }
             cpu->env.v7m.fpdscr[attrs.secure] = value;
         }
         break;
@@ -2247,7 +2366,7 @@ static MemTxResult nvic_sysreg_write(void *opaque, hwaddr addr,
             }
         }
         nvic_irq_update(s);
-        return MEMTX_OK;
+        goto exit_ok;
     case 0x200 ... 0x23f: /* NVIC Set pend */
         /* the special logic in armv7m_nvic_set_pending()
          * is not needed since IRQs are never escalated
@@ -2259,15 +2378,22 @@ static MemTxResult nvic_sysreg_write(void *opaque, hwaddr addr,
         startvec = 8 * (offset - 0x280) + NVIC_FIRST_IRQ; /* vector # */
 
         for (i = 0, end = size * 8; i < end && startvec + i < s->num_irq; i++) {
+            /*
+             * Note that if the input line is still held high and the interrupt
+             * is not active then rule R_CVJS requires that the Pending state
+             * remains set; in that case we mustn't let it be cleared.
+             */
             if (value & (1 << i) &&
-                (attrs.secure || s->itns[startvec + i])) {
+                (attrs.secure || s->itns[startvec + i]) &&
+                !(setval == 0 && s->vectors[startvec + i].level &&
+                  !s->vectors[startvec + i].active)) {
                 s->vectors[startvec + i].pending = setval;
             }
         }
         nvic_irq_update(s);
-        return MEMTX_OK;
+        goto exit_ok;
     case 0x300 ... 0x33f: /* NVIC Active */
-        return MEMTX_OK; /* R/O */
+        goto exit_ok; /* R/O */
     case 0x400 ... 0x5ef: /* NVIC Priority */
         startvec = (offset - 0x400) + NVIC_FIRST_IRQ; /* vector # */
 
@@ -2277,10 +2403,10 @@ static MemTxResult nvic_sysreg_write(void *opaque, hwaddr addr,
             }
         }
         nvic_irq_update(s);
-        return MEMTX_OK;
+        goto exit_ok;
     case 0xd18 ... 0xd1b: /* System Handler Priority (SHPR1) */
         if (!arm_feature(&s->cpu->env, ARM_FEATURE_M_MAIN)) {
-            return MEMTX_OK;
+            goto exit_ok;
         }
         /* fall through */
     case 0xd1c ... 0xd23: /* System Handler Priority (SHPR2, SHPR3) */
@@ -2295,10 +2421,10 @@ static MemTxResult nvic_sysreg_write(void *opaque, hwaddr addr,
             set_prio(s, hdlidx, sbank, newprio);
         }
         nvic_irq_update(s);
-        return MEMTX_OK;
+        goto exit_ok;
     case 0xd28 ... 0xd2b: /* Configurable Fault Status (CFSR) */
         if (!arm_feature(&s->cpu->env, ARM_FEATURE_M_MAIN)) {
-            return MEMTX_OK;
+            goto exit_ok;
         }
         /* All bits are W1C, so construct 32 bit value with 0s in
          * the parts not written by the access size
@@ -2318,96 +2444,27 @@ static MemTxResult nvic_sysreg_write(void *opaque, hwaddr addr,
              */
             s->cpu->env.v7m.cfsr[M_REG_NS] &= ~(value & R_V7M_CFSR_BFSR_MASK);
         }
-        return MEMTX_OK;
+        goto exit_ok;
     }
     if (size == 4) {
         nvic_writel(s, offset, value, attrs);
-        return MEMTX_OK;
+        goto exit_ok;
     }
     qemu_log_mask(LOG_GUEST_ERROR,
                   "NVIC: Bad write of size %d at offset 0x%x\n", size, offset);
     /* This is UNPREDICTABLE; treat as RAZ/WI */
+
+ exit_ok:
+    if (tcg_enabled()) {
+        /* Ensure any changes made are reflected in the cached hflags. */
+        arm_rebuild_hflags(&s->cpu->env);
+    }
     return MEMTX_OK;
 }
 
 static const MemoryRegionOps nvic_sysreg_ops = {
     .read_with_attrs = nvic_sysreg_read,
     .write_with_attrs = nvic_sysreg_write,
-    .endianness = DEVICE_NATIVE_ENDIAN,
-};
-
-static MemTxResult nvic_sysreg_ns_write(void *opaque, hwaddr addr,
-                                        uint64_t value, unsigned size,
-                                        MemTxAttrs attrs)
-{
-    MemoryRegion *mr = opaque;
-
-    if (attrs.secure) {
-        /* S accesses to the alias act like NS accesses to the real region */
-        attrs.secure = 0;
-        return memory_region_dispatch_write(mr, addr, value, size, attrs);
-    } else {
-        /* NS attrs are RAZ/WI for privileged, and BusFault for user */
-        if (attrs.user) {
-            return MEMTX_ERROR;
-        }
-        return MEMTX_OK;
-    }
-}
-
-static MemTxResult nvic_sysreg_ns_read(void *opaque, hwaddr addr,
-                                       uint64_t *data, unsigned size,
-                                       MemTxAttrs attrs)
-{
-    MemoryRegion *mr = opaque;
-
-    if (attrs.secure) {
-        /* S accesses to the alias act like NS accesses to the real region */
-        attrs.secure = 0;
-        return memory_region_dispatch_read(mr, addr, data, size, attrs);
-    } else {
-        /* NS attrs are RAZ/WI for privileged, and BusFault for user */
-        if (attrs.user) {
-            return MEMTX_ERROR;
-        }
-        *data = 0;
-        return MEMTX_OK;
-    }
-}
-
-static const MemoryRegionOps nvic_sysreg_ns_ops = {
-    .read_with_attrs = nvic_sysreg_ns_read,
-    .write_with_attrs = nvic_sysreg_ns_write,
-    .endianness = DEVICE_NATIVE_ENDIAN,
-};
-
-static MemTxResult nvic_systick_write(void *opaque, hwaddr addr,
-                                      uint64_t value, unsigned size,
-                                      MemTxAttrs attrs)
-{
-    NVICState *s = opaque;
-    MemoryRegion *mr;
-
-    /* Direct the access to the correct systick */
-    mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->systick[attrs.secure]), 0);
-    return memory_region_dispatch_write(mr, addr, value, size, attrs);
-}
-
-static MemTxResult nvic_systick_read(void *opaque, hwaddr addr,
-                                     uint64_t *data, unsigned size,
-                                     MemTxAttrs attrs)
-{
-    NVICState *s = opaque;
-    MemoryRegion *mr;
-
-    /* Direct the access to the correct systick */
-    mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->systick[attrs.secure]), 0);
-    return memory_region_dispatch_read(mr, addr, data, size, attrs);
-}
-
-static const MemoryRegionOps nvic_systick_ops = {
-    .read_with_attrs = nvic_systick_read,
-    .write_with_attrs = nvic_systick_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
@@ -2581,6 +2638,15 @@ static void armv7m_nvic_reset(DeviceState *dev)
             s->itns[i] = true;
         }
     }
+
+    if (tcg_enabled()) {
+        /*
+         * We updated state that affects the CPU's MMUidx and thus its
+         * hflags; and we can't guarantee that we run before the CPU
+         * reset function.
+         */
+        arm_rebuild_hflags(&s->cpu->env);
+    }
 }
 
 static void nvic_systick_trigger(void *opaque, int n, int level)
@@ -2601,8 +2667,6 @@ static void nvic_systick_trigger(void *opaque, int n, int level)
 static void armv7m_nvic_realize(DeviceState *dev, Error **errp)
 {
     NVICState *s = NVIC(dev);
-    Error *err = NULL;
-    int regionlen;
 
     /* The armv7m container object will have set our CPU pointer */
     if (!s->cpu || !arm_feature(&s->cpu->env, ARM_FEATURE_M)) {
@@ -2622,108 +2686,21 @@ static void armv7m_nvic_realize(DeviceState *dev, Error **errp)
 
     s->num_prio_bits = arm_feature(&s->cpu->env, ARM_FEATURE_V7) ? 8 : 2;
 
-    object_property_set_bool(OBJECT(&s->systick[M_REG_NS]), true,
-                             "realized", &err);
-    if (err != NULL) {
-        error_propagate(errp, err);
-        return;
-    }
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->systick[M_REG_NS]), 0,
-                       qdev_get_gpio_in_named(dev, "systick-trigger",
-                                              M_REG_NS));
-
-    if (arm_feature(&s->cpu->env, ARM_FEATURE_M_SECURITY)) {
-        /* We couldn't init the secure systick device in instance_init
-         * as we didn't know then if the CPU had the security extensions;
-         * so we have to do it here.
-         */
-        sysbus_init_child_obj(OBJECT(dev), "systick-reg-s",
-                              &s->systick[M_REG_S],
-                              sizeof(s->systick[M_REG_S]), TYPE_SYSTICK);
-
-        object_property_set_bool(OBJECT(&s->systick[M_REG_S]), true,
-                                 "realized", &err);
-        if (err != NULL) {
-            error_propagate(errp, err);
-            return;
-        }
-        sysbus_connect_irq(SYS_BUS_DEVICE(&s->systick[M_REG_S]), 0,
-                           qdev_get_gpio_in_named(dev, "systick-trigger",
-                                                  M_REG_S));
-    }
-
-    /* The NVIC and System Control Space (SCS) starts at 0xe000e000
-     * and looks like this:
-     *  0x004 - ICTR
-     *  0x010 - 0xff - systick
-     *  0x100..0x7ec - NVIC
-     *  0x7f0..0xcff - Reserved
-     *  0xd00..0xd3c - SCS registers
-     *  0xd40..0xeff - Reserved or Not implemented
-     *  0xf00 - STIR
-     *
-     * Some registers within this space are banked between security states.
-     * In v8M there is a second range 0xe002e000..0xe002efff which is the
-     * NonSecure alias SCS; secure accesses to this behave like NS accesses
-     * to the main SCS range, and non-secure accesses (including when
-     * the security extension is not implemented) are RAZ/WI.
-     * Note that both the main SCS range and the alias range are defined
-     * to be exempt from memory attribution (R_BLJT) and so the memory
-     * transaction attribute always matches the current CPU security
-     * state (attrs.secure == env->v7m.secure). In the nvic_sysreg_ns_ops
-     * wrappers we change attrs.secure to indicate the NS access; so
-     * generally code determining which banked register to use should
-     * use attrs.secure; code determining actual behaviour of the system
-     * should use env->v7m.secure.
-     */
-    regionlen = arm_feature(&s->cpu->env, ARM_FEATURE_V8) ? 0x21000 : 0x1000;
-    memory_region_init(&s->container, OBJECT(s), "nvic", regionlen);
-    /* The system register region goes at the bottom of the priority
-     * stack as it covers the whole page.
+    /*
+     * This device provides a single memory region which covers the
+     * sysreg/NVIC registers from 0xE000E000 .. 0xE000EFFF, with the
+     * exception of the systick timer registers 0xE000E010 .. 0xE000E0FF.
      */
     memory_region_init_io(&s->sysregmem, OBJECT(s), &nvic_sysreg_ops, s,
                           "nvic_sysregs", 0x1000);
-    memory_region_add_subregion(&s->container, 0, &s->sysregmem);
-
-    memory_region_init_io(&s->systickmem, OBJECT(s),
-                          &nvic_systick_ops, s,
-                          "nvic_systick", 0xe0);
-
-    memory_region_add_subregion_overlap(&s->container, 0x10,
-                                        &s->systickmem, 1);
-
-    if (arm_feature(&s->cpu->env, ARM_FEATURE_V8)) {
-        memory_region_init_io(&s->sysreg_ns_mem, OBJECT(s),
-                              &nvic_sysreg_ns_ops, &s->sysregmem,
-                              "nvic_sysregs_ns", 0x1000);
-        memory_region_add_subregion(&s->container, 0x20000, &s->sysreg_ns_mem);
-        memory_region_init_io(&s->systick_ns_mem, OBJECT(s),
-                              &nvic_sysreg_ns_ops, &s->systickmem,
-                              "nvic_systick_ns", 0xe0);
-        memory_region_add_subregion_overlap(&s->container, 0x20010,
-                                            &s->systick_ns_mem, 1);
-    }
-
-    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->container);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->sysregmem);
 }
 
 static void armv7m_nvic_instance_init(Object *obj)
 {
-    /* We have a different default value for the num-irq property
-     * than our superclass. This function runs after qdev init
-     * has set the defaults from the Property array and before
-     * any user-specified property setting, so just modify the
-     * value in the GICState struct.
-     */
     DeviceState *dev = DEVICE(obj);
     NVICState *nvic = NVIC(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
-
-    sysbus_init_child_obj(obj, "systick-reg-ns", &nvic->systick[M_REG_NS],
-                          sizeof(nvic->systick[M_REG_NS]), TYPE_SYSTICK);
-    /* We can't initialize the secure systick here, as we don't know
-     * yet if we need it.
-     */
 
     sysbus_init_irq(sbd, &nvic->excpout);
     qdev_init_gpio_out_named(dev, &nvic->sysresetreq, "SYSRESETREQ", 1);
@@ -2737,7 +2714,7 @@ static void armv7m_nvic_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->vmsd  = &vmstate_nvic;
-    dc->props = props_nvic;
+    device_class_set_props(dc, props_nvic);
     dc->reset = armv7m_nvic_reset;
     dc->realize = armv7m_nvic_realize;
 }

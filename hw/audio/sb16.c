@@ -23,16 +23,18 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/audio/soundhw.h"
 #include "audio/audio.h"
+#include "hw/irq.h"
 #include "hw/isa/isa.h"
-#include "hw/qdev.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "qemu/timer.h"
 #include "qemu/host-utils.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
+#include "qom/object.h"
 
 #define dolog(...) AUD_log ("sb16", __VA_ARGS__)
 
@@ -48,9 +50,9 @@
 static const char e3[] = "COPYRIGHT (C) CREATIVE TECHNOLOGY LTD, 1992.";
 
 #define TYPE_SB16 "sb16"
-#define SB16(obj) OBJECT_CHECK (SB16State, (obj), TYPE_SB16)
+OBJECT_DECLARE_SIMPLE_TYPE(SB16State, SB16)
 
-typedef struct SB16State {
+struct SB16State {
     ISADevice parent_obj;
 
     QEMUSoundCard card;
@@ -111,7 +113,10 @@ typedef struct SB16State {
     int mixer_nreg;
     uint8_t mixer_regs[256];
     PortioList portio_list;
-} SB16State;
+};
+
+#define SAMPLE_RATE_MIN 5000
+#define SAMPLE_RATE_MAX 45000
 
 static void SB_audio_callback (void *opaque, int free);
 
@@ -224,6 +229,23 @@ static void continue_dma8 (SB16State *s)
     control (s, 1);
 }
 
+static inline int restrict_sampling_rate(int freq)
+{
+    if (freq < SAMPLE_RATE_MIN) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sampling range too low: %d, increasing to %u\n",
+                      freq, SAMPLE_RATE_MIN);
+        return SAMPLE_RATE_MIN;
+    } else if (freq > SAMPLE_RATE_MAX) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "sampling range too high: %d, decreasing to %u\n",
+                      freq, SAMPLE_RATE_MAX);
+        return SAMPLE_RATE_MAX;
+    } else {
+        return freq;
+    }
+}
+
 static void dma_cmd8 (SB16State *s, int mask, int dma_len)
 {
     s->fmt = AUDIO_FORMAT_U8;
@@ -239,6 +261,7 @@ static void dma_cmd8 (SB16State *s, int mask, int dma_len)
         int tmp = (256 - s->time_const);
         s->freq = (1000000 + (tmp / 2)) / tmp;
     }
+    s->freq = restrict_sampling_rate(s->freq);
 
     if (dma_len != -1) {
         s->block_size = dma_len << s->fmt_stereo;
@@ -752,7 +775,7 @@ static void complete (SB16State *s)
              * and FT2 sets output freq with this (go figure).  Compare:
              * http://homepages.cae.wisc.edu/~brodskye/sb16doc/sb16doc.html#SamplingRate
              */
-            s->freq = dsp_get_hilo (s);
+            s->freq = restrict_sampling_rate(dsp_get_hilo(s));
             ldebug ("set freq %d\n", s->freq);
             break;
 
@@ -1168,7 +1191,7 @@ static int write_audio (SB16State *s, int nchan, int dma_pos,
         int copied;
         size_t to_copy;
 
-        to_copy = audio_MIN (temp, left);
+        to_copy = MIN (temp, left);
         if (to_copy > sizeof (tmpbuf)) {
             to_copy = sizeof (tmpbuf);
         }
@@ -1375,17 +1398,18 @@ static void sb16_initfn (Object *obj)
 static void sb16_realizefn (DeviceState *dev, Error **errp)
 {
     ISADevice *isadev = ISA_DEVICE (dev);
+    ISABus *bus = isa_bus_from_device(isadev);
     SB16State *s = SB16 (dev);
     IsaDmaClass *k;
 
-    s->isa_hdma = isa_get_dma(isa_bus_from_device(isadev), s->hdma);
-    s->isa_dma = isa_get_dma(isa_bus_from_device(isadev), s->dma);
+    s->isa_hdma = isa_bus_get_dma(bus, s->hdma);
+    s->isa_dma = isa_bus_get_dma(bus, s->dma);
     if (!s->isa_dma || !s->isa_hdma) {
         error_setg(errp, "ISA controller does not support DMA");
         return;
     }
 
-    isa_init_irq (isadev, &s->pic, s->irq);
+    s->pic = isa_bus_get_irq(bus, s->irq);
 
     s->mixer_regs[0x80] = magic_of_irq (s->irq);
     s->mixer_regs[0x81] = (1 << s->dma) | (1 << s->hdma);
@@ -1414,13 +1438,8 @@ static void sb16_realizefn (DeviceState *dev, Error **errp)
     AUD_register_card ("sb16", &s->card);
 }
 
-static int SB16_init (ISABus *bus)
-{
-    isa_create_simple (bus, TYPE_SB16);
-    return 0;
-}
-
 static Property sb16_properties[] = {
+    DEFINE_AUDIO_PROPERTIES(SB16State, card),
     DEFINE_PROP_UINT32 ("version", SB16State, ver,  0x0405), /* 4.5 */
     DEFINE_PROP_UINT32 ("iobase",  SB16State, port, 0x220),
     DEFINE_PROP_UINT32 ("irq",     SB16State, irq,  5),
@@ -1437,7 +1456,7 @@ static void sb16_class_initfn (ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
     dc->desc = "Creative Sound Blaster 16";
     dc->vmsd = &vmstate_sb16;
-    dc->props = sb16_properties;
+    device_class_set_props(dc, sb16_properties);
 }
 
 static const TypeInfo sb16_info = {
@@ -1451,7 +1470,8 @@ static const TypeInfo sb16_info = {
 static void sb16_register_types (void)
 {
     type_register_static (&sb16_info);
-    isa_register_soundhw("sb16", "Creative Sound Blaster 16", SB16_init);
+    deprecated_register_soundhw("sb16", "Creative Sound Blaster 16",
+                                1, TYPE_SB16);
 }
 
 type_init (sb16_register_types)

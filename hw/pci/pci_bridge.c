@@ -30,11 +30,14 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "hw/pci/pci_bridge.h"
 #include "hw/pci/pci_bus.h"
 #include "qemu/module.h"
 #include "qemu/range.h"
 #include "qapi/error.h"
+#include "hw/acpi/acpi_aml_interface.h"
+#include "hw/acpi/pci.h"
 
 /* PCI bridge subsystem vendor ID helper functions */
 #define PCI_SSVID_SIZEOF        8
@@ -181,11 +184,11 @@ static void pci_bridge_init_vga_aliases(PCIBridge *br, PCIBus *parent,
     }
 }
 
-static PCIBridgeWindows *pci_bridge_region_init(PCIBridge *br)
+static void pci_bridge_region_init(PCIBridge *br)
 {
     PCIDevice *pd = PCI_DEVICE(br);
     PCIBus *parent = pci_get_bus(pd);
-    PCIBridgeWindows *w = g_new(PCIBridgeWindows, 1);
+    PCIBridgeWindows *w = &br->windows;
     uint16_t cmd = pci_get_word(pd->config + PCI_COMMAND);
 
     pci_bridge_init_alias(br, &w->alias_pref_mem,
@@ -208,8 +211,6 @@ static PCIBridgeWindows *pci_bridge_region_init(PCIBridge *br)
                           cmd & PCI_COMMAND_IO);
 
     pci_bridge_init_vga_aliases(br, parent, w->alias_vga);
-
-    return w;
 }
 
 static void pci_bridge_region_del(PCIBridge *br, PCIBridgeWindows *w)
@@ -231,19 +232,18 @@ static void pci_bridge_region_cleanup(PCIBridge *br, PCIBridgeWindows *w)
     object_unparent(OBJECT(&w->alias_vga[QEMU_PCI_VGA_IO_LO]));
     object_unparent(OBJECT(&w->alias_vga[QEMU_PCI_VGA_IO_HI]));
     object_unparent(OBJECT(&w->alias_vga[QEMU_PCI_VGA_MEM]));
-    g_free(w);
 }
 
 void pci_bridge_update_mappings(PCIBridge *br)
 {
-    PCIBridgeWindows *w = br->windows;
+    PCIBridgeWindows *w = &br->windows;
 
     /* Make updates atomic to: handle the case of one VCPU updating the bridge
      * while another accesses an unaffected region. */
     memory_region_transaction_begin();
-    pci_bridge_region_del(br, br->windows);
+    pci_bridge_region_del(br, w);
     pci_bridge_region_cleanup(br, w);
-    br->windows = pci_bridge_region_init(br);
+    pci_bridge_region_init(br);
     memory_region_transaction_commit();
 }
 
@@ -274,7 +274,7 @@ void pci_bridge_write_config(PCIDevice *d,
     newctl = pci_get_word(d->config + PCI_BRIDGE_CONTROL);
     if (~oldctl & newctl & PCI_BRIDGE_CTL_BUS_RESET) {
         /* Trigger hot reset on 0->1 transition. */
-        qbus_reset_all(BUS(&s->sec_bus));
+        bus_cold_reset(BUS(&s->sec_bus));
     }
 }
 
@@ -311,7 +311,7 @@ void pci_bridge_reset(DeviceState *qdev)
 
     /*
      * the default values for base/limit registers aren't specified
-     * in the PCI-to-PCI-bridge spec. So we don't thouch them here.
+     * in the PCI-to-PCI-bridge spec. So we don't touch them here.
      * Each implementation can override it.
      * typical implementation does
      * zero base/limit registers or
@@ -373,16 +373,16 @@ void pci_bridge_initfn(PCIDevice *dev, const char *typename)
             br->bus_name = dev->qdev.id;
     }
 
-    qbus_create_inplace(sec_bus, sizeof(br->sec_bus), typename, DEVICE(dev),
-                        br->bus_name);
+    qbus_init(sec_bus, sizeof(br->sec_bus), typename, DEVICE(dev),
+              br->bus_name);
     sec_bus->parent_dev = dev;
     sec_bus->map_irq = br->map_irq ? br->map_irq : pci_swizzle_map_irq_fn;
     sec_bus->address_space_mem = &br->address_space_mem;
     memory_region_init(&br->address_space_mem, OBJECT(br), "pci_bridge_pci", UINT64_MAX);
     sec_bus->address_space_io = &br->address_space_io;
     memory_region_init(&br->address_space_io, OBJECT(br), "pci_bridge_io",
-                       UINT32_MAX);
-    br->windows = pci_bridge_region_init(br);
+                       4 * GiB);
+    pci_bridge_region_init(br);
     QLIST_INIT(&sec_bus->child);
     QLIST_INSERT_HEAD(&parent->child, sec_bus, sibling);
 }
@@ -393,8 +393,8 @@ void pci_bridge_exitfn(PCIDevice *pci_dev)
     PCIBridge *s = PCI_BRIDGE(pci_dev);
     assert(QLIST_EMPTY(&s->sec_bus.child));
     QLIST_REMOVE(&s->sec_bus, sibling);
-    pci_bridge_region_del(s, s->windows);
-    pci_bridge_region_cleanup(s, s->windows);
+    pci_bridge_region_del(s, &s->windows);
+    pci_bridge_region_cleanup(s, &s->windows);
     /* object_unparent() is called automatically during device deletion */
 }
 
@@ -422,14 +422,14 @@ int pci_bridge_qemu_reserve_cap_init(PCIDevice *dev, int cap_offset,
     }
 
     if (res_reserve.mem_non_pref != (uint64_t)-1 &&
-        res_reserve.mem_non_pref >= (1ULL << 32)) {
+        res_reserve.mem_non_pref >= 4 * GiB) {
         error_setg(errp,
                    "PCI resource reserve cap: mem-reserve must be less than 4G");
         return -EINVAL;
     }
 
     if (res_reserve.mem_pref_32 != (uint64_t)-1 &&
-        res_reserve.mem_pref_32 >= (1ULL << 32)) {
+        res_reserve.mem_pref_32 >= 4 * GiB) {
         error_setg(errp,
                    "PCI resource reserve cap: pref32-reserve  must be less than 4G");
         return -EINVAL;
@@ -447,11 +447,11 @@ int pci_bridge_qemu_reserve_cap_init(PCIDevice *dev, int cap_offset,
     PCIBridgeQemuCap cap = {
             .len = cap_len,
             .type = REDHAT_PCI_CAP_RESOURCE_RESERVE,
-            .bus_res = res_reserve.bus,
-            .io = res_reserve.io,
-            .mem = res_reserve.mem_non_pref,
-            .mem_pref_32 = res_reserve.mem_pref_32,
-            .mem_pref_64 = res_reserve.mem_pref_64
+            .bus_res = cpu_to_le32(res_reserve.bus),
+            .io = cpu_to_le64(res_reserve.io),
+            .mem = cpu_to_le32(res_reserve.mem_non_pref),
+            .mem_pref_32 = cpu_to_le32(res_reserve.mem_pref_32),
+            .mem_pref_64 = cpu_to_le64(res_reserve.mem_pref_64)
     };
 
     int offset = pci_add_capability(dev, PCI_CAP_ID_VNDR,
@@ -466,11 +466,23 @@ int pci_bridge_qemu_reserve_cap_init(PCIDevice *dev, int cap_offset,
     return 0;
 }
 
+static void pci_bridge_class_init(ObjectClass *klass, void *data)
+{
+    AcpiDevAmlIfClass *adevc = ACPI_DEV_AML_IF_CLASS(klass);
+
+    adevc->build_dev_aml = build_pci_bridge_aml;
+}
+
 static const TypeInfo pci_bridge_type_info = {
     .name = TYPE_PCI_BRIDGE,
     .parent = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIBridge),
+    .class_init = pci_bridge_class_init,
     .abstract = true,
+    .interfaces = (InterfaceInfo[]) {
+        { TYPE_ACPI_DEV_AML_IF },
+        { },
+    },
 };
 
 static void pci_bridge_register_types(void)

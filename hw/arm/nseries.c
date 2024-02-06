@@ -21,8 +21,12 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "cpu.h"
+#include "chardev/char.h"
 #include "qemu/cutils.h"
 #include "qemu/bswap.h"
+#include "qemu/hw-version.h"
+#include "sysemu/reset.h"
+#include "sysemu/runstate.h"
 #include "sysemu/sysemu.h"
 #include "hw/arm/omap.h"
 #include "hw/arm/boot.h"
@@ -31,16 +35,18 @@
 #include "hw/boards.h"
 #include "hw/i2c/i2c.h"
 #include "hw/display/blizzard.h"
+#include "hw/input/lm832x.h"
 #include "hw/input/tsc2xxx.h"
 #include "hw/misc/cbus.h"
-#include "hw/misc/tmp105.h"
+#include "hw/sensor/tmp105.h"
+#include "hw/qdev-properties.h"
 #include "hw/block/flash.h"
 #include "hw/hw.h"
-#include "hw/bt.h"
 #include "hw/loader.h"
 #include "hw/sysbus.h"
 #include "qemu/log.h"
-#include "exec/address-spaces.h"
+#include "qemu/error-report.h"
+
 
 /* Nokia N8x0 support */
 struct n800_s {
@@ -171,7 +177,7 @@ static void n8x0_nand_setup(struct n800_s *s)
     char *otp_region;
     DriveInfo *dinfo;
 
-    s->nand = qdev_create(NULL, "onenand");
+    s->nand = qdev_new("onenand");
     qdev_prop_set_uint16(s->nand, "manufacturer_id", NAND_MFR_SAMSUNG);
     /* Either 0x40 or 0x48 are OK for the device ID */
     qdev_prop_set_uint16(s->nand, "device_id", 0x48);
@@ -179,10 +185,10 @@ static void n8x0_nand_setup(struct n800_s *s)
     qdev_prop_set_int32(s->nand, "shift", 1);
     dinfo = drive_get(IF_MTD, 0, 0);
     if (dinfo) {
-        qdev_prop_set_drive(s->nand, "drive", blk_by_legacy_dinfo(dinfo),
-                            &error_fatal);
+        qdev_prop_set_drive_err(s->nand, "drive", blk_by_legacy_dinfo(dinfo),
+                                &error_fatal);
     }
-    qdev_init_nofail(s->nand);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->nand), &error_fatal);
     sysbus_connect_irq(SYS_BUS_DEVICE(s->nand), 0,
                        qdev_get_gpio_in(s->mpu->gpio, N8X0_ONENAND_GPIO));
     omap_gpmc_attach(s->mpu->gpmc, N8X0_ONENAND_CS,
@@ -212,7 +218,7 @@ static void n8x0_i2c_setup(struct n800_s *s)
     I2CBus *i2c = omap_i2c_bus(s->mpu->i2c[0]);
 
     /* Attach a menelaus PM chip */
-    dev = i2c_create_slave(i2c, "twl92230", N8X0_MENELAUS_ADDR);
+    dev = DEVICE(i2c_slave_create_simple(i2c, "twl92230", N8X0_MENELAUS_ADDR));
     qdev_connect_gpio_out(dev, 3,
                           qdev_get_gpio_in(s->mpu->ih[0],
                                            OMAP_INT_24XX_SYS_NIRQ));
@@ -221,18 +227,18 @@ static void n8x0_i2c_setup(struct n800_s *s)
     qemu_register_powerdown_notifier(&n8x0_system_powerdown_notifier);
 
     /* Attach a TMP105 PM chip (A0 wired to ground) */
-    dev = i2c_create_slave(i2c, TYPE_TMP105, N8X0_TMP105_ADDR);
+    dev = DEVICE(i2c_slave_create_simple(i2c, TYPE_TMP105, N8X0_TMP105_ADDR));
     qdev_connect_gpio_out(dev, 0, tmp_irq);
 }
 
 /* Touchscreen and keypad controller */
-static MouseTransformInfo n800_pointercal = {
+static const MouseTransformInfo n800_pointercal = {
     .x = 800,
     .y = 480,
     .a = { 14560, -68, -3455208, -39, -9621, 35152972, 65536 },
 };
 
-static MouseTransformInfo n810_pointercal = {
+static const MouseTransformInfo n810_pointercal = {
     .x = 800,
     .y = 480,
     .a = { 15041, 148, -4731056, 171, -10238, 35933380, 65536 },
@@ -330,7 +336,7 @@ static void n810_key_event(void *opaque, int keycode)
 
 #define M	0
 
-static int n810_keys[0x80] = {
+static const int n810_keys[0x80] = {
     [0x01] = 16,	/* Q */
     [0x02] = 37,	/* K */
     [0x03] = 24,	/* O */
@@ -413,8 +419,8 @@ static void n810_kbd_setup(struct n800_s *s)
 
     /* Attach the LM8322 keyboard to the I2C bus,
      * should happen in n8x0_i2c_setup and s->kbd be initialised here.  */
-    s->kbd = i2c_create_slave(omap_i2c_bus(s->mpu->i2c[0]),
-                           "lm8323", N810_LM8323_ADDR);
+    s->kbd = DEVICE(i2c_slave_create_simple(omap_i2c_bus(s->mpu->i2c[0]),
+                                            TYPE_LM8323, N810_LM8323_ADDR));
     qdev_connect_gpio_out(s->kbd, 0, kbd_irq);
 }
 
@@ -689,7 +695,7 @@ static uint32_t mipid_txrx(void *opaque, uint32_t cmd, int len)
     default:
     bad_cmd:
         qemu_log_mask(LOG_GUEST_ERROR,
-                      "%s: unknown command %02x\n", __func__, s->cmd);
+                      "%s: unknown command 0x%02x\n", __func__, s->cmd);
         break;
     }
 
@@ -698,7 +704,7 @@ static uint32_t mipid_txrx(void *opaque, uint32_t cmd, int len)
 
 static void *mipid_init(void)
 {
-    struct mipid_s *s = (struct mipid_s *) g_malloc0(sizeof(*s));
+    struct mipid_s *s = g_malloc0(sizeof(*s));
 
     s->id = 0x838f03;
     mipid_reset(s);
@@ -786,24 +792,12 @@ static void n8x0_cbus_setup(struct n800_s *s)
     cbus_attach(cbus, s->tahvo = tahvo_init(tahvo_irq, 1));
 }
 
-static void n8x0_uart_setup(struct n800_s *s)
-{
-    Chardev *radio = uart_hci_init();
-
-    qdev_connect_gpio_out(s->mpu->gpio, N8X0_BT_RESET_GPIO,
-                    csrhci_pins_get(radio)[csrhci_pin_reset]);
-    qdev_connect_gpio_out(s->mpu->gpio, N8X0_BT_WKUP_GPIO,
-                    csrhci_pins_get(radio)[csrhci_pin_wakeup]);
-
-    omap_uart_attach(s->mpu->uart[BT_UART], radio);
-}
-
 static void n8x0_usb_setup(struct n800_s *s)
 {
     SysBusDevice *dev;
-    s->usb = qdev_create(NULL, "tusb6010");
+    s->usb = qdev_new("tusb6010");
     dev = SYS_BUS_DEVICE(s->usb);
-    qdev_init_nofail(s->usb);
+    sysbus_realize_and_unref(dev, &error_fatal);
     sysbus_connect_irq(dev, 0,
                        qdev_get_gpio_in(s->mpu->gpio, N8X0_TUSB_INT_GPIO));
     /* Using the NOR interface */
@@ -818,7 +812,7 @@ static void n8x0_usb_setup(struct n800_s *s)
 /* Setup done before the main bootloader starts by some early setup code
  * - used when we want to run the main bootloader in emulation.  This
  * isn't documented.  */
-static uint32_t n800_pinout[104] = {
+static const uint32_t n800_pinout[104] = {
     0x080f00d8, 0x00d40808, 0x03080808, 0x080800d0,
     0x00dc0808, 0x0b0f0f00, 0x080800b4, 0x00c00808,
     0x08080808, 0x180800c4, 0x00b80000, 0x08080808,
@@ -1068,7 +1062,7 @@ static void n8x0_boot_init(void *opaque)
 #define OMAP_TAG_CBUS		0x4e03
 #define OMAP_TAG_EM_ASIC_BB5	0x4e04
 
-static struct omap_gpiosw_info_s {
+static const struct omap_gpiosw_info_s {
     const char *name;
     int line;
     int type;
@@ -1086,7 +1080,7 @@ static struct omap_gpiosw_info_s {
         "headphone", N8X0_HEADPHONE_GPIO,
         OMAP_GPIOSW_TYPE_CONNECTION | OMAP_GPIOSW_INVERTED,
     },
-    { NULL }
+    { /* end of list */ }
 }, n810_gpiosw_info[] = {
     {
         "gps_reset", N810_GPS_RESET_GPIO,
@@ -1107,10 +1101,10 @@ static struct omap_gpiosw_info_s {
         "slide", N810_SLIDE_GPIO,
         OMAP_GPIOSW_TYPE_COVER | OMAP_GPIOSW_INVERTED,
     },
-    { NULL }
+    { /* end of list */ }
 };
 
-static struct omap_partition_info_s {
+static const struct omap_partition_info_s {
     uint32_t offset;
     uint32_t size;
     int mask;
@@ -1121,27 +1115,25 @@ static struct omap_partition_info_s {
     { 0x00080000, 0x00200000, 0x0, "kernel" },
     { 0x00280000, 0x00200000, 0x3, "initfs" },
     { 0x00480000, 0x0fb80000, 0x3, "rootfs" },
-
-    { 0, 0, 0, NULL }
+    { /* end of list */ }
 }, n810_part_info[] = {
     { 0x00000000, 0x00020000, 0x3, "bootloader" },
     { 0x00020000, 0x00060000, 0x0, "config" },
     { 0x00080000, 0x00220000, 0x0, "kernel" },
     { 0x002a0000, 0x00400000, 0x0, "initfs" },
     { 0x006a0000, 0x0f960000, 0x0, "rootfs" },
-
-    { 0, 0, 0, NULL }
+    { /* end of list */ }
 };
 
-static bdaddr_t n8x0_bd_addr = {{ N8X0_BD_ADDR }};
+static const uint8_t n8x0_bd_addr[6] = { N8X0_BD_ADDR };
 
 static int n8x0_atag_setup(void *p, int model)
 {
     uint8_t *b;
     uint16_t *w;
     uint32_t *l;
-    struct omap_gpiosw_info_s *gpiosw;
-    struct omap_partition_info_s *partition;
+    const struct omap_gpiosw_info_s *gpiosw;
+    const struct omap_partition_info_s *partition;
     const char *tag;
 
     w = p;
@@ -1308,11 +1300,21 @@ static int n810_atag_setup(const struct arm_boot_info *info, void *p)
 static void n8x0_init(MachineState *machine,
                       struct arm_boot_info *binfo, int model)
 {
-    MemoryRegion *sysmem = get_system_memory();
-    struct n800_s *s = (struct n800_s *) g_malloc0(sizeof(*s));
-    int sdram_size = binfo->ram_size;
+    struct n800_s *s = g_malloc0(sizeof(*s));
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
 
-    s->mpu = omap2420_mpu_init(sysmem, sdram_size, machine->cpu_type);
+    if (machine->ram_size != mc->default_ram_size) {
+        char *sz = size_to_str(mc->default_ram_size);
+        error_report("Invalid RAM size, should be %s", sz);
+        g_free(sz);
+        exit(EXIT_FAILURE);
+    }
+    binfo->ram_size = machine->ram_size;
+
+    memory_region_add_subregion(get_system_memory(), OMAP2_Q2_BASE,
+                                machine->ram);
+
+    s->mpu = omap2420_mpu_init(machine->ram, machine->cpu_type);
 
     /* Setup peripherals
      *
@@ -1351,28 +1353,25 @@ static void n8x0_init(MachineState *machine,
     n8x0_spi_setup(s);
     n8x0_dss_setup(s);
     n8x0_cbus_setup(s);
-    n8x0_uart_setup(s);
     if (machine_usb(machine)) {
         n8x0_usb_setup(s);
     }
 
     if (machine->kernel_filename) {
         /* Or at the linux loader.  */
-        binfo->kernel_filename = machine->kernel_filename;
-        binfo->kernel_cmdline = machine->kernel_cmdline;
-        binfo->initrd_filename = machine->initrd_filename;
-        arm_load_kernel(s->mpu->cpu, binfo);
+        arm_load_kernel(s->mpu->cpu, machine, binfo);
 
         qemu_register_reset(n8x0_boot_init, s);
     }
 
     if (option_rom[0].name &&
-        (machine->boot_order[0] == 'n' || !machine->kernel_filename)) {
+        (machine->boot_config.order[0] == 'n' || !machine->kernel_filename)) {
         uint8_t *nolo_tags = g_new(uint8_t, 0x10000);
         /* No, wait, better start at the ROM.  */
         s->mpu->cpu->env.regs[15] = OMAP2_Q2_BASE + 0x400000;
 
-        /* This is intended for loading the `secondary.bin' program from
+        /*
+         * This is intended for loading the `secondary.bin' program from
          * Nokia images (the NOLO bootloader).  The entry point seems
          * to be at OMAP2_Q2_BASE + 0x400000.
          *
@@ -1380,10 +1379,15 @@ static void n8x0_init(MachineState *machine,
          * for them the entry point needs to be set to OMAP2_SRAM_BASE.
          *
          * The code above is for loading the `zImage' file from Nokia
-         * images.  */
-        load_image_targphys(option_rom[0].name,
-                            OMAP2_Q2_BASE + 0x400000,
-                            sdram_size - 0x400000);
+         * images.
+         */
+        if (load_image_targphys(option_rom[0].name,
+                                OMAP2_Q2_BASE + 0x400000,
+                                machine->ram_size - 0x400000) < 0) {
+            error_report("Failed to load secondary bootloader %s",
+                         option_rom[0].name);
+            exit(EXIT_FAILURE);
+        }
 
         n800_setup_nolo_tags(nolo_tags);
         cpu_physical_memory_write(OMAP2_SRAM_BASE, nolo_tags, 0x10000);
@@ -1393,16 +1397,12 @@ static void n8x0_init(MachineState *machine,
 
 static struct arm_boot_info n800_binfo = {
     .loader_start = OMAP2_Q2_BASE,
-    /* Actually two chips of 0x4000000 bytes each */
-    .ram_size = 0x08000000,
     .board_id = 0x4f7,
     .atag_board = n800_atag_setup,
 };
 
 static struct arm_boot_info n810_binfo = {
     .loader_start = OMAP2_Q2_BASE,
-    /* Actually two chips of 0x4000000 bytes each */
-    .ram_size = 0x08000000,
     /* 0x60c and 0x6bf (WiMAX Edition) have been assigned but are not
      * used by some older versions of the bootloader and 5555 is used
      * instead (including versions that shipped with many devices).  */
@@ -1429,6 +1429,9 @@ static void n800_class_init(ObjectClass *oc, void *data)
     mc->default_boot_order = "";
     mc->ignore_memory_transaction_failures = true;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm1136-r2");
+    /* Actually two chips of 0x4000000 bytes each */
+    mc->default_ram_size = 0x08000000;
+    mc->default_ram_id = "omap2.dram";
 }
 
 static const TypeInfo n800_type = {
@@ -1446,6 +1449,9 @@ static void n810_class_init(ObjectClass *oc, void *data)
     mc->default_boot_order = "";
     mc->ignore_memory_transaction_failures = true;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm1136-r2");
+    /* Actually two chips of 0x4000000 bytes each */
+    mc->default_ram_size = 0x08000000;
+    mc->default_ram_id = "omap2.dram";
 }
 
 static const TypeInfo n810_type = {

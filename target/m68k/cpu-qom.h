@@ -20,33 +20,28 @@
 #ifndef QEMU_M68K_CPU_QOM_H
 #define QEMU_M68K_CPU_QOM_H
 
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
+#include "qom/object.h"
 
 #define TYPE_M68K_CPU "m68k-cpu"
 
-#define M68K_CPU_CLASS(klass) \
-    OBJECT_CLASS_CHECK(M68kCPUClass, (klass), TYPE_M68K_CPU)
-#define M68K_CPU(obj) \
-    OBJECT_CHECK(M68kCPU, (obj), TYPE_M68K_CPU)
-#define M68K_CPU_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(M68kCPUClass, (obj), TYPE_M68K_CPU)
+OBJECT_DECLARE_CPU_TYPE(M68kCPU, M68kCPUClass, M68K_CPU)
 
 /*
  * M68kCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  *
  * A Motorola 68k CPU model.
  */
-typedef struct M68kCPUClass {
+struct M68kCPUClass {
     /*< private >*/
     CPUClass parent_class;
     /*< public >*/
 
     DeviceRealize parent_realize;
-    void (*parent_reset)(CPUState *cpu);
-} M68kCPUClass;
+    ResettablePhases parent_phases;
+};
 
-typedef struct M68kCPU M68kCPU;
 
 #endif

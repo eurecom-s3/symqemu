@@ -36,8 +36,9 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/nvram/eeprom93xx.h"
+#include "migration/qemu-file-types.h"
+#include "migration/vmstate.h"
 
 /* Debug EEPROM emulation. */
 //~ #define DEBUG_EEPROM
@@ -85,7 +86,7 @@ struct _eeprom_t {
     uint8_t  addrbits;
     uint16_t size;
     uint16_t data;
-    uint16_t contents[0];
+    uint16_t contents[];
 };
 
 /* Code for saving and restoring of EEPROM state. */
@@ -103,7 +104,7 @@ static int get_uint16_from_uint8(QEMUFile *f, void *pv, size_t size,
 }
 
 static int put_unused(QEMUFile *f, void *pv, size_t size,
-                      const VMStateField *field, QJSON *vmdesc)
+                      const VMStateField *field, JSONWriter *vmdesc)
 {
     fprintf(stderr, "uint16_from_uint8 is used only for backwards compatibility.\n");
     fprintf(stderr, "Never should be used to write a new state.\n");
@@ -314,13 +315,13 @@ eeprom_t *eeprom93xx_new(DeviceState *dev, uint16_t nwords)
         addrbits = 6;
     }
 
-    eeprom = (eeprom_t *)g_malloc0(sizeof(*eeprom) + nwords * 2);
+    eeprom = g_malloc0(sizeof(*eeprom) + nwords * 2);
     eeprom->size = nwords;
     eeprom->addrbits = addrbits;
     /* Output DO is tristate, read results in 1. */
     eeprom->eedo = 1;
     logout("eeprom = 0x%p, nwords = %u\n", eeprom, nwords);
-    vmstate_register(dev, 0, &vmstate_eeprom, eeprom);
+    vmstate_register(VMSTATE_IF(dev), 0, &vmstate_eeprom, eeprom);
     return eeprom;
 }
 
@@ -328,7 +329,7 @@ void eeprom93xx_free(DeviceState *dev, eeprom_t *eeprom)
 {
     /* Destroy EEPROM. */
     logout("eeprom = 0x%p\n", eeprom);
-    vmstate_unregister(dev, &vmstate_eeprom, eeprom);
+    vmstate_unregister(VMSTATE_IF(dev), &vmstate_eeprom, eeprom);
     g_free(eeprom);
 }
 

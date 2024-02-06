@@ -23,28 +23,31 @@
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "sysemu/watchdog.h"
-#include "hw/hw.h"
 #include "hw/isa/isa.h"
+#include "migration/vmstate.h"
+#include "qom/object.h"
 
 /*#define IB700_DEBUG 1*/
 
 #ifdef IB700_DEBUG
-#define ib700_debug(fs,...)					\
+#define ib700_debug(fs,...)                                    \
     fprintf(stderr,"ib700: %s: "fs,__func__,##__VA_ARGS__)
 #else
 #define ib700_debug(fs,...)
 #endif
 
 #define TYPE_IB700 "ib700"
-#define IB700(obj) OBJECT_CHECK(IB700State, (obj), TYPE_IB700)
+typedef struct IB700state IB700State;
+DECLARE_INSTANCE_CHECKER(IB700State, IB700,
+                         TYPE_IB700)
 
-typedef struct IB700state {
+struct IB700state {
     ISADevice parent_obj;
 
     QEMUTimer *timer;
 
     PortioList port_list;
-} IB700State;
+};
 
 /* This is the timer.  We use a global here because the watchdog
  * code ensures there is only one watchdog (it is located at a fixed,
@@ -125,11 +128,6 @@ static void wdt_ib700_reset(DeviceState *dev)
     timer_del(s->timer);
 }
 
-static WatchdogTimerModel model = {
-    .wdt_name = "ib700",
-    .wdt_description = "iBASE 700",
-};
-
 static void wdt_ib700_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -137,7 +135,8 @@ static void wdt_ib700_class_init(ObjectClass *klass, void *data)
     dc->realize = wdt_ib700_realize;
     dc->reset = wdt_ib700_reset;
     dc->vmsd = &vmstate_ib700;
-    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+    set_bit(DEVICE_CATEGORY_WATCHDOG, dc->categories);
+    dc->desc = "iBASE 700";
 }
 
 static const TypeInfo wdt_ib700_info = {
@@ -149,7 +148,6 @@ static const TypeInfo wdt_ib700_info = {
 
 static void wdt_ib700_register_types(void)
 {
-    watchdog_add_model(&model);
     type_register_static(&wdt_ib700_info);
 }
 

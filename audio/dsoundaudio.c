@@ -53,20 +53,14 @@ typedef struct {
 typedef struct {
     HWVoiceOut hw;
     LPDIRECTSOUNDBUFFER dsound_buffer;
-    DWORD old_pos;
-    int first_time;
+    bool first_time;
     dsound *s;
-#ifdef DEBUG_DSOUND
-    DWORD old_ppos;
-    DWORD played;
-    DWORD mixed;
-#endif
 } DSoundVoiceOut;
 
 typedef struct {
     HWVoiceIn hw;
-    int first_time;
     LPDIRECTSOUNDCAPTUREBUFFER dsound_capture_buffer;
+    bool first_time;
     dsound *s;
 } DSoundVoiceIn;
 
@@ -95,7 +89,9 @@ static void dsound_log_hresult (HRESULT hr)
 #endif
 #ifdef DSERR_ALLOCATED
     case DSERR_ALLOCATED:
-        str = "The request failed because resources, such as a priority level, were already in use by another caller";
+        str = "The request failed because resources, "
+              "such as a priority level, were already in use "
+              "by another caller";
         break;
 #endif
 #ifdef DSERR_ALREADYINITIALIZED
@@ -110,7 +106,8 @@ static void dsound_log_hresult (HRESULT hr)
 #endif
 #ifdef DSERR_BADSENDBUFFERGUID
     case DSERR_BADSENDBUFFERGUID:
-        str = "The GUID specified in an audiopath file does not match a valid mix-in buffer";
+        str = "The GUID specified in an audiopath file "
+              "does not match a valid mix-in buffer";
         break;
 #endif
 #ifdef DSERR_BUFFERLOST
@@ -120,26 +117,35 @@ static void dsound_log_hresult (HRESULT hr)
 #endif
 #ifdef DSERR_BUFFERTOOSMALL
     case DSERR_BUFFERTOOSMALL:
-        str = "The buffer size is not great enough to enable effects processing";
+        str = "The buffer size is not great enough to "
+              "enable effects processing";
         break;
 #endif
 #ifdef DSERR_CONTROLUNAVAIL
     case DSERR_CONTROLUNAVAIL:
-        str = "The buffer control (volume, pan, and so on) requested by the caller is not available. Controls must be specified when the buffer is created, using the dwFlags member of DSBUFFERDESC";
+        str = "The buffer control (volume, pan, and so on) "
+              "requested by the caller is not available. "
+              "Controls must be specified when the buffer is created, "
+              "using the dwFlags member of DSBUFFERDESC";
         break;
 #endif
 #ifdef DSERR_DS8_REQUIRED
     case DSERR_DS8_REQUIRED:
-        str = "A DirectSound object of class CLSID_DirectSound8 or later is required for the requested functionality. For more information, see IDirectSound8 Interface";
+        str = "A DirectSound object of class CLSID_DirectSound8 or later "
+              "is required for the requested functionality. "
+              "For more information, see IDirectSound8 Interface";
         break;
 #endif
 #ifdef DSERR_FXUNAVAILABLE
     case DSERR_FXUNAVAILABLE:
-        str = "The effects requested could not be found on the system, or they are in the wrong order or in the wrong location; for example, an effect expected in hardware was found in software";
+        str = "The effects requested could not be found on the system, "
+              "or they are in the wrong order or in the wrong location; "
+              "for example, an effect expected in hardware "
+              "was found in software";
         break;
 #endif
 #ifdef DSERR_GENERIC
-    case DSERR_GENERIC :
+    case DSERR_GENERIC:
         str = "An undetermined error occurred inside the DirectSound subsystem";
         break;
 #endif
@@ -160,7 +166,8 @@ static void dsound_log_hresult (HRESULT hr)
 #endif
 #ifdef DSERR_NODRIVER
     case DSERR_NODRIVER:
-        str = "No sound driver is available for use, or the given GUID is not a valid DirectSound device ID";
+        str = "No sound driver is available for use, "
+              "or the given GUID is not a valid DirectSound device ID";
         break;
 #endif
 #ifdef DSERR_NOINTERFACE
@@ -175,12 +182,14 @@ static void dsound_log_hresult (HRESULT hr)
 #endif
 #ifdef DSERR_OTHERAPPHASPRIO
     case DSERR_OTHERAPPHASPRIO:
-        str = "Another application has a higher priority level, preventing this call from succeeding";
+        str = "Another application has a higher priority level, "
+              "preventing this call from succeeding";
         break;
 #endif
 #ifdef DSERR_OUTOFMEMORY
     case DSERR_OUTOFMEMORY:
-        str = "The DirectSound subsystem could not allocate sufficient memory to complete the caller's request";
+        str = "The DirectSound subsystem could not allocate "
+               "sufficient memory to complete the caller's request";
         break;
 #endif
 #ifdef DSERR_PRIOLEVELNEEDED
@@ -195,7 +204,9 @@ static void dsound_log_hresult (HRESULT hr)
 #endif
 #ifdef DSERR_UNINITIALIZED
     case DSERR_UNINITIALIZED:
-        str = "The Initialize method has not been called or has not been called successfully before other methods were called";
+        str = "The Initialize method has not been called "
+              "or has not been called successfully "
+              "before other methods were called";
         break;
 #endif
 #ifdef DSERR_UNSUPPORTED
@@ -204,14 +215,14 @@ static void dsound_log_hresult (HRESULT hr)
         break;
 #endif
     default:
-        AUD_log (AUDIO_CAP, "Reason: Unknown (HRESULT %#lx)\n", hr);
+        AUD_log (AUDIO_CAP, "Reason: Unknown (HRESULT 0x%lx)\n", hr);
         return;
     }
 
     AUD_log (AUDIO_CAP, "Reason: %s\n", str);
 }
 
-static void GCC_FMT_ATTR (2, 3) dsound_logerr (
+static void G_GNUC_PRINTF (2, 3) dsound_logerr (
     HRESULT hr,
     const char *fmt,
     ...
@@ -226,7 +237,7 @@ static void GCC_FMT_ATTR (2, 3) dsound_logerr (
     dsound_log_hresult (hr);
 }
 
-static void GCC_FMT_ATTR (3, 4) dsound_logerr2 (
+static void G_GNUC_PRINTF (3, 4) dsound_logerr2 (
     HRESULT hr,
     const char *typ,
     const char *fmt,
@@ -241,11 +252,6 @@ static void GCC_FMT_ATTR (3, 4) dsound_logerr2 (
     va_end (ap);
 
     dsound_log_hresult (hr);
-}
-
-static uint64_t usecs_to_bytes(struct audio_pcm_info *info, uint32_t usecs)
-{
-    return muldiv64(usecs, info->bytes_per_second, 1000000);
 }
 
 #ifdef DEBUG_DSOUND
@@ -290,7 +296,7 @@ static int dsound_get_status_out (LPDIRECTSOUNDBUFFER dsb, DWORD *statusp,
         return -1;
     }
 
-    if (*statusp & DSERR_BUFFERLOST) {
+    if (*statusp & DSBSTATUS_BUFFERLOST) {
         dsound_restore_out(dsb, s);
         return -1;
     }
@@ -312,33 +318,6 @@ static int dsound_get_status_in (LPDIRECTSOUNDCAPTUREBUFFER dscb,
     return 0;
 }
 
-static void dsound_write_sample (HWVoiceOut *hw, uint8_t *dst, int dst_len)
-{
-    int src_len1 = dst_len;
-    int src_len2 = 0;
-    int pos = hw->rpos + dst_len;
-    struct st_sample *src1 = hw->mix_buf + hw->rpos;
-    struct st_sample *src2 = NULL;
-
-    if (pos > hw->samples) {
-        src_len1 = hw->samples - hw->rpos;
-        src2 = hw->mix_buf;
-        src_len2 = dst_len - src_len1;
-        pos = src_len2;
-    }
-
-    if (src_len1) {
-        hw->clip (dst, src1, src_len1);
-    }
-
-    if (src_len2) {
-        dst = advance (dst, src_len1 << hw->info.shift);
-        hw->clip (dst, src2, src_len2);
-    }
-
-    hw->rpos = pos % hw->samples;
-}
-
 static void dsound_clear_sample (HWVoiceOut *hw, LPDIRECTSOUNDBUFFER dsb,
                                  dsound *s)
 {
@@ -350,7 +329,7 @@ static void dsound_clear_sample (HWVoiceOut *hw, LPDIRECTSOUNDBUFFER dsb,
         dsb,
         &hw->info,
         0,
-        hw->samples << hw->info.shift,
+        hw->size_emul,
         &p1, &p2,
         &blen1, &blen2,
         1,
@@ -360,8 +339,8 @@ static void dsound_clear_sample (HWVoiceOut *hw, LPDIRECTSOUNDBUFFER dsb,
         return;
     }
 
-    len1 = blen1 >> hw->info.shift;
-    len2 = blen2 >> hw->info.shift;
+    len1 = blen1 / hw->info.bytes_per_frame;
+    len2 = blen2 / hw->info.bytes_per_frame;
 
 #ifdef DEBUG_DSOUND
     dolog ("clear %p,%ld,%ld %p,%ld,%ld\n",
@@ -380,12 +359,12 @@ static void dsound_clear_sample (HWVoiceOut *hw, LPDIRECTSOUNDBUFFER dsb,
     dsound_unlock_out (dsb, p1, p2, blen1, blen2);
 }
 
-static int dsound_open (dsound *s)
+static int dsound_set_cooperative_level(dsound *s)
 {
     HRESULT hr;
     HWND hwnd;
 
-    hwnd = GetForegroundWindow ();
+    hwnd = GetDesktopWindow();
     hr = IDirectSound_SetCooperativeLevel (
         s->dsound,
         hwnd,
@@ -401,7 +380,7 @@ static int dsound_open (dsound *s)
     return 0;
 }
 
-static int dsound_ctl_out (HWVoiceOut *hw, int cmd, ...)
+static void dsound_enable_out(HWVoiceOut *hw, bool enable)
 {
     HRESULT hr;
     DWORD status;
@@ -411,18 +390,17 @@ static int dsound_ctl_out (HWVoiceOut *hw, int cmd, ...)
 
     if (!dsb) {
         dolog ("Attempt to control voice without a buffer\n");
-        return 0;
+        return;
     }
 
-    switch (cmd) {
-    case VOICE_ENABLE:
+    if (enable) {
         if (dsound_get_status_out (dsb, &status, s)) {
-            return -1;
+            return;
         }
 
         if (status & DSBSTATUS_PLAYING) {
             dolog ("warning: Voice is already playing\n");
-            return 0;
+            return;
         }
 
         dsound_clear_sample (hw, dsb, s);
@@ -430,170 +408,87 @@ static int dsound_ctl_out (HWVoiceOut *hw, int cmd, ...)
         hr = IDirectSoundBuffer_Play (dsb, 0, 0, DSBPLAY_LOOPING);
         if (FAILED (hr)) {
             dsound_logerr (hr, "Could not start playing buffer\n");
-            return -1;
+            return;
         }
-        break;
-
-    case VOICE_DISABLE:
+    } else {
         if (dsound_get_status_out (dsb, &status, s)) {
-            return -1;
+            return;
         }
 
         if (status & DSBSTATUS_PLAYING) {
             hr = IDirectSoundBuffer_Stop (dsb);
             if (FAILED (hr)) {
                 dsound_logerr (hr, "Could not stop playing buffer\n");
-                return -1;
+                return;
             }
-        }
-        else {
+        } else {
             dolog ("warning: Voice is not playing\n");
         }
-        break;
     }
-    return 0;
 }
 
-static int dsound_write (SWVoiceOut *sw, void *buf, int len)
+static size_t dsound_buffer_get_free(HWVoiceOut *hw)
 {
-    return audio_pcm_sw_write (sw, buf, len);
-}
-
-static int dsound_run_out (HWVoiceOut *hw, int live)
-{
-    int err;
-    HRESULT hr;
     DSoundVoiceOut *ds = (DSoundVoiceOut *) hw;
     LPDIRECTSOUNDBUFFER dsb = ds->dsound_buffer;
-    int len, hwshift;
-    DWORD blen1, blen2;
-    DWORD len1, len2;
-    DWORD decr;
-    DWORD wpos, ppos, old_pos;
-    LPVOID p1, p2;
-    int bufsize;
-    dsound *s = ds->s;
-    AudiodevDsoundOptions *dso = &s->dev->u.dsound;
+    HRESULT hr;
+    DWORD ppos, wpos;
 
-    if (!dsb) {
-        dolog ("Attempt to run empty with playback buffer\n");
+    hr = IDirectSoundBuffer_GetCurrentPosition(
+        dsb, &ppos, ds->first_time ? &wpos : NULL);
+    if (FAILED(hr)) {
+        dsound_logerr(hr, "Could not get playback buffer position\n");
         return 0;
     }
-
-    hwshift = hw->info.shift;
-    bufsize = hw->samples << hwshift;
-
-    hr = IDirectSoundBuffer_GetCurrentPosition (
-        dsb,
-        &ppos,
-        ds->first_time ? &wpos : NULL
-        );
-    if (FAILED (hr)) {
-        dsound_logerr (hr, "Could not get playback buffer position\n");
-        return 0;
-    }
-
-    len = live << hwshift;
 
     if (ds->first_time) {
-        if (dso->latency) {
-            DWORD cur_blat;
-
-            cur_blat = audio_ring_dist (wpos, ppos, bufsize);
-            ds->first_time = 0;
-            old_pos = wpos;
-            old_pos +=
-                usecs_to_bytes(&hw->info, dso->latency) - cur_blat;
-            old_pos %= bufsize;
-            old_pos &= ~hw->info.align;
-        }
-        else {
-            old_pos = wpos;
-        }
-#ifdef DEBUG_DSOUND
-        ds->played = 0;
-        ds->mixed = 0;
-#endif
-    }
-    else {
-        if (ds->old_pos == ppos) {
-#ifdef DEBUG_DSOUND
-            dolog ("old_pos == ppos\n");
-#endif
-            return 0;
-        }
-
-#ifdef DEBUG_DSOUND
-        ds->played += audio_ring_dist (ds->old_pos, ppos, hw->bufsize);
-#endif
-        old_pos = ds->old_pos;
+        hw->pos_emul = wpos;
+        ds->first_time = false;
     }
 
-    if ((old_pos < ppos) && ((old_pos + len) > ppos)) {
-        len = ppos - old_pos;
-    }
-    else {
-        if ((old_pos > ppos) && ((old_pos + len) > (ppos + bufsize))) {
-            len = bufsize - old_pos + ppos;
-        }
-    }
-
-    if (audio_bug(__func__, len < 0 || len > bufsize)) {
-        dolog ("len=%d bufsize=%d old_pos=%ld ppos=%ld\n",
-               len, bufsize, old_pos, ppos);
-        return 0;
-    }
-
-    len &= ~hw->info.align;
-    if (!len) {
-        return 0;
-    }
-
-#ifdef DEBUG_DSOUND
-    ds->old_ppos = ppos;
-#endif
-    err = dsound_lock_out (
-        dsb,
-        &hw->info,
-        old_pos,
-        len,
-        &p1, &p2,
-        &blen1, &blen2,
-        0,
-        s
-        );
-    if (err) {
-        return 0;
-    }
-
-    len1 = blen1 >> hwshift;
-    len2 = blen2 >> hwshift;
-    decr = len1 + len2;
-
-    if (p1 && len1) {
-        dsound_write_sample (hw, p1, len1);
-    }
-
-    if (p2 && len2) {
-        dsound_write_sample (hw, p2, len2);
-    }
-
-    dsound_unlock_out (dsb, p1, p2, blen1, blen2);
-    ds->old_pos = (old_pos + (decr << hwshift)) % bufsize;
-
-#ifdef DEBUG_DSOUND
-    ds->mixed += decr << hwshift;
-
-    dolog ("played %lu mixed %lu diff %ld sec %f\n",
-           ds->played,
-           ds->mixed,
-           ds->mixed - ds->played,
-           abs (ds->mixed - ds->played) / (double) hw->info.bytes_per_second);
-#endif
-    return decr;
+    return audio_ring_dist(ppos, hw->pos_emul, hw->size_emul);
 }
 
-static int dsound_ctl_in (HWVoiceIn *hw, int cmd, ...)
+static void *dsound_get_buffer_out(HWVoiceOut *hw, size_t *size)
+{
+    DSoundVoiceOut *ds = (DSoundVoiceOut *)hw;
+    LPDIRECTSOUNDBUFFER dsb = ds->dsound_buffer;
+    DWORD act_size;
+    size_t req_size;
+    int err;
+    void *ret;
+
+    req_size = MIN(*size, hw->size_emul - hw->pos_emul);
+    assert(req_size > 0);
+
+    err = dsound_lock_out(dsb, &hw->info, hw->pos_emul, req_size, &ret, NULL,
+                          &act_size, NULL, false, ds->s);
+    if (err) {
+        dolog("Failed to lock buffer\n");
+        *size = 0;
+        return NULL;
+    }
+
+    *size = act_size;
+    return ret;
+}
+
+static size_t dsound_put_buffer_out(HWVoiceOut *hw, void *buf, size_t len)
+{
+    DSoundVoiceOut *ds = (DSoundVoiceOut *) hw;
+    LPDIRECTSOUNDBUFFER dsb = ds->dsound_buffer;
+    int err = dsound_unlock_out(dsb, buf, NULL, len, 0);
+
+    if (err) {
+        dolog("Failed to unlock buffer!!\n");
+        return 0;
+    }
+    hw->pos_emul = (hw->pos_emul + len) % hw->size_emul;
+
+    return len;
+}
+
+static void dsound_enable_in(HWVoiceIn *hw, bool enable)
 {
     HRESULT hr;
     DWORD status;
@@ -602,18 +497,17 @@ static int dsound_ctl_in (HWVoiceIn *hw, int cmd, ...)
 
     if (!dscb) {
         dolog ("Attempt to control capture voice without a buffer\n");
-        return -1;
+        return;
     }
 
-    switch (cmd) {
-    case VOICE_ENABLE:
+    if (enable) {
         if (dsound_get_status_in (dscb, &status)) {
-            return -1;
+            return;
         }
 
         if (status & DSCBSTATUS_CAPTURING) {
             dolog ("warning: Voice is already capturing\n");
-            return 0;
+            return;
         }
 
         /* clear ?? */
@@ -621,125 +515,78 @@ static int dsound_ctl_in (HWVoiceIn *hw, int cmd, ...)
         hr = IDirectSoundCaptureBuffer_Start (dscb, DSCBSTART_LOOPING);
         if (FAILED (hr)) {
             dsound_logerr (hr, "Could not start capturing\n");
-            return -1;
+            return;
         }
-        break;
-
-    case VOICE_DISABLE:
+    } else {
         if (dsound_get_status_in (dscb, &status)) {
-            return -1;
+            return;
         }
 
         if (status & DSCBSTATUS_CAPTURING) {
             hr = IDirectSoundCaptureBuffer_Stop (dscb);
             if (FAILED (hr)) {
                 dsound_logerr (hr, "Could not stop capturing\n");
-                return -1;
+                return;
             }
-        }
-        else {
+        } else {
             dolog ("warning: Voice is not capturing\n");
         }
-        break;
     }
-    return 0;
 }
 
-static int dsound_read (SWVoiceIn *sw, void *buf, int len)
+static void *dsound_get_buffer_in(HWVoiceIn *hw, size_t *size)
 {
-    return audio_pcm_sw_read (sw, buf, len);
-}
-
-static int dsound_run_in (HWVoiceIn *hw)
-{
-    int err;
-    HRESULT hr;
     DSoundVoiceIn *ds = (DSoundVoiceIn *) hw;
     LPDIRECTSOUNDCAPTUREBUFFER dscb = ds->dsound_capture_buffer;
-    int live, len, dead;
-    DWORD blen1, blen2;
-    DWORD len1, len2;
-    DWORD decr;
-    DWORD cpos, rpos;
-    LPVOID p1, p2;
-    int hwshift;
-    dsound *s = ds->s;
+    HRESULT hr;
+    DWORD rpos, act_size;
+    size_t req_size;
+    int err;
+    void *ret;
 
-    if (!dscb) {
-        dolog ("Attempt to run without capture buffer\n");
-        return 0;
-    }
-
-    hwshift = hw->info.shift;
-
-    live = audio_pcm_hw_get_live_in (hw);
-    dead = hw->samples - live;
-    if (!dead) {
-        return 0;
-    }
-
-    hr = IDirectSoundCaptureBuffer_GetCurrentPosition (
-        dscb,
-        &cpos,
-        ds->first_time ? &rpos : NULL
-        );
-    if (FAILED (hr)) {
-        dsound_logerr (hr, "Could not get capture buffer position\n");
-        return 0;
+    hr = IDirectSoundCaptureBuffer_GetCurrentPosition(dscb, NULL, &rpos);
+    if (FAILED(hr)) {
+        dsound_logerr(hr, "Could not get capture buffer position\n");
+        *size = 0;
+        return NULL;
     }
 
     if (ds->first_time) {
-        ds->first_time = 0;
-        if (rpos & hw->info.align) {
-            ldebug ("warning: Misaligned capture read position %ld(%d)\n",
-                    rpos, hw->info.align);
-        }
-        hw->wpos = rpos >> hwshift;
+        hw->pos_emul = rpos;
+        ds->first_time = false;
     }
 
-    if (cpos & hw->info.align) {
-        ldebug ("warning: Misaligned capture position %ld(%d)\n",
-                cpos, hw->info.align);
-    }
-    cpos >>= hwshift;
+    req_size = audio_ring_dist(rpos, hw->pos_emul, hw->size_emul);
+    req_size = MIN(*size, MIN(req_size, hw->size_emul - hw->pos_emul));
 
-    len = audio_ring_dist (cpos, hw->wpos, hw->samples);
-    if (!len) {
-        return 0;
+    if (req_size == 0) {
+        *size = 0;
+        return NULL;
     }
-    len = audio_MIN (len, dead);
 
-    err = dsound_lock_in (
-        dscb,
-        &hw->info,
-        hw->wpos << hwshift,
-        len << hwshift,
-        &p1,
-        &p2,
-        &blen1,
-        &blen2,
-        0,
-        s
-        );
+    err = dsound_lock_in(dscb, &hw->info, hw->pos_emul, req_size, &ret, NULL,
+                         &act_size, NULL, false, ds->s);
     if (err) {
-        return 0;
+        dolog("Failed to lock buffer\n");
+        *size = 0;
+        return NULL;
     }
 
-    len1 = blen1 >> hwshift;
-    len2 = blen2 >> hwshift;
-    decr = len1 + len2;
+    *size = act_size;
+    return ret;
+}
 
-    if (p1 && len1) {
-        hw->conv (hw->conv_buf + hw->wpos, p1, len1);
+static void dsound_put_buffer_in(HWVoiceIn *hw, void *buf, size_t len)
+{
+    DSoundVoiceIn *ds = (DSoundVoiceIn *) hw;
+    LPDIRECTSOUNDCAPTUREBUFFER dscb = ds->dsound_capture_buffer;
+    int err = dsound_unlock_in(dscb, buf, NULL, len, 0);
+
+    if (err) {
+        dolog("Failed to unlock buffer!!\n");
+        return;
     }
-
-    if (p2 && len2) {
-        hw->conv (hw->conv_buf, p2, len2);
-    }
-
-    dsound_unlock_in (dscb, p1, p2, blen1, blen2);
-    hw->wpos = (hw->wpos + decr) % hw->samples;
-    return decr;
+    hw->pos_emul = (hw->pos_emul + len) % hw->size_emul;
 }
 
 static void dsound_audio_fini (void *opaque)
@@ -776,7 +623,7 @@ static void *dsound_audio_init(Audiodev *dev)
 {
     int err;
     HRESULT hr;
-    dsound *s = g_malloc0(sizeof(dsound));
+    dsound *s = g_new0(dsound, 1);
     AudiodevDsoundOptions *dso;
 
     assert(dev->driver == AUDIODEV_DRIVER_DSOUND);
@@ -829,8 +676,7 @@ static void *dsound_audio_init(Audiodev *dev)
         );
     if (FAILED (hr)) {
         dsound_logerr (hr, "Could not create DirectSoundCapture instance\n");
-    }
-    else {
+    } else {
         hr = IDirectSoundCapture_Initialize (s->dsound_capture, NULL);
         if (FAILED (hr)) {
             dsound_logerr (hr, "Could not initialize DirectSoundCapture\n");
@@ -843,7 +689,7 @@ static void *dsound_audio_init(Audiodev *dev)
         }
     }
 
-    err = dsound_open (s);
+    err = dsound_set_cooperative_level(s);
     if (err) {
         dsound_audio_fini (s);
         return NULL;
@@ -855,15 +701,18 @@ static void *dsound_audio_init(Audiodev *dev)
 static struct audio_pcm_ops dsound_pcm_ops = {
     .init_out = dsound_init_out,
     .fini_out = dsound_fini_out,
-    .run_out  = dsound_run_out,
-    .write    = dsound_write,
-    .ctl_out  = dsound_ctl_out,
+    .write    = audio_generic_write,
+    .buffer_get_free = dsound_buffer_get_free,
+    .get_buffer_out = dsound_get_buffer_out,
+    .put_buffer_out = dsound_put_buffer_out,
+    .enable_out = dsound_enable_out,
 
     .init_in  = dsound_init_in,
     .fini_in  = dsound_fini_in,
-    .run_in   = dsound_run_in,
-    .read     = dsound_read,
-    .ctl_in   = dsound_ctl_in
+    .read     = audio_generic_read,
+    .get_buffer_in = dsound_get_buffer_in,
+    .put_buffer_in = dsound_put_buffer_in,
+    .enable_in = dsound_enable_in,
 };
 
 static struct audio_driver dsound_audio_driver = {

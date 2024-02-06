@@ -26,65 +26,41 @@
 #define ASPEED_SMC_H
 
 #include "hw/ssi/ssi.h"
-
-typedef struct AspeedSegments {
-    hwaddr addr;
-    uint32_t size;
-} AspeedSegments;
+#include "hw/sysbus.h"
+#include "qom/object.h"
 
 struct AspeedSMCState;
-typedef struct AspeedSMCController {
-    const char *name;
-    uint8_t r_conf;
-    uint8_t r_ce_ctrl;
-    uint8_t r_ctrl0;
-    uint8_t r_timings;
-    uint8_t conf_enable_w0;
-    uint8_t max_slaves;
-    const AspeedSegments *segments;
-    hwaddr flash_window_base;
-    uint32_t flash_window_size;
-    bool has_dma;
-    uint32_t nregs;
-} AspeedSMCController;
+struct AspeedSMCClass;
 
-typedef struct AspeedSMCFlash {
+#define TYPE_ASPEED_SMC_FLASH "aspeed.smc.flash"
+OBJECT_DECLARE_SIMPLE_TYPE(AspeedSMCFlash, ASPEED_SMC_FLASH)
+struct AspeedSMCFlash {
+    SysBusDevice parent_obj;
+
     struct AspeedSMCState *controller;
-
-    uint8_t id;
-    uint32_t size;
+    struct AspeedSMCClass *asc;
+    uint8_t cs;
 
     MemoryRegion mmio;
-    DeviceState *flash;
-} AspeedSMCFlash;
+};
 
 #define TYPE_ASPEED_SMC "aspeed.smc"
-#define ASPEED_SMC(obj) OBJECT_CHECK(AspeedSMCState, (obj), TYPE_ASPEED_SMC)
-#define ASPEED_SMC_CLASS(klass) \
-     OBJECT_CLASS_CHECK(AspeedSMCClass, (klass), TYPE_ASPEED_SMC)
-#define ASPEED_SMC_GET_CLASS(obj) \
-     OBJECT_GET_CLASS(AspeedSMCClass, (obj), TYPE_ASPEED_SMC)
-
-typedef struct  AspeedSMCClass {
-    SysBusDevice parent_obj;
-    const AspeedSMCController *ctrl;
-}  AspeedSMCClass;
+OBJECT_DECLARE_TYPE(AspeedSMCState, AspeedSMCClass, ASPEED_SMC)
 
 #define ASPEED_SMC_R_MAX        (0x100 / 4)
+#define ASPEED_SMC_CS_MAX       5
 
-typedef struct AspeedSMCState {
+struct AspeedSMCState {
     SysBusDevice parent_obj;
 
-    const AspeedSMCController *ctrl;
-
     MemoryRegion mmio;
+    MemoryRegion mmio_flash_container;
     MemoryRegion mmio_flash;
 
     qemu_irq irq;
-    int irqline;
 
-    uint32_t num_cs;
     qemu_irq *cs_lines;
+    bool inject_failure;
 
     SSIBus *spi;
 
@@ -97,13 +73,46 @@ typedef struct AspeedSMCState {
     uint8_t r_timings;
     uint8_t conf_enable_w0;
 
-    /* for DMA support */
-    uint64_t sdram_base;
+    AddressSpace flash_as;
+    MemoryRegion *dram_mr;
+    AddressSpace dram_as;
 
-    AspeedSMCFlash *flashes;
+    AspeedSMCFlash flashes[ASPEED_SMC_CS_MAX];
 
     uint8_t snoop_index;
     uint8_t snoop_dummies;
-} AspeedSMCState;
+};
+
+typedef struct AspeedSegments {
+    hwaddr addr;
+    uint32_t size;
+} AspeedSegments;
+
+struct AspeedSMCClass {
+    SysBusDeviceClass parent_obj;
+
+    uint8_t r_conf;
+    uint8_t r_ce_ctrl;
+    uint8_t r_ctrl0;
+    uint8_t r_timings;
+    uint8_t nregs_timings;
+    uint8_t conf_enable_w0;
+    uint8_t cs_num_max;
+    const uint32_t *resets;
+    const AspeedSegments *segments;
+    uint32_t segment_addr_mask;
+    hwaddr flash_window_base;
+    uint32_t flash_window_size;
+    uint32_t features;
+    hwaddr dma_flash_mask;
+    hwaddr dma_dram_mask;
+    uint32_t nregs;
+    uint32_t (*segment_to_reg)(const AspeedSMCState *s,
+                               const AspeedSegments *seg);
+    void (*reg_to_segment)(const AspeedSMCState *s, uint32_t reg,
+                           AspeedSegments *seg);
+    void (*dma_ctrl)(AspeedSMCState *s, uint32_t value);
+    int (*addr_width)(const AspeedSMCState *s);
+};
 
 #endif /* ASPEED_SMC_H */

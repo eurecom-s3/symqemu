@@ -18,22 +18,24 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
+#include "qemu/datadir.h"
 #include "qapi/error.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/arm/boot.h"
 #include "hw/loader.h"
 #include "net/net.h"
-#include "sysemu/kvm.h"
+#include "sysemu/runstate.h"
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
-#include "exec/address-spaces.h"
 #include "qemu/error-report.h"
 #include "hw/char/pl011.h"
 #include "hw/ide/ahci.h"
 #include "hw/cpu/a9mpcore.h"
 #include "hw/cpu/a15mpcore.h"
 #include "qemu/log.h"
+#include "qom/object.h"
+#include "cpu.h"
 
 #define SMP_BOOT_ADDR           0x100
 #define SMP_BOOT_REG            0x40
@@ -45,63 +47,6 @@
 #define NIRQ_GIC                160
 
 /* Board init.  */
-
-static void hb_write_board_setup(ARMCPU *cpu,
-                                 const struct arm_boot_info *info)
-{
-    arm_write_secure_board_setup_dummy_smc(cpu, info, MVBAR_ADDR);
-}
-
-static void hb_write_secondary(ARMCPU *cpu, const struct arm_boot_info *info)
-{
-    int n;
-    uint32_t smpboot[] = {
-        0xee100fb0, /* mrc p15, 0, r0, c0, c0, 5 - read current core id */
-        0xe210000f, /* ands r0, r0, #0x0f */
-        0xe3a03040, /* mov r3, #0x40 - jump address is 0x40 + 0x10 * core id */
-        0xe0830200, /* add r0, r3, r0, lsl #4 */
-        0xe59f2024, /* ldr r2, privbase */
-        0xe3a01001, /* mov r1, #1 */
-        0xe5821100, /* str r1, [r2, #256] - set GICC_CTLR.Enable */
-        0xe3a010ff, /* mov r1, #0xff */
-        0xe5821104, /* str r1, [r2, #260] - set GICC_PMR.Priority to 0xff */
-        0xf57ff04f, /* dsb */
-        0xe320f003, /* wfi */
-        0xe5901000, /* ldr     r1, [r0] */
-        0xe1110001, /* tst     r1, r1 */
-        0x0afffffb, /* beq     <wfi> */
-        0xe12fff11, /* bx      r1 */
-        MPCORE_PERIPHBASE   /* privbase: MPCore peripheral base address.  */
-    };
-    for (n = 0; n < ARRAY_SIZE(smpboot); n++) {
-        smpboot[n] = tswap32(smpboot[n]);
-    }
-    rom_add_blob_fixed("smpboot", smpboot, sizeof(smpboot), SMP_BOOT_ADDR);
-}
-
-static void hb_reset_secondary(ARMCPU *cpu, const struct arm_boot_info *info)
-{
-    CPUARMState *env = &cpu->env;
-
-    switch (info->nb_cpus) {
-    case 4:
-        address_space_stl_notdirty(&address_space_memory,
-                                   SMP_BOOT_REG + 0x30, 0,
-                                   MEMTXATTRS_UNSPECIFIED, NULL);
-    case 3:
-        address_space_stl_notdirty(&address_space_memory,
-                                   SMP_BOOT_REG + 0x20, 0,
-                                   MEMTXATTRS_UNSPECIFIED, NULL);
-    case 2:
-        address_space_stl_notdirty(&address_space_memory,
-                                   SMP_BOOT_REG + 0x10, 0,
-                                   MEMTXATTRS_UNSPECIFIED, NULL);
-        env->regs[15] = SMP_BOOT_ADDR;
-        break;
-    default:
-        break;
-    }
-}
 
 #define NUM_REGS      0x200
 static void hb_regs_write(void *opaque, hwaddr offset,
@@ -152,19 +97,18 @@ static const MemoryRegionOps hb_mem_ops = {
 };
 
 #define TYPE_HIGHBANK_REGISTERS "highbank-regs"
-#define HIGHBANK_REGISTERS(obj) \
-    OBJECT_CHECK(HighbankRegsState, (obj), TYPE_HIGHBANK_REGISTERS)
+OBJECT_DECLARE_SIMPLE_TYPE(HighbankRegsState, HIGHBANK_REGISTERS)
 
-typedef struct {
+struct HighbankRegsState {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
 
     MemoryRegion iomem;
     uint32_t regs[NUM_REGS];
-} HighbankRegsState;
+};
 
-static VMStateDescription vmstate_highbank_regs = {
+static const VMStateDescription vmstate_highbank_regs = {
     .name = "highbank-regs",
     .version_id = 0,
     .minimum_version_id = 0,
@@ -233,10 +177,6 @@ enum cxmachines {
  */
 static void calxeda_init(MachineState *machine, enum cxmachines machine_id)
 {
-    ram_addr_t ram_size = machine->ram_size;
-    const char *kernel_filename = machine->kernel_filename;
-    const char *kernel_cmdline = machine->kernel_cmdline;
-    const char *initrd_filename = machine->initrd_filename;
     DeviceState *dev = NULL;
     SysBusDevice *busdev;
     qemu_irq pic[128];
@@ -247,7 +187,6 @@ static void calxeda_init(MachineState *machine, enum cxmachines machine_id)
     qemu_irq cpu_virq[4];
     qemu_irq cpu_vfiq[4];
     MemoryRegion *sysram;
-    MemoryRegion *dram;
     MemoryRegion *sysmem;
     char *sysboot_filename;
 
@@ -269,20 +208,14 @@ static void calxeda_init(MachineState *machine, enum cxmachines machine_id)
         cpuobj = object_new(machine->cpu_type);
         cpu = ARM_CPU(cpuobj);
 
-        object_property_set_int(cpuobj, QEMU_PSCI_CONDUIT_SMC,
-                                "psci-conduit", &error_abort);
+        object_property_set_int(cpuobj, "psci-conduit", QEMU_PSCI_CONDUIT_SMC,
+                                &error_abort);
 
-        if (n) {
-            /* Secondary CPUs start in PSCI powered-down state */
-            object_property_set_bool(cpuobj, true,
-                                     "start-powered-off", &error_abort);
+        if (object_property_find(cpuobj, "reset-cbar")) {
+            object_property_set_int(cpuobj, "reset-cbar", MPCORE_PERIPHBASE,
+                                    &error_abort);
         }
-
-        if (object_property_find(cpuobj, "reset-cbar", NULL)) {
-            object_property_set_int(cpuobj, MPCORE_PERIPHBASE,
-                                    "reset-cbar", &error_abort);
-        }
-        object_property_set_bool(cpuobj, true, "realized", &error_fatal);
+        qdev_realize(DEVICE(cpuobj), NULL, &error_fatal);
         cpu_irq[n] = qdev_get_gpio_in(DEVICE(cpu), ARM_CPU_IRQ);
         cpu_fiq[n] = qdev_get_gpio_in(DEVICE(cpu), ARM_CPU_FIQ);
         cpu_virq[n] = qdev_get_gpio_in(DEVICE(cpu), ARM_CPU_VIRQ);
@@ -290,46 +223,44 @@ static void calxeda_init(MachineState *machine, enum cxmachines machine_id)
     }
 
     sysmem = get_system_memory();
-    dram = g_new(MemoryRegion, 1);
-    memory_region_allocate_system_memory(dram, NULL, "highbank.dram", ram_size);
     /* SDRAM at address zero.  */
-    memory_region_add_subregion(sysmem, 0, dram);
+    memory_region_add_subregion(sysmem, 0, machine->ram);
 
     sysram = g_new(MemoryRegion, 1);
     memory_region_init_ram(sysram, NULL, "highbank.sysram", 0x8000,
                            &error_fatal);
     memory_region_add_subregion(sysmem, 0xfff88000, sysram);
-    if (bios_name != NULL) {
-        sysboot_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+    if (machine->firmware != NULL) {
+        sysboot_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, machine->firmware);
         if (sysboot_filename != NULL) {
             if (load_image_targphys(sysboot_filename, 0xfff88000, 0x8000) < 0) {
-                error_report("Unable to load %s", bios_name);
+                error_report("Unable to load %s", machine->firmware);
                 exit(1);
             }
             g_free(sysboot_filename);
         } else {
-            error_report("Unable to find %s", bios_name);
+            error_report("Unable to find %s", machine->firmware);
             exit(1);
         }
     }
 
     switch (machine_id) {
     case CALXEDA_HIGHBANK:
-        dev = qdev_create(NULL, "l2x0");
-        qdev_init_nofail(dev);
+        dev = qdev_new("l2x0");
         busdev = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(busdev, &error_fatal);
         sysbus_mmio_map(busdev, 0, 0xfff12000);
 
-        dev = qdev_create(NULL, TYPE_A9MPCORE_PRIV);
+        dev = qdev_new(TYPE_A9MPCORE_PRIV);
         break;
     case CALXEDA_MIDWAY:
-        dev = qdev_create(NULL, TYPE_A15MPCORE_PRIV);
+        dev = qdev_new(TYPE_A15MPCORE_PRIV);
         break;
     }
     qdev_prop_set_uint32(dev, "num-cpu", smp_cpus);
     qdev_prop_set_uint32(dev, "num-irq", NIRQ_GIC);
-    qdev_init_nofail(dev);
     busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, MPCORE_PERIPHBASE);
     for (n = 0; n < smp_cpus; n++) {
         sysbus_connect_irq(busdev, n, cpu_irq[n]);
@@ -342,18 +273,18 @@ static void calxeda_init(MachineState *machine, enum cxmachines machine_id)
         pic[n] = qdev_get_gpio_in(dev, n);
     }
 
-    dev = qdev_create(NULL, "sp804");
+    dev = qdev_new("sp804");
     qdev_prop_set_uint32(dev, "freq0", 150000000);
     qdev_prop_set_uint32(dev, "freq1", 150000000);
-    qdev_init_nofail(dev);
     busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, 0xfff34000);
     sysbus_connect_irq(busdev, 0, pic[18]);
     pl011_create(0xfff36000, pic[20], serial_hd(0));
 
-    dev = qdev_create(NULL, TYPE_HIGHBANK_REGISTERS);
-    qdev_init_nofail(dev);
+    dev = qdev_new(TYPE_HIGHBANK_REGISTERS);
     busdev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, 0xfff3c000);
 
     sysbus_create_simple("pl061", 0xfff30000, pic[14]);
@@ -367,18 +298,18 @@ static void calxeda_init(MachineState *machine, enum cxmachines machine_id)
 
     if (nd_table[0].used) {
         qemu_check_nic_model(&nd_table[0], "xgmac");
-        dev = qdev_create(NULL, "xgmac");
+        dev = qdev_new("xgmac");
         qdev_set_nic_properties(dev, &nd_table[0]);
-        qdev_init_nofail(dev);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, 0xfff50000);
         sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, pic[77]);
         sysbus_connect_irq(SYS_BUS_DEVICE(dev), 1, pic[78]);
         sysbus_connect_irq(SYS_BUS_DEVICE(dev), 2, pic[79]);
 
         qemu_check_nic_model(&nd_table[1], "xgmac");
-        dev = qdev_create(NULL, "xgmac");
+        dev = qdev_new("xgmac");
         qdev_set_nic_properties(dev, &nd_table[1]);
-        qdev_init_nofail(dev);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, 0xfff51000);
         sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, pic[80]);
         sysbus_connect_irq(SYS_BUS_DEVICE(dev), 1, pic[81]);
@@ -387,30 +318,17 @@ static void calxeda_init(MachineState *machine, enum cxmachines machine_id)
 
     /* TODO create and connect IDE devices for ide_drive_get() */
 
-    highbank_binfo.ram_size = ram_size;
-    highbank_binfo.kernel_filename = kernel_filename;
-    highbank_binfo.kernel_cmdline = kernel_cmdline;
-    highbank_binfo.initrd_filename = initrd_filename;
+    highbank_binfo.ram_size = machine->ram_size;
     /* highbank requires a dtb in order to boot, and the dtb will override
      * the board ID. The following value is ignored, so set it to -1 to be
      * clear that the value is meaningless.
      */
     highbank_binfo.board_id = -1;
-    highbank_binfo.nb_cpus = smp_cpus;
     highbank_binfo.loader_start = 0;
-    highbank_binfo.write_secondary_boot = hb_write_secondary;
-    highbank_binfo.secondary_cpu_reset_hook = hb_reset_secondary;
-    if (!kvm_enabled()) {
-        highbank_binfo.board_setup_addr = BOARD_SETUP_ADDR;
-        highbank_binfo.write_board_setup = hb_write_board_setup;
-        highbank_binfo.secure_board_setup = true;
-    } else {
-        warn_report("cannot load built-in Monitor support "
-                    "if KVM is enabled. Some guests (such as Linux) "
-                    "may not boot.");
-    }
+    highbank_binfo.board_setup_addr = BOARD_SETUP_ADDR;
+    highbank_binfo.psci_conduit = QEMU_PSCI_CONDUIT_SMC;
 
-    arm_load_kernel(ARM_CPU(first_cpu), &highbank_binfo);
+    arm_load_kernel(ARM_CPU(first_cpu), machine, &highbank_binfo);
 }
 
 static void highbank_init(MachineState *machine)
@@ -433,6 +351,7 @@ static void highbank_class_init(ObjectClass *oc, void *data)
     mc->units_per_default_bus = 1;
     mc->max_cpus = 4;
     mc->ignore_memory_transaction_failures = true;
+    mc->default_ram_id = "highbank.dram";
 }
 
 static const TypeInfo highbank_type = {
@@ -451,6 +370,7 @@ static void midway_class_init(ObjectClass *oc, void *data)
     mc->units_per_default_bus = 1;
     mc->max_cpus = 4;
     mc->ignore_memory_transaction_failures = true;
+    mc->default_ram_id = "highbank.dram";
 }
 
 static const TypeInfo midway_type = {

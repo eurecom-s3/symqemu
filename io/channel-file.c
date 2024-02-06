@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -51,7 +51,7 @@ qio_channel_file_new_path(const char *path,
 
     ioc = QIO_CHANNEL_FILE(object_new(TYPE_QIO_CHANNEL_FILE));
 
-    ioc->fd = qemu_open(path, flags, mode);
+    ioc->fd = qemu_open_old(path, flags, mode);
     if (ioc->fd < 0) {
         object_unref(OBJECT(ioc));
         error_setg_errno(errp, errno,
@@ -86,6 +86,7 @@ static ssize_t qio_channel_file_readv(QIOChannel *ioc,
                                       size_t niov,
                                       int **fds,
                                       size_t *nfds,
+                                      int flags,
                                       Error **errp)
 {
     QIOChannelFile *fioc = QIO_CHANNEL_FILE(ioc);
@@ -114,6 +115,7 @@ static ssize_t qio_channel_file_writev(QIOChannel *ioc,
                                        size_t niov,
                                        int *fds,
                                        size_t nfds,
+                                       int flags,
                                        Error **errp)
 {
     QIOChannelFile *fioc = QIO_CHANNEL_FILE(ioc);
@@ -139,14 +141,19 @@ static int qio_channel_file_set_blocking(QIOChannel *ioc,
                                          bool enabled,
                                          Error **errp)
 {
+#ifdef WIN32
+    /* not implemented */
+    error_setg_errno(errp, errno, "Failed to set FD nonblocking");
+    return -1;
+#else
     QIOChannelFile *fioc = QIO_CHANNEL_FILE(ioc);
 
-    if (enabled) {
-        qemu_set_block(fioc->fd);
-    } else {
-        qemu_set_nonblock(fioc->fd);
+    if (!g_unix_set_fd_nonblocking(fioc->fd, !enabled, NULL)) {
+        error_setg_errno(errp, errno, "Failed to set FD nonblocking");
+        return -1;
     }
     return 0;
+#endif
 }
 
 
@@ -191,7 +198,7 @@ static void qio_channel_file_set_aio_fd_handler(QIOChannel *ioc,
                                                 void *opaque)
 {
     QIOChannelFile *fioc = QIO_CHANNEL_FILE(ioc);
-    aio_set_fd_handler(ctx, fioc->fd, false, io_read, io_write, NULL, opaque);
+    aio_set_fd_handler(ctx, fioc->fd, io_read, io_write, NULL, NULL, opaque);
 }
 
 static GSource *qio_channel_file_create_watch(QIOChannel *ioc,

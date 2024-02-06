@@ -21,11 +21,12 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/qemu-print.h"
+#include "qemu/timer.h"
 #include "cpu.h"
 #include "qemu/module.h"
 #include "exec/exec-all.h"
 #include "fpu/softfloat.h"
-
+#include "tcg/tcg.h"
 
 static void hppa_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -35,9 +36,19 @@ static void hppa_cpu_set_pc(CPUState *cs, vaddr value)
     cpu->env.iaoq_b = value + 4;
 }
 
-static void hppa_cpu_synchronize_from_tb(CPUState *cs, TranslationBlock *tb)
+static vaddr hppa_cpu_get_pc(CPUState *cs)
 {
     HPPACPU *cpu = HPPA_CPU(cs);
+
+    return cpu->env.iaoq_f;
+}
+
+static void hppa_cpu_synchronize_from_tb(CPUState *cs,
+                                         const TranslationBlock *tb)
+{
+    HPPACPU *cpu = HPPA_CPU(cs);
+
+    tcg_debug_assert(!(cs->tcg_cflags & CF_PCREL));
 
 #ifdef CONFIG_USER_ONLY
     cpu->env.iaoq_f = tb->pc;
@@ -59,9 +70,27 @@ static void hppa_cpu_synchronize_from_tb(CPUState *cs, TranslationBlock *tb)
     cpu->env.psw_n = (tb->flags & PSW_N) != 0;
 }
 
+static void hppa_restore_state_to_opc(CPUState *cs,
+                                      const TranslationBlock *tb,
+                                      const uint64_t *data)
+{
+    HPPACPU *cpu = HPPA_CPU(cs);
+
+    cpu->env.iaoq_f = data[0];
+    if (data[1] != (target_ureg)-1) {
+        cpu->env.iaoq_b = data[1];
+    }
+    /*
+     * Since we were executing the instruction at IAOQ_F, and took some
+     * sort of action that provoked the cpu_restore_state, we can infer
+     * that the instruction was not nullified.
+     */
+    cpu->env.psw_n = 0;
+}
+
 static bool hppa_cpu_has_work(CPUState *cs)
 {
-    return cs->interrupt_request & CPU_INTERRUPT_HARD;
+    return cs->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
 }
 
 static void hppa_cpu_disas_set_info(CPUState *cs, disassemble_info *info)
@@ -70,9 +99,11 @@ static void hppa_cpu_disas_set_info(CPUState *cs, disassemble_info *info)
     info->print_insn = print_insn_hppa;
 }
 
-static void hppa_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
-                                         MMUAccessType access_type,
-                                         int mmu_idx, uintptr_t retaddr)
+#ifndef CONFIG_USER_ONLY
+static G_NORETURN
+void hppa_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
+                                  MMUAccessType access_type, int mmu_idx,
+                                  uintptr_t retaddr)
 {
     HPPACPU *cpu = HPPA_CPU(cs);
     CPUHPPAState *env = &cpu->env;
@@ -86,6 +117,7 @@ static void hppa_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
 
     cpu_loop_exit_restore(cs, retaddr);
 }
+#endif /* CONFIG_USER_ONLY */
 
 static void hppa_cpu_realizefn(DeviceState *dev, Error **errp)
 {
@@ -128,6 +160,29 @@ static ObjectClass *hppa_cpu_class_by_name(const char *cpu_model)
     return object_class_by_name(TYPE_HPPA_CPU);
 }
 
+#ifndef CONFIG_USER_ONLY
+#include "hw/core/sysemu-cpu-ops.h"
+
+static const struct SysemuCPUOps hppa_sysemu_ops = {
+    .get_phys_page_debug = hppa_cpu_get_phys_page_debug,
+};
+#endif
+
+#include "hw/core/tcg-cpu-ops.h"
+
+static const struct TCGCPUOps hppa_tcg_ops = {
+    .initialize = hppa_translate_init,
+    .synchronize_from_tb = hppa_cpu_synchronize_from_tb,
+    .restore_state_to_opc = hppa_restore_state_to_opc,
+
+#ifndef CONFIG_USER_ONLY
+    .tlb_fill = hppa_cpu_tlb_fill,
+    .cpu_exec_interrupt = hppa_cpu_exec_interrupt,
+    .do_interrupt = hppa_cpu_do_interrupt,
+    .do_unaligned_access = hppa_cpu_do_unaligned_access,
+#endif /* !CONFIG_USER_ONLY */
+};
+
 static void hppa_cpu_class_init(ObjectClass *oc, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
@@ -139,23 +194,18 @@ static void hppa_cpu_class_init(ObjectClass *oc, void *data)
 
     cc->class_by_name = hppa_cpu_class_by_name;
     cc->has_work = hppa_cpu_has_work;
-    cc->do_interrupt = hppa_cpu_do_interrupt;
-    cc->cpu_exec_interrupt = hppa_cpu_exec_interrupt;
     cc->dump_state = hppa_cpu_dump_state;
     cc->set_pc = hppa_cpu_set_pc;
-    cc->synchronize_from_tb = hppa_cpu_synchronize_from_tb;
+    cc->get_pc = hppa_cpu_get_pc;
     cc->gdb_read_register = hppa_cpu_gdb_read_register;
     cc->gdb_write_register = hppa_cpu_gdb_write_register;
-    cc->tlb_fill = hppa_cpu_tlb_fill;
 #ifndef CONFIG_USER_ONLY
-    cc->get_phys_page_debug = hppa_cpu_get_phys_page_debug;
     dc->vmsd = &vmstate_hppa_cpu;
+    cc->sysemu_ops = &hppa_sysemu_ops;
 #endif
-    cc->do_unaligned_access = hppa_cpu_do_unaligned_access;
     cc->disas_set_info = hppa_cpu_disas_set_info;
-    cc->tcg_initialize = hppa_translate_init;
-
     cc->gdb_num_core_regs = 128;
+    cc->tcg_ops = &hppa_tcg_ops;
 }
 
 static const TypeInfo hppa_cpu_type_info = {

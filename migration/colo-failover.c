@@ -17,7 +17,6 @@
 #include "migration.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-migration.h"
-#include "qapi/qmp/qerror.h"
 #include "qemu/error-report.h"
 #include "trace.h"
 
@@ -46,7 +45,7 @@ void failover_request_active(Error **errp)
 {
    if (failover_set_state(FAILOVER_STATUS_NONE,
         FAILOVER_STATUS_REQUIRE) != FAILOVER_STATUS_NONE) {
-        error_setg(errp, "COLO failover is already actived");
+        error_setg(errp, "COLO failover is already activated");
         return;
     }
     failover_bh = qemu_bh_new(colo_failover_bh, NULL);
@@ -63,7 +62,7 @@ FailoverStatus failover_set_state(FailoverStatus old_state,
 {
     FailoverStatus old;
 
-    old = atomic_cmpxchg(&failover_state, old_state, new_state);
+    old = qatomic_cmpxchg(&failover_state, old_state, new_state);
     if (old == old_state) {
         trace_colo_failover_set_state(FailoverStatus_str(new_state));
     }
@@ -72,13 +71,13 @@ FailoverStatus failover_set_state(FailoverStatus old_state,
 
 FailoverStatus failover_get_state(void)
 {
-    return atomic_read(&failover_state);
+    return qatomic_read(&failover_state);
 }
 
 void qmp_x_colo_lost_heartbeat(Error **errp)
 {
     if (get_colo_mode() == COLO_MODE_NONE) {
-        error_setg(errp, QERR_FEATURE_DISABLED, "colo");
+        error_setg(errp, "VM is not in COLO mode");
         return;
     }
 

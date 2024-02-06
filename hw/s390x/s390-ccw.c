@@ -15,10 +15,10 @@
 #include <libgen.h>
 #include "qapi/error.h"
 #include "qemu/module.h"
-#include "hw/sysbus.h"
 #include "hw/s390x/css.h"
 #include "hw/s390x/css-bridge.h"
 #include "hw/s390x/s390-ccw.h"
+#include "sysemu/sysemu.h"
 
 IOInstEnding s390_ccw_cmd_request(SubchDev *sch)
 {
@@ -48,6 +48,27 @@ int s390_ccw_clear(SubchDev *sch)
         return -ENOSYS;
     }
     return cdc->handle_clear(sch);
+}
+
+IOInstEnding s390_ccw_store(SubchDev *sch)
+{
+    S390CCWDeviceClass *cdc = NULL;
+    int ret = IOINST_CC_EXPECTED;
+
+    /*
+     * This code is called for both virtual and passthrough devices,
+     * but only applies to the latter.  This ugly check makes that
+     * distinction for us.
+     */
+    if (object_dynamic_cast(OBJECT(sch->driver_data), TYPE_S390_CCW)) {
+        cdc = S390_CCW_DEVICE_GET_CLASS(sch->driver_data);
+    }
+
+    if (cdc && cdc->handle_store) {
+        ret = cdc->handle_store(sch);
+    }
+
+    return ret;
 }
 
 static void s390_ccw_get_dev_info(S390CCWDevice *cdev,
@@ -103,6 +124,7 @@ static void s390_ccw_realize(S390CCWDevice *cdev, char *sysfsdev, Error **errp)
     }
     sch->driver_data = cdev;
     sch->do_subchannel_work = do_subchannel_work_passthrough;
+    sch->irb_cb = build_irb_passthrough;
 
     ccw_dev->sch = sch;
     ret = css_sch_build_schib(sch, &cdev->hostid);
@@ -131,7 +153,7 @@ out_err_propagate:
     error_propagate(errp, err);
 }
 
-static void s390_ccw_unrealize(S390CCWDevice *cdev, Error **errp)
+static void s390_ccw_unrealize(S390CCWDevice *cdev)
 {
     CcwDevice *ccw_dev = CCW_DEVICE(cdev);
     SubchDev *sch = ccw_dev->sch;
@@ -150,15 +172,13 @@ static void s390_ccw_instance_init(Object *obj)
     S390CCWDevice *dev = S390_CCW_DEVICE(obj);
 
     device_add_bootindex_property(obj, &dev->bootindex, "bootindex",
-                                  "/disk@0,0", DEVICE(obj), NULL);
+                                  "/disk@0,0", DEVICE(obj));
 }
 
 static void s390_ccw_class_init(ObjectClass *klass, void *data)
 {
-    DeviceClass *dc = DEVICE_CLASS(klass);
     S390CCWDeviceClass *cdc = S390_CCW_DEVICE_CLASS(klass);
 
-    dc->bus_type = TYPE_VIRTUAL_CSS_BUS;
     cdc->realize = s390_ccw_realize;
     cdc->unrealize = s390_ccw_unrealize;
 }

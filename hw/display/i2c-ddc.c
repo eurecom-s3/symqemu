@@ -20,6 +20,8 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/i2c/i2c.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "hw/display/i2c-ddc.h"
 
 #ifndef DEBUG_I2CDDC
@@ -105,13 +107,13 @@ static void i2c_ddc_class_init(ObjectClass *oc, void *data)
 
     dc->reset = i2c_ddc_reset;
     dc->vmsd = &vmstate_i2c_ddc;
-    dc->props = i2c_ddc_properties;
+    device_class_set_props(dc, i2c_ddc_properties);
     isc->event = i2c_ddc_event;
     isc->recv = i2c_ddc_rx;
     isc->send = i2c_ddc_tx;
 }
 
-static TypeInfo i2c_ddc_info = {
+static const TypeInfo i2c_ddc_info = {
     .name = TYPE_I2CDDC,
     .parent = TYPE_I2C_SLAVE,
     .instance_size = sizeof(I2CDDCState),

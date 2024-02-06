@@ -26,6 +26,10 @@ struct QList {
     QTAILQ_HEAD(,QListEntry) head;
 };
 
+void qlist_unref(QList *q);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(QList, qlist_unref)
+
 #define qlist_append(qlist, obj) \
         qlist_append_obj(qlist, QOBJECT(obj))
 
@@ -34,10 +38,10 @@ void qlist_append_int(QList *qlist, int64_t value);
 void qlist_append_null(QList *qlist);
 void qlist_append_str(QList *qlist, const char *value);
 
-#define QLIST_FOREACH_ENTRY(qlist, var)             \
-        for ((var) = ((qlist)->head.tqh_first);     \
-            (var);                                  \
-            (var) = ((var)->next.tqe_next))
+#define QLIST_FOREACH_ENTRY(qlist, var)                 \
+        for ((var) = QTAILQ_FIRST(&(qlist)->head);      \
+             (var);                                     \
+             (var) = QTAILQ_NEXT((var), next))
 
 static inline QObject *qlist_entry_obj(const QListEntry *entry)
 {
@@ -47,14 +51,10 @@ static inline QObject *qlist_entry_obj(const QListEntry *entry)
 QList *qlist_new(void);
 QList *qlist_copy(QList *src);
 void qlist_append_obj(QList *qlist, QObject *obj);
-void qlist_iter(const QList *qlist,
-                void (*iter)(QObject *obj, void *opaque), void *opaque);
 QObject *qlist_pop(QList *qlist);
 QObject *qlist_peek(QList *qlist);
 int qlist_empty(const QList *qlist);
 size_t qlist_size(const QList *qlist);
-bool qlist_is_equal(const QObject *x, const QObject *y);
-void qlist_destroy_obj(QObject *obj);
 
 static inline const QListEntry *qlist_first(const QList *qlist)
 {

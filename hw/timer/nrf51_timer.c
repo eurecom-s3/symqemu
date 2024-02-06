@@ -15,7 +15,10 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/arm/nrf51.h"
+#include "hw/irq.h"
 #include "hw/timer/nrf51_timer.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "trace.h"
 
 #define TIMER_CLK_FREQ 16000000UL
@@ -42,7 +45,12 @@ static uint32_t update_counter(NRF51TimerState *s, int64_t now)
     uint32_t ticks = ns_to_ticks(s, now - s->update_counter_ns);
 
     s->counter = (s->counter + ticks) % BIT(bitwidths[s->bitmode]);
-    s->update_counter_ns = now;
+    /*
+     * Only advance the sync time to the timestamp of the last tick,
+     * not all the way to 'now', so we don't lose time if we do
+     * multiple resyncs in a single tick.
+     */
+    s->update_counter_ns += ticks_to_ns(s, ticks);
     return ticks;
 }
 
@@ -183,7 +191,7 @@ static uint64_t nrf51_timer_read(void *opaque, hwaddr offset, unsigned int size)
                       __func__, offset);
     }
 
-    trace_nrf51_timer_read(offset, r, size);
+    trace_nrf51_timer_read(s->id, offset, r, size);
 
     return r;
 }
@@ -195,7 +203,7 @@ static void nrf51_timer_write(void *opaque, hwaddr offset,
     uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     size_t idx;
 
-    trace_nrf51_timer_write(offset, value, size);
+    trace_nrf51_timer_write(s->id, offset, value, size);
 
     switch (offset) {
     case NRF51_TIMER_TASK_START:
@@ -237,6 +245,7 @@ static void nrf51_timer_write(void *opaque, hwaddr offset,
 
             idx = (offset - NRF51_TIMER_TASK_CAPTURE_0) / 4;
             s->cc[idx] = s->counter;
+            trace_nrf51_timer_set_count(s->id, idx, s->counter);
         }
         break;
     case NRF51_TIMER_EVENT_COMPARE_0 ... NRF51_TIMER_EVENT_COMPARE_3:
@@ -311,7 +320,7 @@ static void nrf51_timer_init(Object *obj)
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
     memory_region_init_io(&s->iomem, obj, &rng_ops, s,
-            TYPE_NRF51_TIMER, NRF51_TIMER_SIZE);
+                          TYPE_NRF51_TIMER, NRF51_PERIPHERAL_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
 
@@ -370,12 +379,18 @@ static const VMStateDescription vmstate_nrf51_timer = {
     }
 };
 
+static Property nrf51_timer_properties[] = {
+    DEFINE_PROP_UINT8("id", NRF51TimerState, id, 0),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void nrf51_timer_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->reset = nrf51_timer_reset;
     dc->vmsd = &vmstate_nrf51_timer;
+    device_class_set_props(dc, nrf51_timer_properties);
 }
 
 static const TypeInfo nrf51_timer_info = {

@@ -19,12 +19,12 @@
  */
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "exec/gdbstub.h"
+#include "gdbstub/helpers.h"
 
 /* Hint: Use "set architecture sh4" in GDB to see fpu registers */
 /* FIXME: We should use XML for this.  */
 
-int superh_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
+int superh_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
 {
     SuperHCPU *cpu = SUPERH_CPU(cs);
     CPUSH4State *env = &cpu->env;
@@ -58,11 +58,9 @@ int superh_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
         return gdb_get_regl(mem_buf, env->fpscr);
     case 25 ... 40:
         if (env->fpscr & FPSCR_FR) {
-            stfl_p(mem_buf, env->fregs[n - 9]);
-        } else {
-            stfl_p(mem_buf, env->fregs[n - 25]);
+            return gdb_get_reg32(mem_buf, env->fregs[n - 9]);
         }
-        return 4;
+        return gdb_get_reg32(mem_buf, env->fregs[n - 25]);
     case 41:
         return gdb_get_regl(mem_buf, env->ssr);
     case 42:
@@ -121,9 +119,9 @@ int superh_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
         break;
     case 25 ... 40:
         if (env->fpscr & FPSCR_FR) {
-            env->fregs[n - 9] = ldfl_p(mem_buf);
+            env->fregs[n - 9] = ldl_p(mem_buf);
         } else {
-            env->fregs[n - 25] = ldfl_p(mem_buf);
+            env->fregs[n - 25] = ldl_p(mem_buf);
         }
         break;
     case 41:

@@ -26,13 +26,17 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
-#include "hw/hw.h"
 #include "chardev/char-parallel.h"
-#include "chardev/char-fe.h"
-#include "hw/isa/isa.h"
+#include "hw/acpi/acpi_aml_interface.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
+#include "migration/vmstate.h"
+#include "hw/char/parallel-isa.h"
 #include "hw/char/parallel.h"
+#include "sysemu/reset.h"
 #include "sysemu/sysemu.h"
 #include "trace.h"
+#include "qom/object.h"
 
 //#define DEBUG_PARALLEL
 
@@ -51,54 +55,24 @@
 /*
  * These are the definitions for the Printer Status Register
  */
-#define PARA_STS_BUSY	0x80	/* Busy complement */
-#define PARA_STS_ACK	0x40	/* Acknowledge */
-#define PARA_STS_PAPER	0x20	/* Out of paper */
-#define PARA_STS_ONLINE	0x10	/* Online */
-#define PARA_STS_ERROR	0x08	/* Error complement */
-#define PARA_STS_TMOUT	0x01	/* EPP timeout */
+#define PARA_STS_BUSY   0x80    /* Busy complement */
+#define PARA_STS_ACK    0x40    /* Acknowledge */
+#define PARA_STS_PAPER  0x20    /* Out of paper */
+#define PARA_STS_ONLINE 0x10    /* Online */
+#define PARA_STS_ERROR  0x08    /* Error complement */
+#define PARA_STS_TMOUT  0x01    /* EPP timeout */
 
 /*
  * These are the definitions for the Printer Control Register
  */
-#define PARA_CTR_DIR	0x20	/* Direction (1=read, 0=write) */
-#define PARA_CTR_INTEN	0x10	/* IRQ Enable */
-#define PARA_CTR_SELECT	0x08	/* Select In complement */
-#define PARA_CTR_INIT	0x04	/* Initialize Printer complement */
-#define PARA_CTR_AUTOLF	0x02	/* Auto linefeed complement */
-#define PARA_CTR_STROBE	0x01	/* Strobe complement */
+#define PARA_CTR_DIR    0x20    /* Direction (1=read, 0=write) */
+#define PARA_CTR_INTEN  0x10    /* IRQ Enable */
+#define PARA_CTR_SELECT 0x08    /* Select In complement */
+#define PARA_CTR_INIT   0x04    /* Initialize Printer complement */
+#define PARA_CTR_AUTOLF 0x02    /* Auto linefeed complement */
+#define PARA_CTR_STROBE 0x01    /* Strobe complement */
 
 #define PARA_CTR_SIGNAL (PARA_CTR_SELECT|PARA_CTR_INIT|PARA_CTR_AUTOLF|PARA_CTR_STROBE)
-
-typedef struct ParallelState {
-    MemoryRegion iomem;
-    uint8_t dataw;
-    uint8_t datar;
-    uint8_t status;
-    uint8_t control;
-    qemu_irq irq;
-    int irq_pending;
-    CharBackend chr;
-    int hw_driver;
-    int epp_timeout;
-    uint32_t last_read_offset; /* For debugging */
-    /* Memory-mapped interface */
-    int it_shift;
-    PortioList portio_list;
-} ParallelState;
-
-#define TYPE_ISA_PARALLEL "isa-parallel"
-#define ISA_PARALLEL(obj) \
-    OBJECT_CHECK(ISAParallelState, (obj), TYPE_ISA_PARALLEL)
-
-typedef struct ISAParallelState {
-    ISADevice parent_obj;
-
-    uint32_t index;
-    uint32_t iobase;
-    uint32_t isairq;
-    ParallelState state;
-} ISAParallelState;
 
 static void parallel_update_irq(ParallelState *s)
 {
@@ -548,7 +522,7 @@ static void parallel_isa_realizefn(DeviceState *dev, Error **errp)
     index++;
 
     base = isa->iobase;
-    isa_init_irq(isadev, &s->irq, isa->isairq);
+    s->irq = isa_get_irq(isadev, isa->isairq);
     qemu_register_reset(parallel_reset, s);
 
     qemu_chr_fe_set_handlers(&s->chr, parallel_can_receive, NULL,
@@ -563,6 +537,25 @@ static void parallel_isa_realizefn(DeviceState *dev, Error **errp)
                               ? &isa_parallel_portio_hw_list[0]
                               : &isa_parallel_portio_sw_list[0]),
                              s, "parallel");
+}
+
+static void parallel_isa_build_aml(AcpiDevAmlIf *adev, Aml *scope)
+{
+    ISAParallelState *isa = ISA_PARALLEL(adev);
+    Aml *dev;
+    Aml *crs;
+
+    crs = aml_resource_template();
+    aml_append(crs, aml_io(AML_DECODE16, isa->iobase, isa->iobase, 0x08, 0x08));
+    aml_append(crs, aml_irq_no_flags(isa->isairq));
+
+    dev = aml_device("LPT%d", isa->index + 1);
+    aml_append(dev, aml_name_decl("_HID", aml_eisaid("PNP0400")));
+    aml_append(dev, aml_name_decl("_UID", aml_int(isa->index + 1)));
+    aml_append(dev, aml_name_decl("_STA", aml_int(0xf)));
+    aml_append(dev, aml_name_decl("_CRS", crs));
+
+    aml_append(scope, dev);
 }
 
 /* Memory mapped interface */
@@ -598,7 +591,7 @@ bool parallel_mm_init(MemoryRegion *address_space,
 {
     ParallelState *s;
 
-    s = g_malloc0(sizeof(ParallelState));
+    s = g_new0(ParallelState, 1);
     s->irq = irq;
     qemu_chr_fe_init(&s->chr, chr, &error_abort);
     s->it_shift = it_shift;
@@ -621,10 +614,12 @@ static Property parallel_isa_properties[] = {
 static void parallel_isa_class_initfn(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    AcpiDevAmlIfClass *adevc = ACPI_DEV_AML_IF_CLASS(klass);
 
     dc->realize = parallel_isa_realizefn;
     dc->vmsd = &vmstate_parallel_isa;
-    dc->props = parallel_isa_properties;
+    adevc->build_dev_aml = parallel_isa_build_aml;
+    device_class_set_props(dc, parallel_isa_properties);
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
 }
 
@@ -633,6 +628,10 @@ static const TypeInfo parallel_isa_info = {
     .parent        = TYPE_ISA_DEVICE,
     .instance_size = sizeof(ISAParallelState),
     .class_init    = parallel_isa_class_initfn,
+    .interfaces = (InterfaceInfo[]) {
+        { TYPE_ACPI_DEV_AML_IF },
+        { },
+    },
 };
 
 static void parallel_register_types(void)

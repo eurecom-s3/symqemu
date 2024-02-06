@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -18,22 +18,26 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "sysemu/dma.h"
 #include "qapi/error.h"
+#include "qapi/qapi-types-block.h"
 #include "qemu/error-report.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "hw/ide/internal.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/blockdev.h"
 #include "hw/block/block.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/runstate.h"
 #include "qapi/visitor.h"
 
 /* --------------------------------- */
 
 static char *idebus_get_fw_dev_path(DeviceState *dev);
-static void idebus_unrealize(BusState *qdev, Error **errp);
+static void idebus_unrealize(BusState *qdev);
 
 static Property ide_props[] = {
     DEFINE_PROP_UINT32("unit", IDEDevice, unit, -1),
@@ -48,7 +52,7 @@ static void ide_bus_class_init(ObjectClass *klass, void *data)
     k->unrealize = idebus_unrealize;
 }
 
-static void idebus_unrealize(BusState *bus, Error **errp)
+static void idebus_unrealize(BusState *bus)
 {
     IDEBus *ibus = IDE_BUS(bus);
 
@@ -64,10 +68,10 @@ static const TypeInfo ide_bus_info = {
     .class_init = ide_bus_class_init,
 };
 
-void ide_bus_new(IDEBus *idebus, size_t idebus_size, DeviceState *dev,
+void ide_bus_init(IDEBus *idebus, size_t idebus_size, DeviceState *dev,
                  int bus_id, int max_units)
 {
-    qbus_create_inplace(idebus, idebus_size, TYPE_IDE_BUS, dev, NULL);
+    qbus_init(idebus, idebus_size, TYPE_IDE_BUS, dev, NULL);
     idebus->bus_id = bus_id;
     idebus->max_units = max_units;
 }
@@ -120,15 +124,15 @@ static void ide_qdev_realize(DeviceState *qdev, Error **errp)
     dc->realize(dev, errp);
 }
 
-IDEDevice *ide_create_drive(IDEBus *bus, int unit, DriveInfo *drive)
+IDEDevice *ide_bus_create_drive(IDEBus *bus, int unit, DriveInfo *drive)
 {
     DeviceState *dev;
 
-    dev = qdev_create(&bus->qbus, drive->media_cd ? "ide-cd" : "ide-hd");
+    dev = qdev_new(drive->media_cd ? "ide-cd" : "ide-hd");
     qdev_prop_set_uint32(dev, "unit", unit);
-    qdev_prop_set_drive(dev, "drive", blk_by_legacy_dinfo(drive),
-                        &error_fatal);
-    qdev_init_nofail(dev);
+    qdev_prop_set_drive_err(dev, "drive", blk_by_legacy_dinfo(drive),
+                            &error_fatal);
+    qdev_realize_and_unref(dev, &bus->qbus, &error_fatal);
     return DO_UPCAST(IDEDevice, qdev, dev);
 }
 
@@ -184,7 +188,10 @@ static void ide_dev_initfn(IDEDevice *dev, IDEDriveKind kind, Error **errp)
         return;
     }
 
-    blkconf_blocksizes(&dev->conf);
+    if (!blkconf_blocksizes(&dev->conf, errp)) {
+        return;
+    }
+
     if (dev->conf.logical_block_size != 512) {
         error_setg(errp, "logical_block_size must be 512 for IDE");
         return;
@@ -217,6 +224,11 @@ static void ide_dev_initfn(IDEDevice *dev, IDEDriveKind kind, Error **errp)
 
     add_boot_device_path(dev->conf.bootindex, &dev->qdev,
                          dev->unit ? "/disk@1" : "/disk@0");
+
+    add_boot_device_lchs(&dev->qdev, dev->unit ? "/disk@1" : "/disk@0",
+                         dev->conf.lcyls,
+                         dev->conf.lheads,
+                         dev->conf.lsecs);
 }
 
 static void ide_dev_get_bootindex(Object *obj, Visitor *v, const char *name,
@@ -234,9 +246,8 @@ static void ide_dev_set_bootindex(Object *obj, Visitor *v, const char *name,
     int32_t boot_index;
     Error *local_err = NULL;
 
-    visit_type_int32(v, name, &boot_index, &local_err);
-    if (local_err) {
-        goto out;
+    if (!visit_type_int32(v, name, &boot_index, errp)) {
+        return;
     }
     /* check whether bootindex is present in fw_boot_order list  */
     check_boot_index(boot_index, &local_err);
@@ -258,8 +269,8 @@ static void ide_dev_instance_init(Object *obj)
 {
     object_property_add(obj, "bootindex", "int32",
                         ide_dev_get_bootindex,
-                        ide_dev_set_bootindex, NULL, NULL, NULL);
-    object_property_set_int(obj, -1, "bootindex", NULL);
+                        ide_dev_set_bootindex, NULL, NULL);
+    object_property_set_int(obj, "bootindex", -1, NULL);
 }
 
 static void ide_hd_realize(IDEDevice *dev, Error **errp)
@@ -272,22 +283,16 @@ static void ide_cd_realize(IDEDevice *dev, Error **errp)
     ide_dev_initfn(dev, IDE_CD, errp);
 }
 
-static void ide_drive_realize(IDEDevice *dev, Error **errp)
+static void ide_cf_realize(IDEDevice *dev, Error **errp)
 {
-    DriveInfo *dinfo = NULL;
-
-    if (dev->conf.blk) {
-        dinfo = blk_legacy_dinfo(dev->conf.blk);
-    }
-
-    ide_dev_initfn(dev, dinfo && dinfo->media_cd ? IDE_CD : IDE_HD, errp);
+    ide_dev_initfn(dev, IDE_CFATA, errp);
 }
 
 #define DEFINE_IDE_DEV_PROPERTIES()                     \
     DEFINE_BLOCK_PROPERTIES(IDEDrive, dev.conf),        \
     DEFINE_BLOCK_ERROR_PROPERTIES(IDEDrive, dev.conf),  \
     DEFINE_PROP_STRING("ver",  IDEDrive, dev.version),  \
-    DEFINE_PROP_UINT64("wwn",  IDEDrive, dev.wwn, 0),    \
+    DEFINE_PROP_UINT64("wwn",  IDEDrive, dev.wwn, 0),   \
     DEFINE_PROP_STRING("serial",  IDEDrive, dev.serial),\
     DEFINE_PROP_STRING("model", IDEDrive, dev.model)
 
@@ -308,7 +313,7 @@ static void ide_hd_class_init(ObjectClass *klass, void *data)
     k->realize  = ide_hd_realize;
     dc->fw_name = "drive";
     dc->desc    = "virtual IDE disk";
-    dc->props   = ide_hd_properties;
+    device_class_set_props(dc, ide_hd_properties);
 }
 
 static const TypeInfo ide_hd_info = {
@@ -331,7 +336,7 @@ static void ide_cd_class_init(ObjectClass *klass, void *data)
     k->realize  = ide_cd_realize;
     dc->fw_name = "drive";
     dc->desc    = "virtual IDE CD-ROM";
-    dc->props   = ide_cd_properties;
+    device_class_set_props(dc, ide_cd_properties);
 }
 
 static const TypeInfo ide_cd_info = {
@@ -341,27 +346,30 @@ static const TypeInfo ide_cd_info = {
     .class_init    = ide_cd_class_init,
 };
 
-static Property ide_drive_properties[] = {
+static Property ide_cf_properties[] = {
     DEFINE_IDE_DEV_PROPERTIES(),
+    DEFINE_BLOCK_CHS_PROPERTIES(IDEDrive, dev.conf),
+    DEFINE_PROP_BIOS_CHS_TRANS("bios-chs-trans",
+                IDEDrive, dev.chs_trans, BIOS_ATA_TRANSLATION_AUTO),
     DEFINE_PROP_END_OF_LIST(),
 };
 
-static void ide_drive_class_init(ObjectClass *klass, void *data)
+static void ide_cf_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     IDEDeviceClass *k = IDE_DEVICE_CLASS(klass);
 
-    k->realize  = ide_drive_realize;
+    k->realize  = ide_cf_realize;
     dc->fw_name = "drive";
-    dc->desc    = "virtual IDE disk or CD-ROM (legacy)";
-    dc->props   = ide_drive_properties;
+    dc->desc    = "virtual CompactFlash card";
+    device_class_set_props(dc, ide_cf_properties);
 }
 
-static const TypeInfo ide_drive_info = {
-    .name          = "ide-drive",
+static const TypeInfo ide_cf_info = {
+    .name          = "ide-cf",
     .parent        = TYPE_IDE_DEVICE,
     .instance_size = sizeof(IDEDrive),
-    .class_init    = ide_drive_class_init,
+    .class_init    = ide_cf_class_init,
 };
 
 static void ide_device_class_init(ObjectClass *klass, void *data)
@@ -370,7 +378,7 @@ static void ide_device_class_init(ObjectClass *klass, void *data)
     k->realize = ide_qdev_realize;
     set_bit(DEVICE_CATEGORY_STORAGE, k->categories);
     k->bus_type = TYPE_IDE_BUS;
-    k->props = ide_props;
+    device_class_set_props(k, ide_props);
 }
 
 static const TypeInfo ide_device_type_info = {
@@ -388,7 +396,7 @@ static void ide_register_types(void)
     type_register_static(&ide_bus_info);
     type_register_static(&ide_hd_info);
     type_register_static(&ide_cd_info);
-    type_register_static(&ide_drive_info);
+    type_register_static(&ide_cf_info);
     type_register_static(&ide_device_type_info);
 }
 

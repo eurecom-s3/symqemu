@@ -24,28 +24,28 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/isa/isa.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
+#include "qapi/error.h"
 #include "qemu/module.h"
 #include "sysemu/dma.h"
 
+#include "hw/ide/isa.h"
 #include "hw/ide/internal.h"
+#include "qom/object.h"
 
 /***********************************************************/
 /* ISA IDE definitions */
 
-#define TYPE_ISA_IDE "isa-ide"
-#define ISA_IDE(obj) OBJECT_CHECK(ISAIDEState, (obj), TYPE_ISA_IDE)
-
-typedef struct ISAIDEState {
+struct ISAIDEState {
     ISADevice parent_obj;
 
     IDEBus    bus;
     uint32_t  iobase;
     uint32_t  iobase2;
-    uint32_t  isairq;
-    qemu_irq  irq;
-} ISAIDEState;
+    uint32_t  irqnum;
+};
 
 static void isa_ide_reset(DeviceState *d)
 {
@@ -70,34 +70,33 @@ static void isa_ide_realizefn(DeviceState *dev, Error **errp)
     ISADevice *isadev = ISA_DEVICE(dev);
     ISAIDEState *s = ISA_IDE(dev);
 
-    ide_bus_new(&s->bus, sizeof(s->bus), dev, 0, 2);
+    ide_bus_init(&s->bus, sizeof(s->bus), dev, 0, 2);
     ide_init_ioport(&s->bus, isadev, s->iobase, s->iobase2);
-    isa_init_irq(isadev, &s->irq, s->isairq);
-    ide_init2(&s->bus, s->irq);
-    vmstate_register(dev, 0, &vmstate_ide_isa, s);
-    ide_register_restart_cb(&s->bus);
+    ide_bus_init_output_irq(&s->bus, isa_get_irq(isadev, s->irqnum));
+    vmstate_register(VMSTATE_IF(dev), 0, &vmstate_ide_isa, s);
+    ide_bus_register_restart_cb(&s->bus);
 }
 
-ISADevice *isa_ide_init(ISABus *bus, int iobase, int iobase2, int isairq,
+ISADevice *isa_ide_init(ISABus *bus, int iobase, int iobase2, int irqnum,
                         DriveInfo *hd0, DriveInfo *hd1)
 {
     DeviceState *dev;
     ISADevice *isadev;
     ISAIDEState *s;
 
-    isadev = isa_create(bus, TYPE_ISA_IDE);
+    isadev = isa_new(TYPE_ISA_IDE);
     dev = DEVICE(isadev);
     qdev_prop_set_uint32(dev, "iobase",  iobase);
     qdev_prop_set_uint32(dev, "iobase2", iobase2);
-    qdev_prop_set_uint32(dev, "irq",     isairq);
-    qdev_init_nofail(dev);
+    qdev_prop_set_uint32(dev, "irq",     irqnum);
+    isa_realize_and_unref(isadev, bus, &error_fatal);
 
     s = ISA_IDE(dev);
     if (hd0) {
-        ide_create_drive(&s->bus, 0, hd0);
+        ide_bus_create_drive(&s->bus, 0, hd0);
     }
     if (hd1) {
-        ide_create_drive(&s->bus, 1, hd1);
+        ide_bus_create_drive(&s->bus, 1, hd1);
     }
     return isadev;
 }
@@ -105,7 +104,7 @@ ISADevice *isa_ide_init(ISABus *bus, int iobase, int iobase2, int isairq,
 static Property isa_ide_properties[] = {
     DEFINE_PROP_UINT32("iobase",  ISAIDEState, iobase,  0x1f0),
     DEFINE_PROP_UINT32("iobase2", ISAIDEState, iobase2, 0x3f6),
-    DEFINE_PROP_UINT32("irq",    ISAIDEState, isairq,  14),
+    DEFINE_PROP_UINT32("irq",     ISAIDEState, irqnum,  14),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -116,7 +115,7 @@ static void isa_ide_class_initfn(ObjectClass *klass, void *data)
     dc->realize = isa_ide_realizefn;
     dc->fw_name = "ide";
     dc->reset = isa_ide_reset;
-    dc->props = isa_ide_properties;
+    device_class_set_props(dc, isa_ide_properties);
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
 }
 

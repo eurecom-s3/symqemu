@@ -46,7 +46,7 @@ struct NetPacket {
     unsigned flags;
     int size;
     NetPacketSent *sent_cb;
-    uint8_t data[0];
+    uint8_t data[];
 };
 
 struct NetQueue {
@@ -182,6 +182,28 @@ static ssize_t qemu_net_queue_deliver_iov(NetQueue *queue,
     return ret;
 }
 
+ssize_t qemu_net_queue_receive(NetQueue *queue,
+                               const uint8_t *data,
+                               size_t size)
+{
+    if (queue->delivering) {
+        return 0;
+    }
+
+    return qemu_net_queue_deliver(queue, NULL, 0, data, size);
+}
+
+ssize_t qemu_net_queue_receive_iov(NetQueue *queue,
+                                   const struct iovec *iov,
+                                   int iovcnt)
+{
+    if (queue->delivering) {
+        return 0;
+    }
+
+    return qemu_net_queue_deliver_iov(queue, NULL, 0, iov, iovcnt);
+}
+
 ssize_t qemu_net_queue_send(NetQueue *queue,
                             NetClientState *sender,
                             unsigned flags,
@@ -250,6 +272,9 @@ void qemu_net_queue_purge(NetQueue *queue, NetClientState *from)
 
 bool qemu_net_queue_flush(NetQueue *queue)
 {
+    if (queue->delivering)
+        return false;
+
     while (!QTAILQ_EMPTY(&queue->packets)) {
         NetPacket *packet;
         int ret;

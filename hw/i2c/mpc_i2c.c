@@ -19,9 +19,11 @@
 
 #include "qemu/osdep.h"
 #include "hw/i2c/i2c.h"
-#include "qemu/log.h"
+#include "hw/irq.h"
 #include "qemu/module.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
+#include "qom/object.h"
 
 /* #define DEBUG_I2C */
 
@@ -34,8 +36,7 @@
 #endif
 
 #define TYPE_MPC_I2C "mpc-i2c"
-#define MPC_I2C(obj) \
-    OBJECT_CHECK(MPCI2CState, (obj), TYPE_MPC_I2C)
+OBJECT_DECLARE_SIMPLE_TYPE(MPCI2CState, MPC_I2C)
 
 #define MPC_I2C_ADR   0x00
 #define MPC_I2C_FDR   0x04
@@ -68,7 +69,7 @@
 
 #define CYCLE_RESET 0xFF
 
-typedef struct MPCI2CState {
+struct MPCI2CState {
     SysBusDevice parent_obj;
 
     I2CBus *bus;
@@ -82,7 +83,7 @@ typedef struct MPCI2CState {
     uint8_t sr;
     uint8_t dr;
     uint8_t dfssr;
-} MPCI2CState;
+};
 
 static bool mpc_i2c_is_enabled(MPCI2CState *s)
 {
@@ -223,7 +224,7 @@ static uint64_t mpc_i2c_read(void *opaque, hwaddr addr, unsigned size)
         break;
     }
 
-    DPRINTF("%s: addr " TARGET_FMT_plx " %02" PRIx32 "\n", __func__,
+    DPRINTF("%s: addr " HWADDR_FMT_plx " %02" PRIx32 "\n", __func__,
                                          addr, value);
     return (uint64_t)value;
 }
@@ -233,7 +234,7 @@ static void mpc_i2c_write(void *opaque, hwaddr addr,
 {
     MPCI2CState *s = opaque;
 
-    DPRINTF("%s: addr " TARGET_FMT_plx " val %08" PRIx64 "\n", __func__,
+    DPRINTF("%s: addr " HWADDR_FMT_plx " val %08" PRIx64 "\n", __func__,
                                              addr, value);
     switch (addr) {
     case MPC_I2C_ADR:
@@ -330,7 +331,7 @@ static void mpc_i2c_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&i2c->iomem, OBJECT(i2c), &i2c_ops, i2c,
                           "mpc-i2c", 0x14);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &i2c->iomem);
-    i2c->bus = i2c_init_bus(DEVICE(dev), "i2c");
+    i2c->bus = i2c_init_bus(dev, "i2c");
 }
 
 static void mpc_i2c_class_init(ObjectClass *klass, void *data)

@@ -26,11 +26,14 @@
 #include "qemu/module.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
-#include "hw/hw.h"
+#include "qemu/log.h"
 #include "hw/loader.h"
 #include "trace.h"
-#include "ui/vnc.h"
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
+#include "qom/object.h"
+#include "ui/console.h"
 
 #undef VERBOSE
 #define HW_RECT_ACCEL
@@ -78,13 +81,13 @@ struct vmsvga_state_s {
     struct vmsvga_rect_s {
         int x, y, w, h;
     } redraw_fifo[REDRAW_FIFO_LEN];
-    int redraw_fifo_first, redraw_fifo_last;
+    int redraw_fifo_last;
 };
 
 #define TYPE_VMWARE_SVGA "vmware-svga"
 
-#define VMWARE_SVGA(obj) \
-    OBJECT_CHECK(struct pci_vmsvga_state_s, (obj), TYPE_VMWARE_SVGA)
+DECLARE_INSTANCE_CHECKER(struct pci_vmsvga_state_s, VMWARE_SVGA,
+                         TYPE_VMWARE_SVGA)
 
 struct pci_vmsvga_state_s {
     /*< private >*/
@@ -217,7 +220,7 @@ enum {
 
 /* These values can probably be changed arbitrarily.  */
 #define SVGA_SCRATCH_SIZE               0x8000
-#define SVGA_MAX_WIDTH                  ROUND_UP(2360, VNC_DIRTY_PIXELS_PER_BIT)
+#define SVGA_MAX_WIDTH                  2368
 #define SVGA_MAX_HEIGHT                 1770
 
 #ifdef VERBOSE
@@ -295,46 +298,52 @@ static inline bool vmsvga_verify_rect(DisplaySurface *surface,
                                       int x, int y, int w, int h)
 {
     if (x < 0) {
-        fprintf(stderr, "%s: x was < 0 (%d)\n", name, x);
+        trace_vmware_verify_rect_less_than_zero(name, "x", x);
         return false;
     }
     if (x > SVGA_MAX_WIDTH) {
-        fprintf(stderr, "%s: x was > %d (%d)\n", name, SVGA_MAX_WIDTH, x);
+        trace_vmware_verify_rect_greater_than_bound(name, "x", SVGA_MAX_WIDTH,
+                                                    x);
         return false;
     }
     if (w < 0) {
-        fprintf(stderr, "%s: w was < 0 (%d)\n", name, w);
+        trace_vmware_verify_rect_less_than_zero(name, "w", w);
         return false;
     }
     if (w > SVGA_MAX_WIDTH) {
-        fprintf(stderr, "%s: w was > %d (%d)\n", name, SVGA_MAX_WIDTH, w);
+        trace_vmware_verify_rect_greater_than_bound(name, "w", SVGA_MAX_WIDTH,
+                                                    w);
         return false;
     }
     if (x + w > surface_width(surface)) {
-        fprintf(stderr, "%s: width was > %d (x: %d, w: %d)\n",
-                name, surface_width(surface), x, w);
+        trace_vmware_verify_rect_surface_bound_exceeded(name, "width",
+                                                        surface_width(surface),
+                                                        "x", x, "w", w);
         return false;
     }
 
     if (y < 0) {
-        fprintf(stderr, "%s: y was < 0 (%d)\n", name, y);
+        trace_vmware_verify_rect_less_than_zero(name, "y", y);
         return false;
     }
     if (y > SVGA_MAX_HEIGHT) {
-        fprintf(stderr, "%s: y was > %d (%d)\n", name, SVGA_MAX_HEIGHT, y);
+        trace_vmware_verify_rect_greater_than_bound(name, "y", SVGA_MAX_HEIGHT,
+                                                    y);
         return false;
     }
     if (h < 0) {
-        fprintf(stderr, "%s: h was < 0 (%d)\n", name, h);
+        trace_vmware_verify_rect_less_than_zero(name, "h", h);
         return false;
     }
     if (h > SVGA_MAX_HEIGHT) {
-        fprintf(stderr, "%s: h was > %d (%d)\n", name, SVGA_MAX_HEIGHT, h);
+        trace_vmware_verify_rect_greater_than_bound(name, "y", SVGA_MAX_HEIGHT,
+                                                    y);
         return false;
     }
     if (y + h > surface_height(surface)) {
-        fprintf(stderr, "%s: update height > %d (y: %d, h: %d)\n",
-                name, surface_height(surface), y, h);
+        trace_vmware_verify_rect_surface_bound_exceeded(name, "height",
+                                                        surface_height(surface),
+                                                        "y", y, "h", h);
         return false;
     }
 
@@ -372,33 +381,39 @@ static inline void vmsvga_update_rect(struct vmsvga_state_s *s,
     dpy_gfx_update(s->vga.con, x, y, w, h);
 }
 
-static inline void vmsvga_update_rect_delayed(struct vmsvga_state_s *s,
-                int x, int y, int w, int h)
-{
-    struct vmsvga_rect_s *rect = &s->redraw_fifo[s->redraw_fifo_last++];
-
-    s->redraw_fifo_last &= REDRAW_FIFO_LEN - 1;
-    rect->x = x;
-    rect->y = y;
-    rect->w = w;
-    rect->h = h;
-}
-
 static inline void vmsvga_update_rect_flush(struct vmsvga_state_s *s)
 {
     struct vmsvga_rect_s *rect;
 
     if (s->invalidated) {
-        s->redraw_fifo_first = s->redraw_fifo_last;
+        s->redraw_fifo_last = 0;
         return;
     }
     /* Overlapping region updates can be optimised out here - if someone
      * knows a smart algorithm to do that, please share.  */
-    while (s->redraw_fifo_first != s->redraw_fifo_last) {
-        rect = &s->redraw_fifo[s->redraw_fifo_first++];
-        s->redraw_fifo_first &= REDRAW_FIFO_LEN - 1;
+    for (int i = 0; i < s->redraw_fifo_last; i++) {
+        rect = &s->redraw_fifo[i];
         vmsvga_update_rect(s, rect->x, rect->y, rect->w, rect->h);
     }
+
+    s->redraw_fifo_last = 0;
+}
+
+static inline void vmsvga_update_rect_delayed(struct vmsvga_state_s *s,
+                int x, int y, int w, int h)
+{
+
+    if (s->redraw_fifo_last >= REDRAW_FIFO_LEN) {
+        trace_vmware_update_rect_delayed_flush();
+        vmsvga_update_rect_flush(s);
+    }
+
+    struct vmsvga_rect_s *rect = &s->redraw_fifo[s->redraw_fifo_last++];
+
+    rect->x = x;
+    rect->y = y;
+    rect->w = w;
+    rect->h = h;
 }
 
 #ifdef HW_RECT_ACCEL
@@ -507,6 +522,8 @@ static inline void vmsvga_cursor_define(struct vmsvga_state_s *s,
     int i, pixels;
 
     qc = cursor_alloc(c->width, c->height);
+    assert(qc != NULL);
+
     qc->hot_x = c->hot_x;
     qc->hot_y = c->hot_y;
     switch (c->bpp) {
@@ -533,12 +550,12 @@ static inline void vmsvga_cursor_define(struct vmsvga_state_s *s,
     default:
         fprintf(stderr, "%s: unhandled bpp %d, using fallback cursor\n",
                 __func__, c->bpp);
-        cursor_put(qc);
+        cursor_unref(qc);
         qc = cursor_builtin_left_ptr();
     }
 
     dpy_cursor_define(s->vga.con, qc);
-    cursor_put(qc);
+    cursor_unref(qc);
 }
 #endif
 
@@ -952,7 +969,8 @@ static uint32_t vmsvga_value_read(void *opaque, uint32_t address)
             ret = s->scratch[s->index - SVGA_SCRATCH_BASE];
             break;
         }
-        printf("%s: Bad register %02x\n", __func__, s->index);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad register %02x\n", __func__, s->index);
         ret = 0;
         break;
     }
@@ -1001,7 +1019,8 @@ static void vmsvga_value_write(void *opaque, uint32_t address, uint32_t value)
             s->new_width = value;
             s->invalidated = 1;
         } else {
-            printf("%s: Bad width: %i\n", __func__, value);
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: Bad width: %i\n", __func__, value);
         }
         break;
 
@@ -1010,13 +1029,15 @@ static void vmsvga_value_write(void *opaque, uint32_t address, uint32_t value)
             s->new_height = value;
             s->invalidated = 1;
         } else {
-            printf("%s: Bad height: %i\n", __func__, value);
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: Bad height: %i\n", __func__, value);
         }
         break;
 
     case SVGA_REG_BITS_PER_PIXEL:
         if (value != 32) {
-            printf("%s: Bad bits per pixel: %i bits\n", __func__, value);
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: Bad bits per pixel: %i bits\n", __func__, value);
             s->config = 0;
             s->invalidated = 1;
         }
@@ -1081,7 +1102,8 @@ static void vmsvga_value_write(void *opaque, uint32_t address, uint32_t value)
             s->scratch[s->index - SVGA_SCRATCH_BASE] = value;
             break;
         }
-        printf("%s: Bad register %02x\n", __func__, s->index);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad register %02x\n", __func__, s->index);
     }
 }
 
@@ -1146,7 +1168,6 @@ static void vmsvga_reset(DeviceState *dev)
     s->config = 0;
     s->svgaid = SVGA_ID;
     s->cursor.on = 0;
-    s->redraw_fifo_first = 0;
     s->redraw_fifo_last = 0;
     s->syncing = 0;
 
@@ -1241,7 +1262,7 @@ static void vmsvga_init(DeviceState *dev, struct vmsvga_state_s *s,
                            &error_fatal);
     s->fifo_ptr = memory_region_get_ram_ptr(&s->fifo_ram);
 
-    vga_common_init(&s->vga, OBJECT(dev));
+    vga_common_init(&s->vga, OBJECT(dev), &error_fatal);
     vga_init(&s->vga, OBJECT(dev), address_space, io, true);
     vmstate_register(NULL, 0, &vmstate_vga_common, &s->vga);
     s->new_depth = 32;
@@ -1299,7 +1320,7 @@ static void pci_vmsvga_realize(PCIDevice *dev, Error **errp)
     dev->config[PCI_LATENCY_TIMER] = 0x40;
     dev->config[PCI_INTERRUPT_LINE] = 0xff;          /* End */
 
-    memory_region_init_io(&s->io_bar, NULL, &vmsvga_io_ops, &s->chip,
+    memory_region_init_io(&s->io_bar, OBJECT(dev), &vmsvga_io_ops, &s->chip,
                           "vmsvga-io", 0x10);
     memory_region_set_flush_coalesced(&s->io_bar);
     pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_IO, &s->io_bar);
@@ -1311,11 +1332,6 @@ static void pci_vmsvga_realize(PCIDevice *dev, Error **errp)
                      &s->chip.vga.vram);
     pci_register_bar(dev, 2, PCI_BASE_ADDRESS_MEM_PREFETCH,
                      &s->chip.fifo_ram);
-
-    if (!dev->rom_bar) {
-        /* compatibility with pc-0.13 and older */
-        vga_init_vbe(&s->chip.vga, OBJECT(dev), pci_address_space(dev));
-    }
 }
 
 static Property vga_vmware_properties[] = {
@@ -1340,7 +1356,7 @@ static void vmsvga_class_init(ObjectClass *klass, void *data)
     k->subsystem_id = SVGA_PCI_DEVICE_ID;
     dc->reset = vmsvga_reset;
     dc->vmsd = &vmstate_vmware_vga;
-    dc->props = vga_vmware_properties;
+    device_class_set_props(dc, vga_vmware_properties);
     dc->hotpluggable = false;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
 }

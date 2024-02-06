@@ -7,7 +7,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -231,7 +231,7 @@ static inline uint32_t evaluate_flags_writeback(CPUCRISState *env,
 {
     unsigned int x, z, mask;
 
-    /* Extended arithmetics, leave the z flag alone.  */
+    /* Extended arithmetic, leave the z flag alone.  */
     x = env->cc_x;
     mask = env->cc_mask | X_FLAG;
     if (x) {

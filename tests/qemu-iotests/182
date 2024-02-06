@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw quick
 #
 # Test image locking for POSIX locks
 #
@@ -19,7 +20,7 @@
 #
 
 # creator
-owner=famz@redhat.com
+owner=fam@euphon.net
 
 seq="$(basename $0)"
 echo "QA output created by $seq"
@@ -30,8 +31,8 @@ status=1	# failure is the default!
 _cleanup()
 {
     _cleanup_test_img
-    rm -f "$TEST_IMG.overlay"
-    rm -f "$TEST_DIR/nbd.socket"
+    _rm_test_img "$TEST_IMG.overlay"
+    rm -f "$SOCK_DIR/nbd.socket"
 }
 trap "_cleanup; exit \$status" 0 1 2 3 15
 
@@ -45,26 +46,17 @@ _supported_proto file
 
 size=32M
 
-case "$QEMU_DEFAULT_MACHINE" in
-  s390-ccw-virtio)
-      virtioblk=virtio-blk-ccw
-      ;;
-  *)
-      virtioblk=virtio-blk-pci
-      ;;
-esac
-
 _make_test_img $size
 
 echo "Starting QEMU"
 _launch_qemu -drive file=$TEST_IMG,if=none,id=drive0,file.locking=on \
-    -device $virtioblk,drive=drive0
+    -device virtio-blk,drive=drive0
 
 echo
 echo "Starting a second QEMU using the same image should fail"
 echo 'quit' | $QEMU -nographic -monitor stdio \
     -drive file=$TEST_IMG,if=none,id=drive0,file.locking=on \
-    -device $virtioblk,drive=drive0 2>&1 | _filter_testdir 2>&1 |
+    -device virtio-blk,drive=drive0 2>&1 | _filter_testdir 2>&1 |
     _filter_qemu |
     sed -e '/falling back to POSIX file/d' \
         -e '/locks can be lost unexpectedly/d'
@@ -133,7 +125,7 @@ success_or_failure=y _send_qemu_cmd $QEMU_HANDLE \
           'addr': {
               'type': 'unix',
               'data': {
-                  'path': '$TEST_DIR/nbd.socket'
+                  'path': '$SOCK_DIR/nbd.socket'
               } } } }" \
     'return' \
     'error'

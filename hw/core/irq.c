@@ -26,7 +26,7 @@
 #include "hw/irq.h"
 #include "qom/object.h"
 
-#define IRQ(obj) OBJECT_CHECK(struct IRQState, (obj), TYPE_IRQ)
+OBJECT_DECLARE_SIMPLE_TYPE(IRQState, IRQ)
 
 struct IRQState {
     Object parent_obj;
@@ -67,7 +67,7 @@ qemu_irq *qemu_allocate_irqs(qemu_irq_handler handler, void *opaque, int n)
 
 qemu_irq qemu_allocate_irq(qemu_irq_handler handler, void *opaque, int n)
 {
-    struct IRQState *irq;
+    IRQState *irq;
 
     irq = IRQ(object_new(TYPE_IRQ));
     irq->handler = handler;
@@ -93,7 +93,7 @@ void qemu_free_irq(qemu_irq irq)
 
 static void qemu_notirq(void *opaque, int line, int level)
 {
-    struct IRQState *irq = opaque;
+    IRQState *irq = opaque;
 
     irq->handler(irq->opaque, irq->n, !level);
 }
@@ -103,35 +103,6 @@ qemu_irq qemu_irq_invert(qemu_irq irq)
     /* The default state for IRQs is low, so raise the output now.  */
     qemu_irq_raise(irq);
     return qemu_allocate_irq(qemu_notirq, irq, 0);
-}
-
-static void qemu_splitirq(void *opaque, int line, int level)
-{
-    struct IRQState **irq = opaque;
-    irq[0]->handler(irq[0]->opaque, irq[0]->n, level);
-    irq[1]->handler(irq[1]->opaque, irq[1]->n, level);
-}
-
-qemu_irq qemu_irq_split(qemu_irq irq1, qemu_irq irq2)
-{
-    qemu_irq *s = g_malloc0(2 * sizeof(qemu_irq));
-    s[0] = irq1;
-    s[1] = irq2;
-    return qemu_allocate_irq(qemu_splitirq, s, 0);
-}
-
-static void proxy_irq_handler(void *opaque, int n, int level)
-{
-    qemu_irq **target = opaque;
-
-    if (*target) {
-        qemu_set_irq((*target)[n], level);
-    }
-}
-
-qemu_irq *qemu_irq_proxy(qemu_irq **target, int n)
-{
-    return qemu_allocate_irqs(proxy_irq_handler, target, n);
 }
 
 void qemu_irq_intercept_in(qemu_irq *gpio_in, qemu_irq_handler handler, int n)
@@ -148,7 +119,7 @@ void qemu_irq_intercept_in(qemu_irq *gpio_in, qemu_irq_handler handler, int n)
 static const TypeInfo irq_type_info = {
    .name = TYPE_IRQ,
    .parent = TYPE_OBJECT,
-   .instance_size = sizeof(struct IRQState),
+   .instance_size = sizeof(IRQState),
 };
 
 static void irq_register_types(void)

@@ -5,14 +5,12 @@
 
 #include "target/alpha/cpu-qom.h"
 #include "hw/pci/pci.h"
-#include "hw/pci/pci_host.h"
-#include "hw/ide.h"
-#include "hw/i386/pc.h"
-#include "hw/irq.h"
+#include "hw/boards.h"
+#include "hw/intc/i8259.h"
 
 
-PCIBus *typhoon_init(ram_addr_t, ISABus **, qemu_irq *, AlphaCPU *[4],
-                     pci_map_irq_fn);
+PCIBus *typhoon_init(MemoryRegion *, qemu_irq *, qemu_irq *, AlphaCPU *[4],
+                     pci_map_irq_fn, uint8_t devfn_min);
 
 /* alpha_pci.c.  */
 extern const MemoryRegionOps alpha_pci_ignore_ops;

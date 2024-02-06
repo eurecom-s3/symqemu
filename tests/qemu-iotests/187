@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw auto
 #
 # Test switching between read-only and read-write
 #
@@ -28,9 +29,9 @@ status=1	# failure is the default!
 
 _cleanup()
 {
-	_cleanup_test_img
-    rm -f "$TEST_IMG.2"
-    rm -f "$TEST_IMG.3"
+    _cleanup_test_img
+    _rm_test_img "$TEST_IMG.2"
+    _rm_test_img "$TEST_IMG.3"
 }
 trap "_cleanup; exit \$status" 0 1 2 3 15
 
@@ -39,7 +40,7 @@ trap "_cleanup; exit \$status" 0 1 2 3 15
 . ./common.filter
 
 _supported_fmt qcow2
-_supported_proto file
+_supported_proto file fuse
 
 size=64M
 _make_test_img $size

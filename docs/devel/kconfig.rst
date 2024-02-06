@@ -1,3 +1,5 @@
+.. _kconfig:
+
 ================
 QEMU and Kconfig
 ================
@@ -8,7 +10,7 @@ time different targets can share large amounts of code.  For example,
 a POWER and an x86 board can run the same code to emulate a PCI network
 card, even though the boards use different PCI host bridges, and they
 can run the same code to emulate a SCSI disk while using different
-SCSI adapters.  ARM, s390 and x86 boards can all present a virtio-blk
+SCSI adapters.  Arm, s390 and x86 boards can all present a virtio-blk
 disk to their guests, but with three different virtio guest interfaces.
 
 Each QEMU target enables a subset of the boards, devices and buses that
@@ -190,11 +192,15 @@ declares its dependencies in different ways:
   no directive and are not used in the Makefile either; they only appear
   as conditions for ``default y`` directives.
 
-  QEMU currently has two device groups, ``PCI_DEVICES`` and
-  ``TEST_DEVICES``.  PCI devices usually have a ``default y if
+  QEMU currently has three device groups, ``PCI_DEVICES``, ``I2C_DEVICES``,
+  and ``TEST_DEVICES``.  PCI devices usually have a ``default y if
   PCI_DEVICES`` directive rather than just ``default y``.  This lets
   some boards (notably s390) easily support a subset of PCI devices,
   for example only VFIO (passthrough) and virtio-pci devices.
+  ``I2C_DEVICES`` is similar to ``PCI_DEVICES``. It contains i2c devices
+  that users might reasonably want to plug in to an i2c bus on any
+  board (and not ones which are very board-specific or that need
+  to be wired up in a way that can't be done on the command line).
   ``TEST_DEVICES`` instead is used for devices that are rarely used on
   production virtual machines, but provide useful hooks to test QEMU
   or KVM.
@@ -268,7 +274,7 @@ or commenting out lines in the second group.
 
 It is also possible to run QEMU's configure script with the
 ``--without-default-devices`` option.  When this is done, everything defaults
-to ``n`` unless it is ``select``ed or explicitly switched on in the
+to ``n`` unless it is ``select``\ ed or explicitly switched on in the
 ``.mak`` files.  In other words, ``default`` and ``imply`` directives
 are disabled.  When QEMU is built with this option, the user will probably
 want to change some lines in the first group, for example like this::
@@ -276,9 +282,19 @@ want to change some lines in the first group, for example like this::
    CONFIG_PCI_DEVICES=y
    #CONFIG_TEST_DEVICES=n
 
-and/or pick a subset of the devices in those device groups.  Right now
-there is no single place that lists all the optional devices for
-``CONFIG_PCI_DEVICES`` and ``CONFIG_TEST_DEVICES``.  In the future,
+and/or pick a subset of the devices in those device groups.  Without
+further modifications to ``configs/devices/``, a system emulator built
+without default devices might not do much more than start an empty
+machine, and even then only if ``--nodefaults`` is specified on the
+command line.  Starting a VM *without* ``--nodefaults`` is allowed to
+fail, but should never abort.  Failures in ``make check`` with
+``--without-default-devices`` are considered bugs in the test code:
+the tests should either use ``--nodefaults``, and should be skipped
+if a necessary device is not present in the build.  Such failures
+should not be worked around with ``select`` directives.
+
+Right now there is no single place that lists all the optional devices
+for ``CONFIG_PCI_DEVICES`` and ``CONFIG_TEST_DEVICES``.  In the future,
 we expect that ``.mak`` files will be automatically generated, so that
 they will include all these symbols and some help text on what they do.
 
@@ -286,21 +302,20 @@ they will include all these symbols and some help text on what they do.
 ----------------
 
 In some special cases, a configurable element depends on host features
-that are detected by QEMU's configure script; for example some devices
-depend on the availability of KVM or on the presence of a library on
-the host.
+that are detected by QEMU's configure or ``meson.build`` scripts; for
+example some devices depend on the availability of KVM or on the presence
+of a library on the host.
 
 These symbols should be listed in ``Kconfig.host`` like this::
 
-    config KVM
+    config TPM
       bool
 
-and also listed as follows in the top-level Makefile's ``MINIKCONF_ARGS``
+and also listed as follows in the top-level meson.build's host_kconfig
 variable::
 
-    MINIKCONF_ARGS = \
-      $@ $*/config-devices.mak.d $< $(MINIKCONF_INPUTS) \
-      CONFIG_KVM=$(CONFIG_KVM) \
-      CONFIG_SPICE=$(CONFIG_SPICE) \
-      CONFIG_TPM=$(CONFIG_TPM) \
+    host_kconfig = \
+      (have_tpm ? ['CONFIG_TPM=y'] : []) + \
+      ('CONFIG_LINUX' in config_host ? ['CONFIG_LINUX=y'] : []) + \
+      (have_ivshmem ? ['CONFIG_IVSHMEM=y'] : []) + \
       ...

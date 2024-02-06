@@ -22,39 +22,19 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/irq.h"
 #include "hw/net/imx_fec.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "sysemu/dma.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "net/checksum.h"
 #include "net/eth.h"
+#include "trace.h"
 
 /* For crc32 */
 #include <zlib.h>
-
-#ifndef DEBUG_IMX_FEC
-#define DEBUG_IMX_FEC 0
-#endif
-
-#define FEC_PRINTF(fmt, args...) \
-    do { \
-        if (DEBUG_IMX_FEC) { \
-            fprintf(stderr, "[%s]%s: " fmt , TYPE_IMX_FEC, \
-                                             __func__, ##args); \
-        } \
-    } while (0)
-
-#ifndef DEBUG_IMX_PHY
-#define DEBUG_IMX_PHY 0
-#endif
-
-#define PHY_PRINTF(fmt, args...) \
-    do { \
-        if (DEBUG_IMX_PHY) { \
-            fprintf(stderr, "[%s.phy]%s: " fmt , TYPE_IMX_FEC, \
-                                                 __func__, ##args); \
-        } \
-    } while (0)
 
 #define IMX_MAX_DESC    1024
 
@@ -259,50 +239,63 @@ static void imx_eth_update(IMXFECState *s);
  * For now we don't handle any GPIO/interrupt line, so the OS will
  * have to poll for the PHY status.
  */
-static void phy_update_irq(IMXFECState *s)
+static void imx_phy_update_irq(IMXFECState *s)
 {
     imx_eth_update(s);
 }
 
-static void phy_update_link(IMXFECState *s)
+static void imx_phy_update_link(IMXFECState *s)
 {
     /* Autonegotiation status mirrors link status.  */
     if (qemu_get_queue(s->nic)->link_down) {
-        PHY_PRINTF("link is down\n");
+        trace_imx_phy_update_link("down");
         s->phy_status &= ~0x0024;
         s->phy_int |= PHY_INT_DOWN;
     } else {
-        PHY_PRINTF("link is up\n");
+        trace_imx_phy_update_link("up");
         s->phy_status |= 0x0024;
         s->phy_int |= PHY_INT_ENERGYON;
         s->phy_int |= PHY_INT_AUTONEG_COMPLETE;
     }
-    phy_update_irq(s);
+    imx_phy_update_irq(s);
 }
 
 static void imx_eth_set_link(NetClientState *nc)
 {
-    phy_update_link(IMX_FEC(qemu_get_nic_opaque(nc)));
+    imx_phy_update_link(IMX_FEC(qemu_get_nic_opaque(nc)));
 }
 
-static void phy_reset(IMXFECState *s)
+static void imx_phy_reset(IMXFECState *s)
 {
+    trace_imx_phy_reset();
+
     s->phy_status = 0x7809;
     s->phy_control = 0x3000;
     s->phy_advertise = 0x01e1;
     s->phy_int_mask = 0;
     s->phy_int = 0;
-    phy_update_link(s);
+    imx_phy_update_link(s);
 }
 
-static uint32_t do_phy_read(IMXFECState *s, int reg)
+static uint32_t imx_phy_read(IMXFECState *s, int reg)
 {
     uint32_t val;
+    uint32_t phy = reg / 32;
 
-    if (reg > 31) {
-        /* we only advertise one phy */
-        return 0;
+    if (!s->phy_connected) {
+        return 0xffff;
     }
+
+    if (phy != s->phy_num) {
+        if (s->phy_consumer && phy == s->phy_consumer->phy_num) {
+            s = s->phy_consumer;
+        } else {
+            trace_imx_phy_read_num(phy, s->phy_num);
+            return 0xffff;
+        }
+    }
+
+    reg %= 32;
 
     switch (reg) {
     case 0:     /* Basic Control */
@@ -329,7 +322,7 @@ static uint32_t do_phy_read(IMXFECState *s, int reg)
     case 29:    /* Interrupt source.  */
         val = s->phy_int;
         s->phy_int = 0;
-        phy_update_irq(s);
+        imx_phy_update_irq(s);
         break;
     case 30:    /* Interrupt mask */
         val = s->phy_int_mask;
@@ -349,24 +342,36 @@ static uint32_t do_phy_read(IMXFECState *s, int reg)
         break;
     }
 
-    PHY_PRINTF("read 0x%04x @ %d\n", val, reg);
+    trace_imx_phy_read(val, phy, reg);
 
     return val;
 }
 
-static void do_phy_write(IMXFECState *s, int reg, uint32_t val)
+static void imx_phy_write(IMXFECState *s, int reg, uint32_t val)
 {
-    PHY_PRINTF("write 0x%04x @ %d\n", val, reg);
+    uint32_t phy = reg / 32;
 
-    if (reg > 31) {
-        /* we only advertise one phy */
+    if (!s->phy_connected) {
         return;
     }
+
+    if (phy != s->phy_num) {
+        if (s->phy_consumer && phy == s->phy_consumer->phy_num) {
+            s = s->phy_consumer;
+        } else {
+            trace_imx_phy_write_num(phy, s->phy_num);
+            return;
+        }
+    }
+
+    reg %= 32;
+
+    trace_imx_phy_write(val, phy, reg);
 
     switch (reg) {
     case 0:     /* Basic Control */
         if (val & 0x8000) {
-            phy_reset(s);
+            imx_phy_reset(s);
         } else {
             s->phy_control = val & 0x7980;
             /* Complete autonegotiation immediately.  */
@@ -380,7 +385,7 @@ static void do_phy_write(IMXFECState *s, int reg, uint32_t val)
         break;
     case 30:    /* Interrupt mask */
         s->phy_int_mask = val & 0xff;
-        phy_update_irq(s);
+        imx_phy_update_irq(s);
         break;
     case 17:
     case 18:
@@ -398,22 +403,31 @@ static void do_phy_write(IMXFECState *s, int reg, uint32_t val)
 
 static void imx_fec_read_bd(IMXFECBufDesc *bd, dma_addr_t addr)
 {
-    dma_memory_read(&address_space_memory, addr, bd, sizeof(*bd));
+    dma_memory_read(&address_space_memory, addr, bd, sizeof(*bd),
+                    MEMTXATTRS_UNSPECIFIED);
+
+    trace_imx_fec_read_bd(addr, bd->flags, bd->length, bd->data);
 }
 
 static void imx_fec_write_bd(IMXFECBufDesc *bd, dma_addr_t addr)
 {
-    dma_memory_write(&address_space_memory, addr, bd, sizeof(*bd));
+    dma_memory_write(&address_space_memory, addr, bd, sizeof(*bd),
+                     MEMTXATTRS_UNSPECIFIED);
 }
 
 static void imx_enet_read_bd(IMXENETBufDesc *bd, dma_addr_t addr)
 {
-    dma_memory_read(&address_space_memory, addr, bd, sizeof(*bd));
+    dma_memory_read(&address_space_memory, addr, bd, sizeof(*bd),
+                    MEMTXATTRS_UNSPECIFIED);
+
+    trace_imx_enet_read_bd(addr, bd->flags, bd->length, bd->data,
+                   bd->option, bd->status);
 }
 
 static void imx_enet_write_bd(IMXENETBufDesc *bd, dma_addr_t addr)
 {
-    dma_memory_write(&address_space_memory, addr, bd, sizeof(*bd));
+    dma_memory_write(&address_space_memory, addr, bd, sizeof(*bd),
+                     MEMTXATTRS_UNSPECIFIED);
 }
 
 static void imx_eth_update(IMXFECState *s)
@@ -440,7 +454,7 @@ static void imx_eth_update(IMXFECState *s)
      *   assignment fail.
      *
      * To ensure that all versions of Linux work, generate ENET_INT_MAC
-     * interrrupts on both interrupt lines. This should be changed if and when
+     * interrupts on both interrupt lines. This should be changed if and when
      * qemu supports IOMUX.
      */
     if (s->regs[ENET_EIR] & s->regs[ENET_EIMR] &
@@ -468,11 +482,11 @@ static void imx_fec_do_tx(IMXFECState *s)
         int len;
 
         imx_fec_read_bd(&bd, addr);
-        FEC_PRINTF("tx_bd %x flags %04x len %d data %08x\n",
-                   addr, bd.flags, bd.length, bd.data);
         if ((bd.flags & ENET_BD_R) == 0) {
+
             /* Run out of descriptors to transmit.  */
-            FEC_PRINTF("tx_bd ran out of descriptors to transmit\n");
+            trace_imx_eth_tx_bd_busy();
+
             break;
         }
         len = bd.length;
@@ -480,7 +494,8 @@ static void imx_fec_do_tx(IMXFECState *s)
             len = ENET_MAX_FRAME_SIZE - frame_size;
             s->regs[ENET_EIR] |= ENET_INT_BABT;
         }
-        dma_memory_read(&address_space_memory, bd.data, ptr, len);
+        dma_memory_read(&address_space_memory, bd.data, ptr, len,
+                        MEMTXATTRS_UNSPECIFIED);
         ptr += len;
         frame_size += len;
         if (bd.flags & ENET_BD_L) {
@@ -549,11 +564,11 @@ static void imx_enet_do_tx(IMXFECState *s, uint32_t index)
         int len;
 
         imx_enet_read_bd(&bd, addr);
-        FEC_PRINTF("tx_bd %x flags %04x len %d data %08x option %04x "
-                   "status %04x\n", addr, bd.flags, bd.length, bd.data,
-                   bd.option, bd.status);
         if ((bd.flags & ENET_BD_R) == 0) {
             /* Run out of descriptors to transmit.  */
+
+            trace_imx_eth_tx_bd_busy();
+
             break;
         }
         len = bd.length;
@@ -561,26 +576,23 @@ static void imx_enet_do_tx(IMXFECState *s, uint32_t index)
             len = ENET_MAX_FRAME_SIZE - frame_size;
             s->regs[ENET_EIR] |= ENET_INT_BABT;
         }
-        dma_memory_read(&address_space_memory, bd.data, ptr, len);
+        dma_memory_read(&address_space_memory, bd.data, ptr, len,
+                        MEMTXATTRS_UNSPECIFIED);
         ptr += len;
         frame_size += len;
         if (bd.flags & ENET_BD_L) {
+            int csum = 0;
+
             if (bd.option & ENET_BD_PINS) {
-                struct ip_header *ip_hd = PKT_GET_IP_HDR(s->frame);
-                if (IP_HEADER_VERSION(ip_hd) == 4) {
-                    net_checksum_calculate(s->frame, frame_size);
-                }
+                csum |= (CSUM_TCP | CSUM_UDP);
             }
             if (bd.option & ENET_BD_IINS) {
-                struct ip_header *ip_hd = PKT_GET_IP_HDR(s->frame);
-                /* We compute checksum only for IPv4 frames */
-                if (IP_HEADER_VERSION(ip_hd) == 4) {
-                    uint16_t csum;
-                    ip_hd->ip_sum = 0;
-                    csum = net_raw_checksum((uint8_t *)ip_hd, sizeof(*ip_hd));
-                    ip_hd->ip_sum = cpu_to_be16(csum);
-                }
+                csum |= CSUM_IP;
             }
+            if (csum) {
+                net_checksum_calculate(s->frame, frame_size, csum);
+            }
+
             /* Last buffer in frame.  */
 
             qemu_send_packet(qemu_get_queue(s->nic), s->frame, frame_size);
@@ -590,6 +602,8 @@ static void imx_enet_do_tx(IMXFECState *s, uint32_t index)
             if (bd.option & ENET_BD_TX_INT) {
                 s->regs[ENET_EIR] |= int_txf;
             }
+            /* Indicate that we've updated the last buffer descriptor. */
+            bd.last_buffer = ENET_BD_BDU;
         }
         if (bd.option & ENET_BD_TX_INT) {
             s->regs[ENET_EIR] |= int_txb;
@@ -628,7 +642,7 @@ static void imx_eth_enable_rx(IMXFECState *s, bool flush)
     s->regs[ENET_RDAR] = (bd.flags & ENET_BD_E) ? ENET_RDAR_RDAR : 0;
 
     if (!s->regs[ENET_RDAR]) {
-        FEC_PRINTF("RX buffer full\n");
+        trace_imx_eth_rx_bd_full();
     } else if (flush) {
         qemu_flush_queued_packets(qemu_get_queue(s->nic));
     }
@@ -671,7 +685,7 @@ static void imx_eth_reset(DeviceState *d)
     memset(s->tx_descriptor, 0, sizeof(s->tx_descriptor));
 
     /* We also reset the PHY */
-    phy_reset(s);
+    imx_phy_reset(s);
 }
 
 static uint32_t imx_default_read(IMXFECState *s, uint32_t index)
@@ -769,8 +783,7 @@ static uint64_t imx_eth_read(void *opaque, hwaddr offset, unsigned size)
         break;
     }
 
-    FEC_PRINTF("reg[%s] => 0x%" PRIx32 "\n", imx_eth_reg_name(s, index),
-                                              value);
+    trace_imx_eth_read(index, imx_eth_reg_name(s, index), value);
 
     return value;
 }
@@ -850,13 +863,15 @@ static void imx_enet_write(IMXFECState *s, uint32_t index, uint32_t value)
         break;
     case ENET_TGSR:
         /* implement clear timer flag */
-        value = value & 0x0000000f;
+        s->regs[index] &= ~(value & 0x0000000f); /* all bits W1C */
         break;
     case ENET_TCSR0:
     case ENET_TCSR1:
     case ENET_TCSR2:
     case ENET_TCSR3:
-        value = value & 0x000000fd;
+        s->regs[index] &= ~(value & 0x00000080); /* W1C bits */
+        s->regs[index] &= ~0x0000007d; /* writable fields */
+        s->regs[index] |= (value & 0x0000007d);
         break;
     case ENET_TCCR0:
     case ENET_TCCR1:
@@ -877,8 +892,7 @@ static void imx_eth_write(void *opaque, hwaddr offset, uint64_t value,
     const bool single_tx_ring = !imx_eth_is_multi_tx_ring(s);
     uint32_t index = offset >> 2;
 
-    FEC_PRINTF("reg[%s] <= 0x%" PRIx32 "\n", imx_eth_reg_name(s, index),
-                (uint32_t)value);
+    trace_imx_eth_write(index, imx_eth_reg_name(s, index), value);
 
     switch (index) {
     case ENET_EIR:
@@ -896,15 +910,16 @@ static void imx_eth_write(void *opaque, hwaddr offset, uint64_t value,
             s->regs[index] = 0;
         }
         break;
-    case ENET_TDAR1:    /* FALLTHROUGH */
-    case ENET_TDAR2:    /* FALLTHROUGH */
+    case ENET_TDAR1:
+    case ENET_TDAR2:
         if (unlikely(single_tx_ring)) {
             qemu_log_mask(LOG_GUEST_ERROR,
                           "[%s]%s: trying to access TDAR2 or TDAR1\n",
                           TYPE_IMX_FEC, __func__);
             return;
         }
-    case ENET_TDAR:     /* FALLTHROUGH */
+        /* fall through */
+    case ENET_TDAR:
         if (s->regs[ENET_ECR] & ENET_ECR_ETHEREN) {
             s->regs[index] = ENET_TDAR_TDAR;
             imx_eth_do_tx(s, index);
@@ -932,12 +947,12 @@ static void imx_eth_write(void *opaque, hwaddr offset, uint64_t value,
         if (extract32(value, 29, 1)) {
             /* This is a read operation */
             s->regs[ENET_MMFR] = deposit32(s->regs[ENET_MMFR], 0, 16,
-                                           do_phy_read(s,
+                                           imx_phy_read(s,
                                                        extract32(value,
                                                                  18, 10)));
         } else {
-            /* This a write operation */
-            do_phy_write(s, extract32(value, 18, 10), extract32(value, 0, 16));
+            /* This is a write operation */
+            imx_phy_write(s, extract32(value, 18, 10), extract32(value, 0, 16));
         }
         /* raise the interrupt as the PHY operation is done */
         s->regs[ENET_EIR] |= ENET_INT_MII;
@@ -1041,11 +1056,9 @@ static void imx_eth_write(void *opaque, hwaddr offset, uint64_t value,
     imx_eth_update(s);
 }
 
-static int imx_eth_can_receive(NetClientState *nc)
+static bool imx_eth_can_receive(NetClientState *nc)
 {
     IMXFECState *s = IMX_FEC(qemu_get_nic_opaque(nc));
-
-    FEC_PRINTF("\n");
 
     return !!s->regs[ENET_RDAR];
 }
@@ -1063,7 +1076,7 @@ static ssize_t imx_fec_receive(NetClientState *nc, const uint8_t *buf,
     unsigned int buf_len;
     size_t size = len;
 
-    FEC_PRINTF("len %d\n", (int)size);
+    trace_imx_fec_receive(size);
 
     if (!s->regs[ENET_RDAR]) {
         qemu_log_mask(LOG_GUEST_ERROR, "[%s]%s: Unexpected packet\n",
@@ -1071,9 +1084,9 @@ static ssize_t imx_fec_receive(NetClientState *nc, const uint8_t *buf,
         return 0;
     }
 
-    /* 4 bytes for the CRC.  */
-    size += 4;
     crc = cpu_to_be32(crc32(~0, buf, size));
+    /* Increase size by 4, loop below reads the last 4 bytes from crc_ptr. */
+    size += 4;
     crc_ptr = (uint8_t *) &crc;
 
     /* Huge frames are truncated.  */
@@ -1105,25 +1118,28 @@ static ssize_t imx_fec_receive(NetClientState *nc, const uint8_t *buf,
         bd.length = buf_len;
         size -= buf_len;
 
-        FEC_PRINTF("rx_bd 0x%x length %d\n", addr, bd.length);
+        trace_imx_fec_receive_len(addr, bd.length);
 
         /* The last 4 bytes are the CRC.  */
         if (size < 4) {
             buf_len += size - 4;
         }
         buf_addr = bd.data;
-        dma_memory_write(&address_space_memory, buf_addr, buf, buf_len);
+        dma_memory_write(&address_space_memory, buf_addr, buf, buf_len,
+                         MEMTXATTRS_UNSPECIFIED);
         buf += buf_len;
         if (size < 4) {
             dma_memory_write(&address_space_memory, buf_addr + buf_len,
-                             crc_ptr, 4 - size);
+                             crc_ptr, 4 - size, MEMTXATTRS_UNSPECIFIED);
             crc_ptr += 4 - size;
         }
         bd.flags &= ~ENET_BD_E;
         if (size == 0) {
             /* Last buffer in frame.  */
             bd.flags |= flags | ENET_BD_L;
-            FEC_PRINTF("rx frame flags %04x\n", bd.flags);
+
+            trace_imx_fec_receive_last(bd.flags);
+
             s->regs[ENET_EIR] |= ENET_INT_RXF;
         } else {
             s->regs[ENET_EIR] |= ENET_INT_RXB;
@@ -1156,7 +1172,7 @@ static ssize_t imx_enet_receive(NetClientState *nc, const uint8_t *buf,
     size_t size = len;
     bool shift16 = s->regs[ENET_RACC] & ENET_RACC_SHIFT16;
 
-    FEC_PRINTF("len %d\n", (int)size);
+    trace_imx_enet_receive(size);
 
     if (!s->regs[ENET_RDAR]) {
         qemu_log_mask(LOG_GUEST_ERROR, "[%s]%s: Unexpected packet\n",
@@ -1164,9 +1180,9 @@ static ssize_t imx_enet_receive(NetClientState *nc, const uint8_t *buf,
         return 0;
     }
 
-    /* 4 bytes for the CRC.  */
-    size += 4;
     crc = cpu_to_be32(crc32(~0, buf, size));
+    /* Increase size by 4, loop below reads the last 4 bytes from crc_ptr. */
+    size += 4;
     crc_ptr = (uint8_t *) &crc;
 
     if (shift16) {
@@ -1202,7 +1218,7 @@ static ssize_t imx_enet_receive(NetClientState *nc, const uint8_t *buf,
         bd.length = buf_len;
         size -= buf_len;
 
-        FEC_PRINTF("rx_bd 0x%x length %d\n", addr, bd.length);
+        trace_imx_enet_receive_len(addr, bd.length);
 
         /* The last 4 bytes are the CRC.  */
         if (size < 4) {
@@ -1217,8 +1233,8 @@ static ssize_t imx_enet_receive(NetClientState *nc, const uint8_t *buf,
              */
             const uint8_t zeros[2] = { 0 };
 
-            dma_memory_write(&address_space_memory, buf_addr,
-                             zeros, sizeof(zeros));
+            dma_memory_write(&address_space_memory, buf_addr, zeros,
+                             sizeof(zeros), MEMTXATTRS_UNSPECIFIED);
 
             buf_addr += sizeof(zeros);
             buf_len  -= sizeof(zeros);
@@ -1227,18 +1243,23 @@ static ssize_t imx_enet_receive(NetClientState *nc, const uint8_t *buf,
             shift16 = false;
         }
 
-        dma_memory_write(&address_space_memory, buf_addr, buf, buf_len);
+        dma_memory_write(&address_space_memory, buf_addr, buf, buf_len,
+                         MEMTXATTRS_UNSPECIFIED);
         buf += buf_len;
         if (size < 4) {
             dma_memory_write(&address_space_memory, buf_addr + buf_len,
-                             crc_ptr, 4 - size);
+                             crc_ptr, 4 - size, MEMTXATTRS_UNSPECIFIED);
             crc_ptr += 4 - size;
         }
         bd.flags &= ~ENET_BD_E;
         if (size == 0) {
             /* Last buffer in frame.  */
             bd.flags |= flags | ENET_BD_L;
-            FEC_PRINTF("rx frame flags %04x\n", bd.flags);
+
+            trace_imx_enet_receive_last(bd.flags);
+
+            /* Indicate that we've updated the last buffer descriptor. */
+            bd.last_buffer = ENET_BD_BDU;
             if (bd.option & ENET_BD_RX_INT) {
                 s->regs[ENET_EIR] |= ENET_INT_RXF;
             }
@@ -1313,7 +1334,7 @@ static void imx_eth_realize(DeviceState *dev, Error **errp)
 
     s->nic = qemu_new_nic(&imx_eth_net_info, &s->conf,
                           object_get_typename(OBJECT(dev)),
-                          DEVICE(dev)->id, s);
+                          dev->id, s);
 
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
 }
@@ -1321,6 +1342,10 @@ static void imx_eth_realize(DeviceState *dev, Error **errp)
 static Property imx_eth_properties[] = {
     DEFINE_NIC_PROPERTIES(IMXFECState, conf),
     DEFINE_PROP_UINT32("tx-ring-num", IMXFECState, tx_ring_num, 1),
+    DEFINE_PROP_UINT32("phy-num", IMXFECState, phy_num, 0),
+    DEFINE_PROP_BOOL("phy-connected", IMXFECState, phy_connected, true),
+    DEFINE_PROP_LINK("phy-consumer", IMXFECState, phy_consumer, TYPE_IMX_FEC,
+                     IMXFECState *),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -1330,7 +1355,7 @@ static void imx_eth_class_init(ObjectClass *klass, void *data)
 
     dc->vmsd    = &vmstate_imx_eth;
     dc->reset   = imx_eth_reset;
-    dc->props   = imx_eth_properties;
+    device_class_set_props(dc, imx_eth_properties);
     dc->realize = imx_eth_realize;
     dc->desc    = "i.MX FEC/ENET Ethernet Controller";
 }

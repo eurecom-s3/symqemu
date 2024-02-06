@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,10 +16,12 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
+
 #ifndef THUNK_H
 #define THUNK_H
 
 #include "cpu.h"
+#include "exec/user/abitypes.h"
 
 /* types enums definitions */
 
@@ -40,7 +42,7 @@ typedef enum argtype {
 } argtype;
 
 #define MK_PTR(type) TYPE_PTR, type
-#define MK_ARRAY(type, size) TYPE_ARRAY, size, type
+#define MK_ARRAY(type, size) TYPE_ARRAY, (int)(size), type
 #define MK_STRUCT(id) TYPE_STRUCT, id
 
 #define THUNK_TARGET 0
@@ -53,6 +55,7 @@ typedef struct {
     int *field_offsets[2];
     /* special handling */
     void (*convert[2])(void *dst, const void *src);
+    void (*print)(void *arg);
     int size[2];
     int align[2];
     const char *name;
@@ -71,6 +74,7 @@ void thunk_register_struct_direct(int id, const char *name,
                                   const StructEntry *se1);
 const argtype *thunk_convert(void *dst, const void *src,
                              const argtype *type_ptr, int to_host);
+const argtype *thunk_print(void *arg, const argtype *type_ptr);
 
 extern StructEntry *struct_entries;
 
@@ -189,10 +193,17 @@ static inline int thunk_type_align(const argtype *type_ptr, int is_host)
     }
 }
 
-unsigned int target_to_host_bitmask(unsigned int target_mask,
-                                    const bitmask_transtbl * trans_tbl);
-unsigned int host_to_target_bitmask(unsigned int host_mask,
-                                    const bitmask_transtbl * trans_tbl);
+unsigned int target_to_host_bitmask_len(unsigned int target_mask,
+                                        const bitmask_transtbl *trans_tbl,
+                                        size_t trans_len);
+unsigned int host_to_target_bitmask_len(unsigned int host_mask,
+                                        const bitmask_transtbl * trans_tbl,
+                                        size_t trans_len);
+
+#define target_to_host_bitmask(M, T) \
+    target_to_host_bitmask_len(M, T, ARRAY_SIZE(T))
+#define host_to_target_bitmask(M, T) \
+    host_to_target_bitmask_len(M, T, ARRAY_SIZE(T))
 
 void thunk_init(unsigned int max_structs);
 

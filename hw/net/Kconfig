@@ -14,6 +14,7 @@ config EEPRO100_PCI
     bool
     default y if PCI_DEVICES
     depends on PCI
+    select NMC93XX_EEPROM
 
 config PCNET_PCI
     bool
@@ -24,6 +25,15 @@ config PCNET_PCI
 config PCNET_COMMON
     bool
 
+config TULIP
+    bool
+    default y if PCI_DEVICES
+    depends on PCI
+    select NMC93XX_EEPROM
+
+config I82596_COMMON
+    bool
+
 config E1000_PCI
     bool
     default y if PCI_DEVICES
@@ -31,7 +41,12 @@ config E1000_PCI
 
 config E1000E_PCI_EXPRESS
     bool
-    default y if PCI_DEVICES
+    default y if PCI_DEVICES || PCIE_DEVICES
+    depends on PCI_EXPRESS && MSI_NONBROKEN
+
+config IGB_PCI_EXPRESS
+    bool
+    default y if PCI_DEVICES || PCIE_DEVICES
     depends on PCI_EXPRESS && MSI_NONBROKEN
 
 config RTL8139_PCI
@@ -69,6 +84,9 @@ config MIPSNET
 config ALLWINNER_EMAC
     bool
 
+config ALLWINNER_SUN8I_EMAC
+    bool
+
 config IMX_FEC
     bool
 
@@ -81,6 +99,10 @@ config STELLARIS_ENET
 config LANCE
     bool
     select PCNET_COMMON
+
+config LASI_82596
+    bool
+    select I82596_COMMON
 
 config SUNHME
     bool
@@ -115,14 +137,24 @@ config ROCKER
 config CAN_BUS
     bool
 
-config CAN_PCI
-    bool
-    default y if PCI_DEVICES
-    depends on PCI
-    select CAN_BUS
-
 config CAN_SJA1000
     bool
     default y if PCI_DEVICES
-    depends on PCI
+    select CAN_BUS
+
+config CAN_PCI
+    bool
+    default y if PCI_DEVICES
+    depends on PCI && CAN_SJA1000
+    select CAN_BUS
+
+config CAN_CTUCANFD
+    bool
+    default y if PCI_DEVICES
+    select CAN_BUS
+
+config CAN_CTUCANFD_PCI
+    bool
+    default y if PCI_DEVICES
+    depends on PCI && CAN_CTUCANFD
     select CAN_BUS

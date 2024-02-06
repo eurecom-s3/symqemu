@@ -7,7 +7,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,17 +22,18 @@
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
-#include "cpu.h"
 #include "qapi/visitor.h"
 #include "hw/i386/apic.h"
 #include "hw/i386/apic_internal.h"
+#include "hw/intc/kvm_irqcount.h"
 #include "trace.h"
+#include "hw/boards.h"
 #include "sysemu/hax.h"
 #include "sysemu/kvm.h"
-#include "hw/qdev.h"
+#include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 
-static int apic_irq_delivered;
 bool apic_report_tpr_access;
 
 void cpu_set_apic_base(DeviceState *dev, uint64_t val)
@@ -121,32 +122,6 @@ void apic_handle_tpr_access_report(DeviceState *dev, target_ulong ip,
     vapic_report_tpr_access(s->vapic, CPU(s->cpu), ip, access);
 }
 
-void apic_report_irq_delivered(int delivered)
-{
-    apic_irq_delivered += delivered;
-
-    trace_apic_report_irq_delivered(apic_irq_delivered);
-}
-
-void apic_reset_irq_delivered(void)
-{
-    /* Copy this into a local variable to encourage gcc to emit a plain
-     * register for a sys/sdt.h marker.  For details on this workaround, see:
-     * https://sourceware.org/bugzilla/show_bug.cgi?id=13296
-     */
-    volatile int a_i_d = apic_irq_delivered;
-    trace_apic_reset_irq_delivered(a_i_d);
-
-    apic_irq_delivered = 0;
-}
-
-int apic_get_irq_delivered(void)
-{
-    trace_apic_get_irq_delivered(apic_irq_delivered);
-
-    return apic_irq_delivered;
-}
-
 void apic_deliver_nmi(DeviceState *dev)
 {
     APICCommonState *s = APIC_COMMON(dev);
@@ -186,6 +161,25 @@ bool apic_next_timer(APICCommonState *s, int64_t current_time)
     s->next_time = s->initial_count_load_time + (d << s->count_shift);
     s->timer_expiry = s->next_time;
     return true;
+}
+
+uint32_t apic_get_current_count(APICCommonState *s)
+{
+    int64_t d;
+    uint32_t val;
+    d = (qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - s->initial_count_load_time) >>
+        s->count_shift;
+    if (s->lvt[APIC_LVT_TIMER] & APIC_LVT_TIMER_PERIODIC) {
+        /* periodic */
+        val = s->initial_count - (d % ((uint64_t)s->initial_count + 1));
+    } else {
+        if (d >= s->initial_count) {
+            val = 0;
+        } else {
+            val = s->initial_count - d;
+        }
+    }
+    return val;
 }
 
 void apic_init_reset(DeviceState *dev)
@@ -252,58 +246,12 @@ static void apic_reset_common(DeviceState *dev)
     s->apicbase = APIC_DEFAULT_ADDRESS | bsp | MSR_IA32_APICBASE_ENABLE;
     s->id = s->initial_apic_id;
 
-    apic_reset_irq_delivered();
+    kvm_reset_irq_delivered();
 
     s->vapic_paddr = 0;
     info->vapic_base_update(s);
 
     apic_init_reset(dev);
-}
-
-/* This function is only used for old state version 1 and 2 */
-static int apic_load_old(QEMUFile *f, void *opaque, int version_id)
-{
-    APICCommonState *s = opaque;
-    APICCommonClass *info = APIC_COMMON_GET_CLASS(s);
-    int i;
-
-    if (version_id > 2) {
-        return -EINVAL;
-    }
-
-    /* XXX: what if the base changes? (registered memory regions) */
-    qemu_get_be32s(f, &s->apicbase);
-    qemu_get_8s(f, &s->id);
-    qemu_get_8s(f, &s->arb_id);
-    qemu_get_8s(f, &s->tpr);
-    qemu_get_be32s(f, &s->spurious_vec);
-    qemu_get_8s(f, &s->log_dest);
-    qemu_get_8s(f, &s->dest_mode);
-    for (i = 0; i < 8; i++) {
-        qemu_get_be32s(f, &s->isr[i]);
-        qemu_get_be32s(f, &s->tmr[i]);
-        qemu_get_be32s(f, &s->irr[i]);
-    }
-    for (i = 0; i < APIC_LVT_NB; i++) {
-        qemu_get_be32s(f, &s->lvt[i]);
-    }
-    qemu_get_be32s(f, &s->esr);
-    qemu_get_be32s(f, &s->icr[0]);
-    qemu_get_be32s(f, &s->icr[1]);
-    qemu_get_be32s(f, &s->divide_conf);
-    s->count_shift = qemu_get_be32(f);
-    qemu_get_be32s(f, &s->initial_count);
-    s->initial_count_load_time = qemu_get_be64(f);
-    s->next_time = qemu_get_be64(f);
-
-    if (version_id >= 2) {
-        s->timer_expiry = qemu_get_be64(f);
-    }
-
-    if (info->post_load) {
-        info->post_load(s);
-    }
-    return 0;
 }
 
 static const VMStateDescription vmstate_apic_common;
@@ -313,14 +261,17 @@ static void apic_common_realize(DeviceState *dev, Error **errp)
     APICCommonState *s = APIC_COMMON(dev);
     APICCommonClass *info;
     static DeviceState *vapic;
-    int instance_id = s->id;
+    uint32_t instance_id = s->initial_apic_id;
+
+    /* Normally initial APIC ID should be no more than hundreds */
+    assert(instance_id != VMSTATE_INSTANCE_ID_ANY);
 
     info = APIC_COMMON_GET_CLASS(s);
     info->realize(dev, errp);
 
     /* Note: We need at least 1M to map the VAPIC option ROM */
     if (!vapic && s->vapic_control & VAPIC_ENABLE_MASK &&
-        !hax_enabled() && ram_size >= 1024 * 1024) {
+        !hax_enabled() && current_machine->ram_size >= 1024 * 1024) {
         vapic = sysbus_create_simple("kvmvapic", -1, NULL);
     }
     s->vapic = vapic;
@@ -329,19 +280,19 @@ static void apic_common_realize(DeviceState *dev, Error **errp)
     }
 
     if (s->legacy_instance_id) {
-        instance_id = -1;
+        instance_id = VMSTATE_INSTANCE_ID_ANY;
     }
     vmstate_register_with_alias_id(NULL, instance_id, &vmstate_apic_common,
                                    s, -1, 0, NULL);
 }
 
-static void apic_common_unrealize(DeviceState *dev, Error **errp)
+static void apic_common_unrealize(DeviceState *dev)
 {
     APICCommonState *s = APIC_COMMON(dev);
     APICCommonClass *info = APIC_COMMON_GET_CLASS(s);
 
     vmstate_unregister(NULL, &vmstate_apic_common, s);
-    info->unrealize(dev, errp);
+    info->unrealize(dev);
 
     if (apic_report_tpr_access && info->enable_tpr_reporting) {
         info->enable_tpr_reporting(s, false);
@@ -406,8 +357,6 @@ static const VMStateDescription vmstate_apic_common = {
     .name = "apic",
     .version_id = 3,
     .minimum_version_id = 3,
-    .minimum_version_id_old = 1,
-    .load_state_old = apic_load_old,
     .pre_load = apic_pre_load,
     .pre_save = apic_dispatch_pre_save,
     .post_load = apic_dispatch_post_load,
@@ -464,7 +413,6 @@ static void apic_common_set_id(Object *obj, Visitor *v, const char *name,
 {
     APICCommonState *s = APIC_COMMON(obj);
     DeviceState *dev = DEVICE(obj);
-    Error *local_err = NULL;
     uint32_t value;
 
     if (dev->realized) {
@@ -472,9 +420,7 @@ static void apic_common_set_id(Object *obj, Visitor *v, const char *name,
         return;
     }
 
-    visit_type_uint32(v, name, &value, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!visit_type_uint32(v, name, &value, errp)) {
         return;
     }
 
@@ -489,7 +435,7 @@ static void apic_common_initfn(Object *obj)
     s->id = s->initial_apic_id = -1;
     object_property_add(obj, "id", "uint32",
                         apic_common_get_id,
-                        apic_common_set_id, NULL, NULL, NULL);
+                        apic_common_set_id, NULL, NULL);
 }
 
 static void apic_common_class_init(ObjectClass *klass, void *data)
@@ -497,7 +443,7 @@ static void apic_common_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->reset = apic_reset_common;
-    dc->props = apic_properties_common;
+    device_class_set_props(dc, apic_properties_common);
     dc->realize = apic_common_realize;
     dc->unrealize = apic_common_unrealize;
     /*

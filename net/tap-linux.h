@@ -31,6 +31,7 @@
 #define TUNSETQUEUE  _IOW('T', 217, int)
 #define TUNSETVNETLE _IOW('T', 220, int)
 #define TUNSETVNETBE _IOW('T', 222, int)
+#define TUNSETSTEERINGEBPF _IOR('T', 224, int)
 
 #endif
 
@@ -44,10 +45,10 @@
 #define IFF_DETACH_QUEUE 0x0400
 
 /* Features for GSO (TUNSETOFFLOAD). */
-#define TUN_F_CSUM	0x01	/* You can hand me unchecksummed packets. */
-#define TUN_F_TSO4	0x02	/* I can handle TSO for IPv4 packets */
-#define TUN_F_TSO6	0x04	/* I can handle TSO for IPv6 packets */
-#define TUN_F_TSO_ECN	0x08	/* I can handle TSO with ECN bits. */
-#define TUN_F_UFO	0x10	/* I can handle UFO packets */
+#define TUN_F_CSUM    0x01    /* You can hand me unchecksummed packets. */
+#define TUN_F_TSO4    0x02    /* I can handle TSO for IPv4 packets */
+#define TUN_F_TSO6    0x04    /* I can handle TSO for IPv6 packets */
+#define TUN_F_TSO_ECN 0x08    /* I can handle TSO with ECN bits. */
+#define TUN_F_UFO     0x10    /* I can handle UFO packets */
 
 #endif /* QEMU_TAP_LINUX_H */

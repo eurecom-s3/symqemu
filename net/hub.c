@@ -90,7 +90,7 @@ static NetHub *net_hub_new(int id)
     return hub;
 }
 
-static int net_hub_port_can_receive(NetClientState *nc)
+static bool net_hub_port_can_receive(NetClientState *nc)
 {
     NetHubPort *port;
     NetHubPort *src_port = DO_UPCAST(NetHubPort, nc, nc);
@@ -102,11 +102,11 @@ static int net_hub_port_can_receive(NetClientState *nc)
         }
 
         if (qemu_can_send_packet(&port->nc)) {
-            return 1;
+            return true;
         }
     }
 
-    return 0;
+    return false;
 }
 
 static ssize_t net_hub_port_receive(NetClientState *nc,
@@ -194,29 +194,6 @@ NetClientState *net_hub_add_port(int hub_id, const char *name,
 }
 
 /**
- * Find a specific client on a hub
- */
-NetClientState *net_hub_find_client_by_name(int hub_id, const char *name)
-{
-    NetHub *hub;
-    NetHubPort *port;
-    NetClientState *peer;
-
-    QLIST_FOREACH(hub, &hubs, next) {
-        if (hub->id == hub_id) {
-            QLIST_FOREACH(port, &hub->ports, next) {
-                peer = port->nc.peer;
-
-                if (peer && strcmp(peer->name, name) == 0) {
-                    return peer;
-                }
-            }
-        }
-    }
-    return NULL;
-}
-
-/**
  * Find a available port on a hub; otherwise create one new port
  */
 NetClientState *net_hub_port_find(int hub_id)
@@ -297,7 +274,7 @@ int net_init_hubport(const Netdev *netdev, const char *name,
     assert(!peer);
     hubport = &netdev->u.hubport;
 
-    if (hubport->has_netdev) {
+    if (hubport->netdev) {
         hubpeer = qemu_find_netdev(hubport->netdev);
         if (!hubpeer) {
             error_setg(errp, "netdev '%s' not found", hubport->netdev);
@@ -336,6 +313,8 @@ void net_hub_check_clients(void)
             case NET_CLIENT_DRIVER_USER:
             case NET_CLIENT_DRIVER_TAP:
             case NET_CLIENT_DRIVER_SOCKET:
+            case NET_CLIENT_DRIVER_STREAM:
+            case NET_CLIENT_DRIVER_DGRAM:
             case NET_CLIENT_DRIVER_VDE:
             case NET_CLIENT_DRIVER_VHOST_USER:
                 has_host_dev = 1;

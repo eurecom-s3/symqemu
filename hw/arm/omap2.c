@@ -22,9 +22,13 @@
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "cpu.h"
+#include "exec/address-spaces.h"
+#include "sysemu/blockdev.h"
 #include "sysemu/qtest.h"
-#include "hw/boards.h"
-#include "hw/hw.h"
+#include "sysemu/reset.h"
+#include "sysemu/runstate.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/omap.h"
 #include "sysemu/sysemu.h"
@@ -163,7 +167,7 @@ static inline void omap_eac_out_empty(struct omap_eac_s *s)
 
 static void omap_eac_in_cb(void *opaque, int avail_b)
 {
-    struct omap_eac_s *s = (struct omap_eac_s *) opaque;
+    struct omap_eac_s *s = opaque;
 
     s->codec.rxavail = avail_b >> 2;
     omap_eac_in_refill(s);
@@ -173,7 +177,7 @@ static void omap_eac_in_cb(void *opaque, int avail_b)
 
 static void omap_eac_out_cb(void *opaque, int free_b)
 {
-    struct omap_eac_s *s = (struct omap_eac_s *) opaque;
+    struct omap_eac_s *s = opaque;
 
     s->codec.txavail = free_b >> 2;
     if (s->codec.txlen)
@@ -270,7 +274,7 @@ static void omap_eac_format_update(struct omap_eac_s *s)
     fmt.freq = s->codec.rate;
     /* TODO: signedness possibly depends on the CODEC hardware - or
      * does I2S specify it?  */
-    /* All register writes are 16 bits so we we store 16-bit samples
+    /* All register writes are 16 bits so we store 16-bit samples
      * in the buffers regardless of AGCFR[B8_16] value.  */
     fmt.fmt = AUDIO_FORMAT_U16;
 
@@ -329,10 +333,9 @@ static void omap_eac_reset(struct omap_eac_s *s)
     omap_eac_interrupt_update(s);
 }
 
-static uint64_t omap_eac_read(void *opaque, hwaddr addr,
-                              unsigned size)
+static uint64_t omap_eac_read(void *opaque, hwaddr addr, unsigned size)
 {
-    struct omap_eac_s *s = (struct omap_eac_s *) opaque;
+    struct omap_eac_s *s = opaque;
     uint32_t ret;
 
     if (size != 2) {
@@ -448,7 +451,7 @@ static uint64_t omap_eac_read(void *opaque, hwaddr addr,
 static void omap_eac_write(void *opaque, hwaddr addr,
                            uint64_t value, unsigned size)
 {
-    struct omap_eac_s *s = (struct omap_eac_s *) opaque;
+    struct omap_eac_s *s = opaque;
 
     if (size != 2) {
         omap_badwidth_write16(opaque, addr, value);
@@ -652,7 +655,7 @@ static void omap_sti_reset(struct omap_sti_s *s)
 static uint64_t omap_sti_read(void *opaque, hwaddr addr,
                               unsigned size)
 {
-    struct omap_sti_s *s = (struct omap_sti_s *) opaque;
+    struct omap_sti_s *s = opaque;
 
     if (size != 4) {
         return omap_badwidth_read32(opaque, addr);
@@ -693,7 +696,7 @@ static uint64_t omap_sti_read(void *opaque, hwaddr addr,
 static void omap_sti_write(void *opaque, hwaddr addr,
                            uint64_t value, unsigned size)
 {
-    struct omap_sti_s *s = (struct omap_sti_s *) opaque;
+    struct omap_sti_s *s = opaque;
 
     if (size != 4) {
         omap_badwidth_write32(opaque, addr, value);
@@ -747,8 +750,7 @@ static const MemoryRegionOps omap_sti_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static uint64_t omap_sti_fifo_read(void *opaque, hwaddr addr,
-                                   unsigned size)
+static uint64_t omap_sti_fifo_read(void *opaque, hwaddr addr, unsigned size)
 {
     OMAP_BAD_REG(addr);
     return 0;
@@ -757,7 +759,7 @@ static uint64_t omap_sti_fifo_read(void *opaque, hwaddr addr,
 static void omap_sti_fifo_write(void *opaque, hwaddr addr,
                                 uint64_t value, unsigned size)
 {
-    struct omap_sti_s *s = (struct omap_sti_s *) opaque;
+    struct omap_sti_s *s = opaque;
     int ch = addr >> 6;
     uint8_t byte = value;
 
@@ -1053,7 +1055,7 @@ static void omap_prcm_int_update(struct omap_prcm_s *s, int dom)
 static uint64_t omap_prcm_read(void *opaque, hwaddr addr,
                                unsigned size)
 {
-    struct omap_prcm_s *s = (struct omap_prcm_s *) opaque;
+    struct omap_prcm_s *s = opaque;
     uint32_t ret;
 
     if (size != 4) {
@@ -1365,7 +1367,7 @@ static void omap_prcm_dpll_update(struct omap_prcm_s *s)
 static void omap_prcm_write(void *opaque, hwaddr addr,
                             uint64_t value, unsigned size)
 {
-    struct omap_prcm_s *s = (struct omap_prcm_s *) opaque;
+    struct omap_prcm_s *s = opaque;
 
     if (size != 4) {
         omap_badwidth_write32(opaque, addr, value);
@@ -1845,7 +1847,7 @@ struct omap_sysctl_s {
 static uint32_t omap_sysctl_read8(void *opaque, hwaddr addr)
 {
 
-    struct omap_sysctl_s *s = (struct omap_sysctl_s *) opaque;
+    struct omap_sysctl_s *s = opaque;
     int pad_offset, byte_offset;
     int value;
 
@@ -1869,7 +1871,7 @@ static uint32_t omap_sysctl_read8(void *opaque, hwaddr addr)
 
 static uint32_t omap_sysctl_read(void *opaque, hwaddr addr)
 {
-    struct omap_sysctl_s *s = (struct omap_sysctl_s *) opaque;
+    struct omap_sysctl_s *s = opaque;
 
     switch (addr) {
     case 0x000:	/* CONTROL_REVISION */
@@ -1967,10 +1969,9 @@ static uint32_t omap_sysctl_read(void *opaque, hwaddr addr)
     return 0;
 }
 
-static void omap_sysctl_write8(void *opaque, hwaddr addr,
-                uint32_t value)
+static void omap_sysctl_write8(void *opaque, hwaddr addr, uint32_t value)
 {
-    struct omap_sysctl_s *s = (struct omap_sysctl_s *) opaque;
+    struct omap_sysctl_s *s = opaque;
     int pad_offset, byte_offset;
     int prev_value;
 
@@ -1991,10 +1992,9 @@ static void omap_sysctl_write8(void *opaque, hwaddr addr,
     }
 }
 
-static void omap_sysctl_write(void *opaque, hwaddr addr,
-                uint32_t value)
+static void omap_sysctl_write(void *opaque, hwaddr addr, uint32_t value)
 {
-    struct omap_sysctl_s *s = (struct omap_sysctl_s *) opaque;
+    struct omap_sysctl_s *s = opaque;
 
     switch (addr) {
     case 0x000:	/* CONTROL_REVISION */
@@ -2229,7 +2229,7 @@ static struct omap_sysctl_s *omap_sysctl_init(struct omap_target_agent_s *ta,
 /* General chip reset */
 static void omap2_mpu_reset(void *opaque)
 {
-    struct omap_mpu_state_s *mpu = (struct omap_mpu_state_s *) opaque;
+    struct omap_mpu_state_s *mpu = opaque;
 
     omap_dma_reset(mpu->dma);
     omap_prcm_reset(mpu->prcm);
@@ -2272,8 +2272,7 @@ static const struct dma_irq_map omap2_dma_irq_map[] = {
     { 0, OMAP_INT_24XX_SDMA_IRQ3 },
 };
 
-struct omap_mpu_state_s *omap2420_mpu_init(MemoryRegion *sysmem,
-                unsigned long sdram_size,
+struct omap_mpu_state_s *omap2420_mpu_init(MemoryRegion *sdram,
                 const char *cpu_type)
 {
     struct omap_mpu_state_s *s = g_new0(struct omap_mpu_state_s, 1);
@@ -2282,11 +2281,11 @@ struct omap_mpu_state_s *omap2420_mpu_init(MemoryRegion *sysmem,
     int i;
     SysBusDevice *busdev;
     struct omap_target_agent_s *ta;
+    MemoryRegion *sysmem = get_system_memory();
 
     /* Core */
     s->mpu_model = omap2420;
     s->cpu = ARM_CPU(cpu_create(cpu_type));
-    s->sdram_size = sdram_size;
     s->sram_size = OMAP242X_SRAM_SIZE;
 
     s->wakeup = qemu_allocate_irq(omap_mpu_wakeup, s, 0);
@@ -2295,9 +2294,6 @@ struct omap_mpu_state_s *omap2420_mpu_init(MemoryRegion *sysmem,
     omap_clk_init(s);
 
     /* Memory-mapped stuff */
-    memory_region_allocate_system_memory(&s->sdram, NULL, "omap2.dram",
-                                         s->sdram_size);
-    memory_region_add_subregion(sysmem, OMAP2_Q2_BASE, &s->sdram);
     memory_region_init_ram(&s->sram, NULL, "omap2.sram", s->sram_size,
                            &error_fatal);
     memory_region_add_subregion(sysmem, OMAP2_SRAM_BASE, &s->sram);
@@ -2305,12 +2301,12 @@ struct omap_mpu_state_s *omap2420_mpu_init(MemoryRegion *sysmem,
     s->l4 = omap_l4_init(sysmem, OMAP2_L4_BASE, 54);
 
     /* Actually mapped at any 2K boundary in the ARM11 private-peripheral if */
-    s->ih[0] = qdev_create(NULL, "omap2-intc");
+    s->ih[0] = qdev_new("omap2-intc");
     qdev_prop_set_uint8(s->ih[0], "revision", 0x21);
-    qdev_prop_set_ptr(s->ih[0], "fclk", omap_findclk(s, "mpu_intc_fclk"));
-    qdev_prop_set_ptr(s->ih[0], "iclk", omap_findclk(s, "mpu_intc_iclk"));
-    qdev_init_nofail(s->ih[0]);
+    omap_intc_set_fclk(OMAP_INTC(s->ih[0]), omap_findclk(s, "mpu_intc_fclk"));
+    omap_intc_set_iclk(OMAP_INTC(s->ih[0]), omap_findclk(s, "mpu_intc_iclk"));
     busdev = SYS_BUS_DEVICE(s->ih[0]);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_connect_irq(busdev, 0,
                        qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ));
     sysbus_connect_irq(busdev, 1,
@@ -2334,8 +2330,8 @@ struct omap_mpu_state_s *omap2420_mpu_init(MemoryRegion *sysmem,
     s->port->addr_valid = omap2_validate_addr;
 
     /* Register SDRAM and SRAM ports for fast DMA transfers.  */
-    soc_dma_port_add_mem(s->dma, memory_region_get_ram_ptr(&s->sdram),
-                         OMAP2_Q2_BASE, s->sdram_size);
+    soc_dma_port_add_mem(s->dma, memory_region_get_ram_ptr(sdram),
+                         OMAP2_Q2_BASE, memory_region_size(sdram));
     soc_dma_port_add_mem(s->dma, memory_region_get_ram_ptr(&s->sram),
                          OMAP2_SRAM_BASE, s->sram_size);
 
@@ -2422,42 +2418,43 @@ struct omap_mpu_state_s *omap2420_mpu_init(MemoryRegion *sysmem,
                     omap_findclk(s, "clk32-kHz"),
                     omap_findclk(s, "core_l4_iclk"));
 
-    s->i2c[0] = qdev_create(NULL, "omap_i2c");
+    s->i2c[0] = qdev_new("omap_i2c");
     qdev_prop_set_uint8(s->i2c[0], "revision", 0x34);
-    qdev_prop_set_ptr(s->i2c[0], "iclk", omap_findclk(s, "i2c1.iclk"));
-    qdev_prop_set_ptr(s->i2c[0], "fclk", omap_findclk(s, "i2c1.fclk"));
-    qdev_init_nofail(s->i2c[0]);
+    omap_i2c_set_iclk(OMAP_I2C(s->i2c[0]), omap_findclk(s, "i2c1.iclk"));
+    omap_i2c_set_fclk(OMAP_I2C(s->i2c[0]), omap_findclk(s, "i2c1.fclk"));
     busdev = SYS_BUS_DEVICE(s->i2c[0]);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_connect_irq(busdev, 0,
                        qdev_get_gpio_in(s->ih[0], OMAP_INT_24XX_I2C1_IRQ));
     sysbus_connect_irq(busdev, 1, s->drq[OMAP24XX_DMA_I2C1_TX]);
     sysbus_connect_irq(busdev, 2, s->drq[OMAP24XX_DMA_I2C1_RX]);
     sysbus_mmio_map(busdev, 0, omap_l4_region_base(omap_l4tao(s->l4, 5), 0));
 
-    s->i2c[1] = qdev_create(NULL, "omap_i2c");
+    s->i2c[1] = qdev_new("omap_i2c");
     qdev_prop_set_uint8(s->i2c[1], "revision", 0x34);
-    qdev_prop_set_ptr(s->i2c[1], "iclk", omap_findclk(s, "i2c2.iclk"));
-    qdev_prop_set_ptr(s->i2c[1], "fclk", omap_findclk(s, "i2c2.fclk"));
-    qdev_init_nofail(s->i2c[1]);
+    omap_i2c_set_iclk(OMAP_I2C(s->i2c[1]), omap_findclk(s, "i2c2.iclk"));
+    omap_i2c_set_fclk(OMAP_I2C(s->i2c[1]), omap_findclk(s, "i2c2.fclk"));
     busdev = SYS_BUS_DEVICE(s->i2c[1]);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_connect_irq(busdev, 0,
                        qdev_get_gpio_in(s->ih[0], OMAP_INT_24XX_I2C2_IRQ));
     sysbus_connect_irq(busdev, 1, s->drq[OMAP24XX_DMA_I2C2_TX]);
     sysbus_connect_irq(busdev, 2, s->drq[OMAP24XX_DMA_I2C2_RX]);
     sysbus_mmio_map(busdev, 0, omap_l4_region_base(omap_l4tao(s->l4, 6), 0));
 
-    s->gpio = qdev_create(NULL, "omap2-gpio");
+    s->gpio = qdev_new("omap2-gpio");
     qdev_prop_set_int32(s->gpio, "mpu_model", s->mpu_model);
-    qdev_prop_set_ptr(s->gpio, "iclk", omap_findclk(s, "gpio_iclk"));
-    qdev_prop_set_ptr(s->gpio, "fclk0", omap_findclk(s, "gpio1_dbclk"));
-    qdev_prop_set_ptr(s->gpio, "fclk1", omap_findclk(s, "gpio2_dbclk"));
-    qdev_prop_set_ptr(s->gpio, "fclk2", omap_findclk(s, "gpio3_dbclk"));
-    qdev_prop_set_ptr(s->gpio, "fclk3", omap_findclk(s, "gpio4_dbclk"));
+    omap2_gpio_set_iclk(OMAP2_GPIO(s->gpio), omap_findclk(s, "gpio_iclk"));
+    omap2_gpio_set_fclk(OMAP2_GPIO(s->gpio), 0, omap_findclk(s, "gpio1_dbclk"));
+    omap2_gpio_set_fclk(OMAP2_GPIO(s->gpio), 1, omap_findclk(s, "gpio2_dbclk"));
+    omap2_gpio_set_fclk(OMAP2_GPIO(s->gpio), 2, omap_findclk(s, "gpio3_dbclk"));
+    omap2_gpio_set_fclk(OMAP2_GPIO(s->gpio), 3, omap_findclk(s, "gpio4_dbclk"));
     if (s->mpu_model == omap2430) {
-        qdev_prop_set_ptr(s->gpio, "fclk4", omap_findclk(s, "gpio5_dbclk"));
+        omap2_gpio_set_fclk(OMAP2_GPIO(s->gpio), 4,
+                            omap_findclk(s, "gpio5_dbclk"));
     }
-    qdev_init_nofail(s->gpio);
     busdev = SYS_BUS_DEVICE(s->gpio);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_connect_irq(busdev, 0,
                        qdev_get_gpio_in(s->ih[0], OMAP_INT_24XX_GPIO_BANK1));
     sysbus_connect_irq(busdev, 3,
@@ -2526,7 +2523,7 @@ struct omap_mpu_state_s *omap2420_mpu_init(MemoryRegion *sysmem,
                     omap_findclk(s, "func_96m_clk"),
                     omap_findclk(s, "core_l4_iclk"));
 
-    /* All register mappings (includin those not currenlty implemented):
+    /* All register mappings (including those not currently implemented):
      * SystemControlMod	48000000 - 48000fff
      * SystemControlL4	48001000 - 48001fff
      * 32kHz Timer Mod	48004000 - 48004fff

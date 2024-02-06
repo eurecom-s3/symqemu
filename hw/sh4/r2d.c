@@ -26,20 +26,23 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
+#include "qemu/error-report.h"
 #include "cpu.h"
 #include "hw/sysbus.h"
-#include "hw/hw.h"
 #include "hw/sh4/sh.h"
+#include "sysemu/reset.h"
+#include "sysemu/runstate.h"
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "hw/pci/pci.h"
+#include "hw/qdev-properties.h"
 #include "net/net.h"
 #include "sh7750_regs.h"
-#include "hw/ide.h"
+#include "hw/ide/mmio.h"
+#include "hw/irq.h"
 #include "hw/loader.h"
 #include "hw/usb.h"
 #include "hw/block/flash.h"
-#include "exec/address-spaces.h"
 
 #define FLASH_BASE 0x00000000
 #define FLASH_SIZE (16 * MiB)
@@ -54,10 +57,10 @@
 #define LINUX_LOAD_OFFSET  0x0800000
 #define INITRD_LOAD_OFFSET 0x1800000
 
-#define PA_IRLMSK	0x00
-#define PA_POWOFF	0x30
-#define PA_VERREG	0x32
-#define PA_OUTPORT	0x36
+#define PA_IRLMSK 0x00
+#define PA_POWOFF 0x30
+#define PA_VERREG 0x32
+#define PA_OUTPORT 0x36
 
 typedef struct {
     uint16_t bcr;
@@ -94,38 +97,41 @@ enum r2d_fpga_irq {
 };
 
 static const struct { short irl; uint16_t msk; } irqtab[NR_IRQS] = {
-    [CF_IDE]	= {  1, 1<<9 },
-    [CF_CD]	= {  2, 1<<8 },
-    [PCI_INTA]	= {  9, 1<<14 },
-    [PCI_INTB]	= { 10, 1<<13 },
-    [PCI_INTC]	= {  3, 1<<12 },
-    [PCI_INTD]	= {  0, 1<<11 },
-    [SM501]	= {  4, 1<<10 },
-    [KEY]	= {  5, 1<<6 },
-    [RTC_A]	= {  6, 1<<5 },
-    [RTC_T]	= {  7, 1<<4 },
-    [SDCARD]	= {  8, 1<<7 },
-    [EXT]	= { 11, 1<<0 },
-    [TP]	= { 12, 1<<15 },
+    [CF_IDE] =   {  1, 1 << 9 },
+    [CF_CD] =    {  2, 1 << 8 },
+    [PCI_INTA] = {  9, 1 << 14 },
+    [PCI_INTB] = { 10, 1 << 13 },
+    [PCI_INTC] = {  3, 1 << 12 },
+    [PCI_INTD] = {  0, 1 << 11 },
+    [SM501] =    {  4, 1 << 10 },
+    [KEY] =      {  5, 1 << 6 },
+    [RTC_A] =    {  6, 1 << 5 },
+    [RTC_T] =    {  7, 1 << 4 },
+    [SDCARD] =   {  8, 1 << 7 },
+    [EXT] =      { 11, 1 << 0 },
+    [TP] =       { 12, 1 << 15 },
 };
 
 static void update_irl(r2d_fpga_t *fpga)
 {
     int i, irl = 15;
-    for (i = 0; i < NR_IRQS; i++)
-        if (fpga->irlmon & fpga->irlmsk & irqtab[i].msk)
-            if (irqtab[i].irl < irl)
-                irl = irqtab[i].irl;
+    for (i = 0; i < NR_IRQS; i++) {
+        if ((fpga->irlmon & fpga->irlmsk & irqtab[i].msk) &&
+            irqtab[i].irl < irl) {
+            irl = irqtab[i].irl;
+        }
+    }
     qemu_set_irq(fpga->irl, irl ^ 15);
 }
 
 static void r2d_fpga_irq_set(void *opaque, int n, int level)
 {
     r2d_fpga_t *fpga = opaque;
-    if (level)
+    if (level) {
         fpga->irlmon |= irqtab[n].msk;
-    else
+    } else {
         fpga->irlmon &= ~irqtab[n].msk;
+    }
     update_irl(fpga);
 }
 
@@ -184,7 +190,7 @@ static qemu_irq *r2d_fpga_init(MemoryRegion *sysmem,
 {
     r2d_fpga_t *s;
 
-    s = g_malloc0(sizeof(r2d_fpga_t));
+    s = g_new0(r2d_fpga_t, 1);
 
     s->irl = irl;
 
@@ -226,6 +232,7 @@ static void r2d_init(MachineState *machine)
     const char *kernel_filename = machine->kernel_filename;
     const char *kernel_cmdline = machine->kernel_cmdline;
     const char *initrd_filename = machine->initrd_filename;
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
     SuperHCPU *cpu;
     CPUSH4State *env;
     ResetData *reset_info;
@@ -242,7 +249,7 @@ static void r2d_init(MachineState *machine)
     cpu = SUPERH_CPU(cpu_create(machine->cpu_type));
     env = &cpu->env;
 
-    reset_info = g_malloc0(sizeof(ResetData));
+    reset_info = g_new0(ResetData, 1);
     reset_info->cpu = cpu;
     reset_info->vector = env->pc;
     qemu_register_reset(main_cpu_reset, reset_info);
@@ -254,9 +261,9 @@ static void r2d_init(MachineState *machine)
     s = sh7750_init(cpu, address_space_mem);
     irq = r2d_fpga_init(address_space_mem, 0x04000000, sh7750_irl(s));
 
-    dev = qdev_create(NULL, "sh_pci");
+    dev = qdev_new("sh_pci");
     busdev = SYS_BUS_DEVICE(dev);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     pci_bus = PCI_BUS(qdev_get_child_bus(dev, "pci"));
     sysbus_mmio_map(busdev, 0, P4ADDR(0x1e200000));
     sysbus_mmio_map(busdev, 1, A7ADDR(0x1e200000));
@@ -265,23 +272,23 @@ static void r2d_init(MachineState *machine)
     sysbus_connect_irq(busdev, 2, irq[PCI_INTC]);
     sysbus_connect_irq(busdev, 3, irq[PCI_INTD]);
 
-    dev = qdev_create(NULL, "sysbus-sm501");
+    dev = qdev_new("sysbus-sm501");
     busdev = SYS_BUS_DEVICE(dev);
     qdev_prop_set_uint32(dev, "vram-size", SM501_VRAM_SIZE);
-    qdev_prop_set_uint32(dev, "base", 0x10000000);
-    qdev_prop_set_ptr(dev, "chr-state", serial_hd(2));
-    qdev_init_nofail(dev);
+    qdev_prop_set_uint64(dev, "dma-offset", 0x10000000);
+    qdev_prop_set_chr(dev, "chardev", serial_hd(2));
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, 0x10000000);
     sysbus_mmio_map(busdev, 1, 0x13e00000);
     sysbus_connect_irq(busdev, 0, irq[SM501]);
 
     /* onboard CF (True IDE mode, Master only). */
     dinfo = drive_get(IF_IDE, 0, 0);
-    dev = qdev_create(NULL, "mmio-ide");
+    dev = qdev_new("mmio-ide");
     busdev = SYS_BUS_DEVICE(dev);
     sysbus_connect_irq(busdev, 0, irq[CF_IDE]);
     qdev_prop_set_uint32(dev, "shift", 1);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, 0x14001000);
     sysbus_mmio_map(busdev, 1, 0x1400080c);
     mmio_ide_init_drives(dev, dinfo, NULL);
@@ -304,7 +311,7 @@ static void r2d_init(MachineState *machine)
     /* NIC: rtl8139 on-board, and 2 slots. */
     for (i = 0; i < nb_nics; i++)
         pci_nic_init_nofail(&nd_table[i], pci_bus,
-                            "rtl8139", i==0 ? "2" : NULL);
+                            mc->default_nic, i == 0 ? "2" : NULL);
 
     /* USB keyboard */
     usb_create_simple(usb_bus_find(-1), "usb-kbd");
@@ -319,8 +326,8 @@ static void r2d_init(MachineState *machine)
                                           SDRAM_BASE + LINUX_LOAD_OFFSET,
                                           INITRD_LOAD_OFFSET - LINUX_LOAD_OFFSET);
         if (kernel_size < 0) {
-          fprintf(stderr, "qemu: could not load kernel '%s'\n", kernel_filename);
-          exit(1);
+            error_report("qemu: could not load kernel '%s'", kernel_filename);
+            exit(1);
         }
 
         /* initialization which should be done by firmware */
@@ -328,7 +335,8 @@ static void r2d_init(MachineState *machine)
                           MEMTXATTRS_UNSPECIFIED, NULL); /* cs3 SDRAM */
         address_space_stw(&address_space_memory, SH7750_BCR2, 3 << (3 * 2),
                           MEMTXATTRS_UNSPECIFIED, NULL); /* cs3 32bit */
-        reset_info->vector = (SDRAM_BASE + LINUX_LOAD_OFFSET) | 0xa0000000; /* Start from P2 area */
+        /* Start from P2 area */
+        reset_info->vector = (SDRAM_BASE + LINUX_LOAD_OFFSET) | 0xa0000000;
     }
 
     if (initrd_filename) {
@@ -339,8 +347,8 @@ static void r2d_init(MachineState *machine)
                                           SDRAM_SIZE - INITRD_LOAD_OFFSET);
 
         if (initrd_size < 0) {
-          fprintf(stderr, "qemu: could not load initrd '%s'\n", initrd_filename);
-          exit(1);
+            error_report("qemu: could not load initrd '%s'", initrd_filename);
+            exit(1);
         }
 
         /* initialization which should be done by firmware */
@@ -350,8 +358,10 @@ static void r2d_init(MachineState *machine)
     }
 
     if (kernel_cmdline) {
-        /* I see no evidence that this .kernel_cmdline buffer requires
-           NUL-termination, so using strncpy should be ok. */
+        /*
+         * I see no evidence that this .kernel_cmdline buffer requires
+         * NUL-termination, so using strncpy should be ok.
+         */
         strncpy(boot_params.kernel_cmdline, kernel_cmdline,
                 sizeof(boot_params.kernel_cmdline));
     }
@@ -366,6 +376,7 @@ static void r2d_machine_init(MachineClass *mc)
     mc->init = r2d_init;
     mc->block_default_type = IF_IDE;
     mc->default_cpu_type = TYPE_SH7751R_CPU;
+    mc->default_nic = "rtl8139";
 }
 
 DEFINE_MACHINE("r2d", r2d_machine_init)

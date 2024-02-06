@@ -2,22 +2,16 @@ config APPLESMC
     bool
     depends on ISA_BUS
 
-config MAX111X
+config ARMSSE_CPUID
     bool
 
-config TMP105
+config ARMSSE_MHU
     bool
-    depends on I2C
 
-config TMP421
+config ARMSSE_CPU_PWRCTRL
     bool
-    depends on I2C
 
 config ISA_DEBUG
-    bool
-    depends on ISA_BUS
-
-config SGA
     bool
     depends on ISA_BUS
 
@@ -82,14 +76,22 @@ config IMX
 config STM32F2XX_SYSCFG
     bool
 
+config STM32F4XX_SYSCFG
+    bool
+
+config STM32F4XX_EXTI
+    bool
+
 config MIPS_ITU
     bool
 
 config MPS2_FPGAIO
     bool
+    select LED
 
 config MPS2_SCC
     bool
+    select LED
 
 config TZ_MPC
     bool
@@ -109,12 +111,79 @@ config IOTKIT_SYSCTL
 config IOTKIT_SYSINFO
     bool
 
-config PVPANIC
+config PVPANIC_COMMON
+    bool
+
+config PVPANIC_PCI
+    bool
+    default y if PCI_DEVICES
+    depends on PCI
+    select PVPANIC_COMMON
+
+config PVPANIC_ISA
     bool
     depends on ISA_BUS
+    select PVPANIC_COMMON
 
 config AUX
     bool
     select I2C
+
+config UNIMP
+    bool
+
+config LED
+    bool
+
+config MAC_VIA
+    bool
+    select MOS6522
+    select ADB
+
+config AVR_POWER
+    bool
+
+config MCHP_PFSOC_DMC
+    bool
+
+config MCHP_PFSOC_IOSCB
+    bool
+
+config MCHP_PFSOC_SYSREG
+    bool
+
+config SIFIVE_TEST
+    bool
+
+config SIFIVE_E_PRCI
+    bool
+
+config SIFIVE_E_AON
+    bool
+
+config SIFIVE_U_OTP
+    bool
+
+config SIFIVE_U_PRCI
+    bool
+
+config VIRT_CTRL
+    bool
+
+config LASI
+    bool
+
+config ALLWINNER_SRAMC
+    bool
+
+config ALLWINNER_A10_CCM
+    bool
+
+config ALLWINNER_A10_DRAMC
+    bool
+
+config AXP2XX_PMU
+    bool
+    depends on I2C
 
 source macio/Kconfig

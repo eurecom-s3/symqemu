@@ -31,10 +31,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "qom/cpu.h"
-#include "hw/sysbus.h"
+#include "hw/core/cpu.h"
 #include "sysemu/dma.h"
+#include "sysemu/reset.h"
+#include "hw/boards.h"
 #include "hw/loader.h"
+#include "hw/qdev-properties.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "hw/core/generic-loader.h"
@@ -54,8 +56,9 @@ static void generic_loader_reset(void *opaque)
     }
 
     if (s->data_len) {
-        assert(s->data_len < sizeof(s->data));
-        dma_memory_write(s->cpu->as, s->addr, &s->data, s->data_len);
+        assert(s->data_len <= sizeof(s->data));
+        dma_memory_write(s->cpu->as, s->addr, &s->data, s->data_len,
+                         MEMTXATTRS_UNSPECIFIED);
     }
 }
 
@@ -64,7 +67,7 @@ static void generic_loader_realize(DeviceState *dev, Error **errp)
     GenericLoaderState *s = GENERIC_LOADER(dev);
     hwaddr entry;
     int big_endian;
-    int size = 0;
+    ssize_t size = 0;
 
     s->set_pc = false;
 
@@ -138,7 +141,7 @@ static void generic_loader_realize(DeviceState *dev, Error **errp)
 
         if (!s->force_raw) {
             size = load_elf_as(s->file, NULL, NULL, NULL, &entry, NULL, NULL,
-                               big_endian, 0, 0, 0, as);
+                               NULL, big_endian, 0, 0, 0, as);
 
             if (size < 0) {
                 size = load_uimage_as(s->file, &entry, NULL, NULL, NULL, NULL,
@@ -152,7 +155,7 @@ static void generic_loader_realize(DeviceState *dev, Error **errp)
 
         if (size < 0 || s->force_raw) {
             /* Default to the maximum size being the machine's ram size */
-            size = load_image_targphys_as(s->file, s->addr, ram_size, as);
+            size = load_image_targphys_as(s->file, s->addr, current_machine->ram_size, as);
         } else {
             s->addr = entry;
         }
@@ -171,7 +174,7 @@ static void generic_loader_realize(DeviceState *dev, Error **errp)
     }
 }
 
-static void generic_loader_unrealize(DeviceState *dev, Error **errp)
+static void generic_loader_unrealize(DeviceState *dev)
 {
     qemu_unregister_reset(generic_loader_reset, dev);
 }
@@ -199,12 +202,12 @@ static void generic_loader_class_init(ObjectClass *klass, void *data)
      */
     dc->realize = generic_loader_realize;
     dc->unrealize = generic_loader_unrealize;
-    dc->props = generic_loader_props;
+    device_class_set_props(dc, generic_loader_props);
     dc->desc = "Generic Loader";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 
-static TypeInfo generic_loader_info = {
+static const TypeInfo generic_loader_info = {
     .name = TYPE_GENERIC_LOADER,
     .parent = TYPE_DEVICE,
     .instance_size = sizeof(GenericLoaderState),

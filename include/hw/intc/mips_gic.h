@@ -13,7 +13,9 @@
 
 #include "qemu/units.h"
 #include "hw/timer/mips_gictimer.h"
+#include "hw/sysbus.h"
 #include "cpu.h"
+#include "qom/object.h"
 /*
  * GIC Specific definitions
  */
@@ -169,13 +171,12 @@
 #define GIC_LOCAL_INT_WD        0 /* GIC watchdog */
 
 #define TYPE_MIPS_GIC "mips-gic"
-#define MIPS_GIC(obj) OBJECT_CHECK(MIPSGICState, (obj), TYPE_MIPS_GIC)
+OBJECT_DECLARE_SIMPLE_TYPE(MIPSGICState, MIPS_GIC)
 
 /* Support up to 32 VPs and 256 IRQs */
 #define GIC_MAX_VPS             32
 #define GIC_MAX_INTRS           256
 
-typedef struct MIPSGICState MIPSGICState;
 typedef struct MIPSGICIRQState MIPSGICIRQState;
 typedef struct MIPSGICVPState MIPSGICVPState;
 
@@ -210,8 +211,8 @@ struct MIPSGICState {
     /* GIC VP Timer */
     MIPSGICTimerState *gic_timer;
 
-    int32_t num_vps;
-    int32_t num_irq;
+    uint32_t num_vps;
+    uint32_t num_irq;
 };
 
 #endif /* MIPS_GIC_H */

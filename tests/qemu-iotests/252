@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw auto backing quick
 #
 # Tests for rebasing COW images that require zero cluster support
 #
@@ -19,7 +20,7 @@
 #
 
 # creator
-owner=mreitz@redhat.com
+owner=hreitz@redhat.com
 
 seq=$(basename $0)
 echo "QA output created by $seq"
@@ -29,7 +30,7 @@ status=1	# failure is the default!
 _cleanup()
 {
     _cleanup_test_img
-    rm -f "$TEST_IMG.base_new"
+    _rm_test_img "$TEST_IMG.base_new"
 }
 trap "_cleanup; exit \$status" 0 1 2 3 15
 
@@ -42,7 +43,7 @@ trap "_cleanup; exit \$status" 0 1 2 3 15
 # zero cluster support
 _supported_fmt qcow2
 _unsupported_imgopts 'compat=0.10'
-_supported_proto file
+_supported_proto file fuse
 _supported_os Linux
 
 CLUSTER_SIZE=65536
@@ -101,7 +102,7 @@ $QEMU_IMG map --output=json "$TEST_IMG" | _filter_qemu_img_map
 
 echo
 
-$QEMU_IMG rebase -b "$TEST_IMG.base_new" "$TEST_IMG"
+$QEMU_IMG rebase -b "$TEST_IMG.base_new" -F $IMGFMT "$TEST_IMG"
 
 # Verify the data is correct
 $QEMU_IO "$TEST_IMG" \

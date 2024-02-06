@@ -21,13 +21,17 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/hw.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "hw/timer/a9gtimer.h"
+#include "migration/vmstate.h"
 #include "qapi/error.h"
 #include "qemu/timer.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
 
 #ifndef A9_GTIMER_ERR_DEBUG
 #define A9_GTIMER_ERR_DEBUG 0
@@ -314,6 +318,12 @@ static void a9_gtimer_realize(DeviceState *dev, Error **errp)
     }
 }
 
+static bool vmstate_a9_gtimer_control_needed(void *opaque)
+{
+    A9GTimerState *s = opaque;
+    return s->control != 0;
+}
+
 static const VMStateDescription vmstate_a9_gtimer_per_cpu = {
     .name = "arm.cortex-a9-global-timer.percpu",
     .version_id = 1,
@@ -323,6 +333,17 @@ static const VMStateDescription vmstate_a9_gtimer_per_cpu = {
         VMSTATE_UINT64(compare, A9GTimerPerCPU),
         VMSTATE_UINT32(status, A9GTimerPerCPU),
         VMSTATE_UINT32(inc, A9GTimerPerCPU),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static const VMStateDescription vmstate_a9_gtimer_control = {
+    .name = "arm.cortex-a9-global-timer.control",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = vmstate_a9_gtimer_control_needed,
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT32(control, A9GTimerState),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -340,6 +361,10 @@ static const VMStateDescription vmstate_a9_gtimer = {
                                      1, vmstate_a9_gtimer_per_cpu,
                                      A9GTimerPerCPU),
         VMSTATE_END_OF_LIST()
+    },
+    .subsections = (const VMStateDescription*[]) {
+        &vmstate_a9_gtimer_control,
+        NULL
     }
 };
 
@@ -355,7 +380,7 @@ static void a9_gtimer_class_init(ObjectClass *klass, void *data)
     dc->realize = a9_gtimer_realize;
     dc->vmsd = &vmstate_a9_gtimer;
     dc->reset = a9_gtimer_reset;
-    dc->props = a9_gtimer_properties;
+    device_class_set_props(dc, a9_gtimer_properties);
 }
 
 static const TypeInfo a9_gtimer_info = {

@@ -201,6 +201,8 @@ const char *nbd_err_lookup(int err)
         return "ENOSPC";
     case NBD_EOVERFLOW:
         return "EOVERFLOW";
+    case NBD_ENOTSUP:
+        return "ENOTSUP";
     case NBD_ESHUTDOWN:
         return "ESHUTDOWN";
     default:
@@ -231,6 +233,9 @@ int nbd_errno_to_system_errno(int err)
     case NBD_EOVERFLOW:
         ret = EOVERFLOW;
         break;
+    case NBD_ENOTSUP:
+        ret = ENOTSUP;
+        break;
     case NBD_ESHUTDOWN:
         ret = ESHUTDOWN;
         break;
@@ -242,4 +247,21 @@ int nbd_errno_to_system_errno(int err)
         break;
     }
     return ret;
+}
+
+
+const char *nbd_mode_lookup(NBDMode mode)
+{
+    switch (mode) {
+    case NBD_MODE_OLDSTYLE:
+        return "oldstyle";
+    case NBD_MODE_EXPORT_NAME:
+        return "export name only";
+    case NBD_MODE_SIMPLE:
+        return "simple headers";
+    case NBD_MODE_STRUCTURED:
+        return "structured replies";
+    default:
+        return "<unknown>";
+    }
 }

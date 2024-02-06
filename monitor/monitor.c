@@ -25,9 +25,10 @@
 #include "qemu/osdep.h"
 #include "monitor-internal.h"
 #include "qapi/error.h"
+#include "qapi/opts-visitor.h"
 #include "qapi/qapi-emit-events.h"
+#include "qapi/qapi-visit-control.h"
 #include "qapi/qmp/qdict.h"
-#include "qapi/qmp/qstring.h"
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include "sysemu/qtest.h"
@@ -52,24 +53,67 @@ typedef struct {
 /* Shared monitor I/O thread */
 IOThread *mon_iothread;
 
-/* Bottom half to dispatch the requests received from I/O thread */
-QEMUBH *qmp_dispatcher_bh;
+/* Coroutine to dispatch the requests received from I/O thread */
+Coroutine *qmp_dispatcher_co;
 
-/* Protects mon_list, monitor_qapi_event_state, monitor_destroyed.  */
+/*
+ * Set to true when the dispatcher coroutine should terminate.  Protected
+ * by monitor_lock.
+ */
+bool qmp_dispatcher_co_shutdown;
+
+/*
+ * Protects mon_list, monitor_qapi_event_state, coroutine_mon,
+ * monitor_destroyed.
+ */
 QemuMutex monitor_lock;
 static GHashTable *monitor_qapi_event_state;
+static GHashTable *coroutine_mon; /* Maps Coroutine* to Monitor* */
 
 MonitorList mon_list;
 int mon_refcount;
 static bool monitor_destroyed;
 
-__thread Monitor *cur_mon;
+Monitor *monitor_cur(void)
+{
+    Monitor *mon;
+
+    qemu_mutex_lock(&monitor_lock);
+    mon = g_hash_table_lookup(coroutine_mon, qemu_coroutine_self());
+    qemu_mutex_unlock(&monitor_lock);
+
+    return mon;
+}
+
+/**
+ * Sets a new current monitor and returns the old one.
+ *
+ * If a non-NULL monitor is set for a coroutine, another call
+ * resetting it to NULL is required before the coroutine terminates,
+ * otherwise a stale entry would remain in the hash table.
+ */
+Monitor *monitor_set_cur(Coroutine *co, Monitor *mon)
+{
+    Monitor *old_monitor = monitor_cur();
+
+    qemu_mutex_lock(&monitor_lock);
+    if (mon) {
+        g_hash_table_replace(coroutine_mon, co, mon);
+    } else {
+        g_hash_table_remove(coroutine_mon, co);
+    }
+    qemu_mutex_unlock(&monitor_lock);
+
+    return old_monitor;
+}
 
 /**
  * Is the current monitor, if any, a QMP monitor?
  */
 bool monitor_cur_is_qmp(void)
 {
+    Monitor *cur_mon = monitor_cur();
+
     return cur_mon && monitor_is_qmp(cur_mon);
 }
 
@@ -92,22 +136,19 @@ static inline bool monitor_is_hmp_non_interactive(const Monitor *mon)
     return !monitor_uses_readline(container_of(mon, MonitorHMP, common));
 }
 
-static void monitor_flush_locked(Monitor *mon);
-
-static gboolean monitor_unblocked(GIOChannel *chan, GIOCondition cond,
+static gboolean monitor_unblocked(void *do_not_use, GIOCondition cond,
                                   void *opaque)
 {
     Monitor *mon = opaque;
 
-    qemu_mutex_lock(&mon->mon_lock);
+    QEMU_LOCK_GUARD(&mon->mon_lock);
     mon->out_watch = 0;
     monitor_flush_locked(mon);
-    qemu_mutex_unlock(&mon->mon_lock);
     return FALSE;
 }
 
 /* Caller must hold mon->mon_lock */
-static void monitor_flush_locked(Monitor *mon)
+void monitor_flush_locked(Monitor *mon)
 {
     int rc;
     size_t len;
@@ -117,22 +158,19 @@ static void monitor_flush_locked(Monitor *mon)
         return;
     }
 
-    buf = qstring_get_str(mon->outbuf);
-    len = qstring_get_length(mon->outbuf);
+    buf = mon->outbuf->str;
+    len = mon->outbuf->len;
 
     if (len && !mon->mux_out) {
         rc = qemu_chr_fe_write(&mon->chr, (const uint8_t *) buf, len);
         if ((rc < 0 && errno != EAGAIN) || (rc == len)) {
             /* all flushed or error */
-            qobject_unref(mon->outbuf);
-            mon->outbuf = qstring_new();
+            g_string_truncate(mon->outbuf, 0);
             return;
         }
         if (rc > 0) {
             /* partial write */
-            QString *tmp = qstring_from_str(buf + rc);
-            qobject_unref(mon->outbuf);
-            mon->outbuf = tmp;
+            g_string_erase(mon->outbuf, 0, rc);
         }
         if (mon->out_watch == 0) {
             mon->out_watch =
@@ -144,31 +182,34 @@ static void monitor_flush_locked(Monitor *mon)
 
 void monitor_flush(Monitor *mon)
 {
-    qemu_mutex_lock(&mon->mon_lock);
+    QEMU_LOCK_GUARD(&mon->mon_lock);
     monitor_flush_locked(mon);
-    qemu_mutex_unlock(&mon->mon_lock);
 }
 
 /* flush at every end of line */
-int monitor_puts(Monitor *mon, const char *str)
+int monitor_puts_locked(Monitor *mon, const char *str)
 {
     int i;
     char c;
 
-    qemu_mutex_lock(&mon->mon_lock);
     for (i = 0; str[i]; i++) {
         c = str[i];
         if (c == '\n') {
-            qstring_append_chr(mon->outbuf, '\r');
+            g_string_append_c(mon->outbuf, '\r');
         }
-        qstring_append_chr(mon->outbuf, c);
+        g_string_append_c(mon->outbuf, c);
         if (c == '\n') {
             monitor_flush_locked(mon);
         }
     }
-    qemu_mutex_unlock(&mon->mon_lock);
 
     return i;
+}
+
+int monitor_puts(Monitor *mon, const char *str)
+{
+    QEMU_LOCK_GUARD(&mon->mon_lock);
+    return monitor_puts_locked(mon, str);
 }
 
 int monitor_vprintf(Monitor *mon, const char *fmt, va_list ap)
@@ -201,11 +242,40 @@ int monitor_printf(Monitor *mon, const char *fmt, ...)
     return ret;
 }
 
+void monitor_printc(Monitor *mon, int c)
+{
+    monitor_printf(mon, "'");
+    switch(c) {
+    case '\'':
+        monitor_printf(mon, "\\'");
+        break;
+    case '\\':
+        monitor_printf(mon, "\\\\");
+        break;
+    case '\n':
+        monitor_printf(mon, "\\n");
+        break;
+    case '\r':
+        monitor_printf(mon, "\\r");
+        break;
+    default:
+        if (c >= 32 && c <= 126) {
+            monitor_printf(mon, "%c", c);
+        } else {
+            monitor_printf(mon, "\\x%02x", c);
+        }
+        break;
+    }
+    monitor_printf(mon, "'");
+}
+
 /*
  * Print to current monitor if we have one, else to stderr.
  */
 int error_vprintf(const char *fmt, va_list ap)
 {
+    Monitor *cur_mon = monitor_cur();
+
     if (cur_mon && !monitor_cur_is_qmp()) {
         return monitor_vprintf(cur_mon, fmt, ap);
     }
@@ -214,6 +284,8 @@ int error_vprintf(const char *fmt, va_list ap)
 
 int error_vprintf_unless_qmp(const char *fmt, va_list ap)
 {
+    Monitor *cur_mon = monitor_cur();
+
     if (!cur_mon) {
         return vfprintf(stderr, fmt, ap);
     }
@@ -223,6 +295,16 @@ int error_vprintf_unless_qmp(const char *fmt, va_list ap)
     return -1;
 }
 
+int error_printf_unless_qmp(const char *fmt, ...)
+{
+    va_list ap;
+    int ret;
+
+    va_start(ap, fmt);
+    ret = error_vprintf_unless_qmp(fmt, ap);
+    va_end(ap);
+    return ret;
+}
 
 static MonitorQAPIEventConf monitor_qapi_event_conf[QAPI_EVENT__MAX] = {
     /* Limit guest-triggerable events to 1 per second */
@@ -232,6 +314,7 @@ static MonitorQAPIEventConf monitor_qapi_event_conf[QAPI_EVENT__MAX] = {
     [QAPI_EVENT_QUORUM_REPORT_BAD] = { 1000 * SCALE_MS },
     [QAPI_EVENT_QUORUM_FAILURE]    = { 1000 * SCALE_MS },
     [QAPI_EVENT_VSERPORT_CHANGE]   = { 1000 * SCALE_MS },
+    [QAPI_EVENT_MEMORY_DEVICE_SIZE_CHANGE] = { 1000 * SCALE_MS },
 };
 
 /*
@@ -284,7 +367,7 @@ monitor_qapi_event_queue_no_reenter(QAPIEvent event, QDict *qdict)
     evconf = &monitor_qapi_event_conf[event];
     trace_monitor_protocol_event_queue(event, qdict, evconf->rate);
 
-    qemu_mutex_lock(&monitor_lock);
+    QEMU_LOCK_GUARD(&monitor_lock);
 
     if (!evconf->rate) {
         /* Unthrottled event */
@@ -326,8 +409,6 @@ monitor_qapi_event_queue_no_reenter(QAPIEvent event, QDict *qdict)
             timer_mod_ns(evstate->timer, now + evconf->rate);
         }
     }
-
-    qemu_mutex_unlock(&monitor_lock);
 }
 
 void qapi_event_emit(QAPIEvent event, QDict *qdict)
@@ -382,7 +463,7 @@ static void monitor_qapi_event_handler(void *opaque)
     MonitorQAPIEventConf *evconf = &monitor_qapi_event_conf[evstate->event];
 
     trace_monitor_protocol_event_handler(evstate->event, evstate->qdict);
-    qemu_mutex_lock(&monitor_lock);
+    QEMU_LOCK_GUARD(&monitor_lock);
 
     if (evstate->qdict) {
         int64_t now = qemu_clock_get_ns(monitor_get_event_clock());
@@ -397,8 +478,6 @@ static void monitor_qapi_event_handler(void *opaque)
         timer_free(evstate->timer);
         g_free(evstate);
     }
-
-    qemu_mutex_unlock(&monitor_lock);
 }
 
 static unsigned int qapi_event_throttle_hash(const void *key)
@@ -412,6 +491,10 @@ static unsigned int qapi_event_throttle_hash(const void *key)
 
     if (evstate->event == QAPI_EVENT_QUORUM_REPORT_BAD) {
         hash += g_str_hash(qdict_get_str(evstate->data, "node-name"));
+    }
+
+    if (evstate->event == QAPI_EVENT_MEMORY_DEVICE_SIZE_CHANGE) {
+        hash += g_str_hash(qdict_get_str(evstate->data, "qom-path"));
     }
 
     return hash;
@@ -436,6 +519,11 @@ static gboolean qapi_event_throttle_equal(const void *a, const void *b)
                        qdict_get_str(evb->data, "node-name"));
     }
 
+    if (eva->event == QAPI_EVENT_MEMORY_DEVICE_SIZE_CHANGE) {
+        return !strcmp(qdict_get_str(eva->data, "qom-path"),
+                       qdict_get_str(evb->data, "qom-path"));
+    }
+
     return TRUE;
 }
 
@@ -445,7 +533,7 @@ int monitor_suspend(Monitor *mon)
         return -ENOTTY;
     }
 
-    atomic_inc(&mon->suspend_cnt);
+    qatomic_inc(&mon->suspend_cnt);
 
     if (mon->use_io_thread) {
         /*
@@ -463,6 +551,17 @@ static void monitor_accept_input(void *opaque)
 {
     Monitor *mon = opaque;
 
+    qemu_mutex_lock(&mon->mon_lock);
+    if (!monitor_is_qmp(mon) && mon->reset_seen) {
+        MonitorHMP *hmp_mon = container_of(mon, MonitorHMP, common);
+        assert(hmp_mon->rs);
+        readline_restart(hmp_mon->rs);
+        qemu_mutex_unlock(&mon->mon_lock);
+        readline_show_prompt(hmp_mon->rs);
+    } else {
+        qemu_mutex_unlock(&mon->mon_lock);
+    }
+
     qemu_chr_fe_accept_input(&mon->chr);
 }
 
@@ -472,19 +571,13 @@ void monitor_resume(Monitor *mon)
         return;
     }
 
-    if (atomic_dec_fetch(&mon->suspend_cnt) == 0) {
+    if (qatomic_dec_fetch(&mon->suspend_cnt) == 0) {
         AioContext *ctx;
 
         if (mon->use_io_thread) {
             ctx = iothread_get_aio_context(mon_iothread);
         } else {
             ctx = qemu_get_aio_context();
-        }
-
-        if (!monitor_is_qmp(mon)) {
-            MonitorHMP *hmp_mon = container_of(mon, MonitorHMP, common);
-            assert(hmp_mon->rs);
-            readline_show_prompt(hmp_mon->rs);
         }
 
         aio_bh_schedule_oneshot(ctx, monitor_accept_input, mon);
@@ -497,7 +590,7 @@ int monitor_can_read(void *opaque)
 {
     Monitor *mon = opaque;
 
-    return !atomic_mb_read(&mon->suspend_cnt);
+    return !qatomic_read(&mon->suspend_cnt);
 }
 
 void monitor_list_append(Monitor *mon)
@@ -533,7 +626,7 @@ void monitor_data_init(Monitor *mon, bool is_qmp, bool skip_flush,
     }
     qemu_mutex_init(&mon->mon_lock);
     mon->is_qmp = is_qmp;
-    mon->outbuf = qstring_new();
+    mon->outbuf = g_string_new(NULL);
     mon->skip_flush = skip_flush;
     mon->use_io_thread = use_io_thread;
 }
@@ -547,12 +640,36 @@ void monitor_data_destroy(Monitor *mon)
     } else {
         readline_free(container_of(mon, MonitorHMP, common)->rs);
     }
-    qobject_unref(mon->outbuf);
+    g_string_free(mon->outbuf, true);
     qemu_mutex_destroy(&mon->mon_lock);
 }
 
 void monitor_cleanup(void)
 {
+    /*
+     * The dispatcher needs to stop before destroying the monitor and
+     * the I/O thread.
+     *
+     * We need to poll both qemu_aio_context and iohandler_ctx to make
+     * sure that the dispatcher coroutine keeps making progress and
+     * eventually terminates.  qemu_aio_context is automatically
+     * polled by calling AIO_WAIT_WHILE_UNLOCKED on it, but we must poll
+     * iohandler_ctx manually.
+     *
+     * Letting the iothread continue while shutting down the dispatcher
+     * means that new requests may still be coming in. This is okay,
+     * we'll just leave them in the queue without sending a response
+     * and monitor_data_destroy() will free them.
+     */
+    WITH_QEMU_LOCK_GUARD(&monitor_lock) {
+        qmp_dispatcher_co_shutdown = true;
+    }
+    qmp_dispatcher_co_wake();
+
+    AIO_WAIT_WHILE_UNLOCKED(NULL,
+                   (aio_poll(iohandler_get_aio_context(), false),
+                    qatomic_read(&qmp_dispatcher_co)));
+
     /*
      * We need to explicitly stop the I/O thread (but not destroy it),
      * clean up the monitor resources, then destroy the I/O thread since
@@ -578,9 +695,6 @@ void monitor_cleanup(void)
     }
     qemu_mutex_unlock(&monitor_lock);
 
-    /* QEMUBHs needs to be deleted before destroying the I/O thread */
-    qemu_bh_delete(qmp_dispatcher_bh);
-    qmp_dispatcher_bh = NULL;
     if (mon_iothread) {
         iothread_destroy(mon_iothread);
         mon_iothread = NULL;
@@ -593,19 +707,74 @@ static void monitor_qapi_event_init(void)
                                                 qapi_event_throttle_equal);
 }
 
-void monitor_init_globals_core(void)
+void monitor_init_globals(void)
 {
     monitor_qapi_event_init();
     qemu_mutex_init(&monitor_lock);
+    coroutine_mon = g_hash_table_new(NULL, NULL);
 
     /*
      * The dispatcher BH must run in the main loop thread, since we
      * have commands assuming that context.  It would be nice to get
      * rid of those assumptions.
      */
-    qmp_dispatcher_bh = aio_bh_new(iohandler_get_aio_context(),
-                                   monitor_qmp_bh_dispatcher,
-                                   NULL);
+    qmp_dispatcher_co = qemu_coroutine_create(monitor_qmp_dispatcher_co, NULL);
+    aio_co_schedule(iohandler_get_aio_context(), qmp_dispatcher_co);
+}
+
+int monitor_init(MonitorOptions *opts, bool allow_hmp, Error **errp)
+{
+    ERRP_GUARD();
+    Chardev *chr;
+
+    chr = qemu_chr_find(opts->chardev);
+    if (chr == NULL) {
+        error_setg(errp, "chardev \"%s\" not found", opts->chardev);
+        return -1;
+    }
+
+    if (!opts->has_mode) {
+        opts->mode = allow_hmp ? MONITOR_MODE_READLINE : MONITOR_MODE_CONTROL;
+    }
+
+    switch (opts->mode) {
+    case MONITOR_MODE_CONTROL:
+        monitor_init_qmp(chr, opts->pretty, errp);
+        break;
+    case MONITOR_MODE_READLINE:
+        if (!allow_hmp) {
+            error_setg(errp, "Only QMP is supported");
+            return -1;
+        }
+        if (opts->pretty) {
+            error_setg(errp, "'pretty' is not compatible with HMP monitors");
+            return -1;
+        }
+        monitor_init_hmp(chr, true, errp);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    return *errp ? -1 : 0;
+}
+
+int monitor_init_opts(QemuOpts *opts, Error **errp)
+{
+    Visitor *v;
+    MonitorOptions *options;
+    int ret;
+
+    v = opts_visitor_new(opts);
+    visit_type_MonitorOptions(v, NULL, &options, errp);
+    visit_free(v);
+    if (!options) {
+        return -1;
+    }
+
+    ret = monitor_init(options, true, errp);
+    qapi_free_MonitorOptions(options);
+    return ret;
 }
 
 QemuOptsList qemu_mon_opts = {

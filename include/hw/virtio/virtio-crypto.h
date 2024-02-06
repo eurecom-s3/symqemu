@@ -18,6 +18,7 @@
 #include "hw/virtio/virtio.h"
 #include "sysemu/iothread.h"
 #include "sysemu/cryptodev.h"
+#include "qom/object.h"
 
 
 #define DEBUG_VIRTIO_CRYPTO 0
@@ -31,8 +32,7 @@ do { \
 
 
 #define TYPE_VIRTIO_CRYPTO "virtio-crypto-device"
-#define VIRTIO_CRYPTO(obj) \
-        OBJECT_CHECK(VirtIOCrypto, (obj), TYPE_VIRTIO_CRYPTO)
+OBJECT_DECLARE_SIMPLE_TYPE(VirtIOCrypto, VIRTIO_CRYPTO)
 #define VIRTIO_CRYPTO_GET_PARENT_CLASS(obj) \
         OBJECT_GET_PARENT_CLASS(obj, TYPE_VIRTIO_CRYPTO)
 
@@ -50,6 +50,7 @@ typedef struct VirtIOCryptoConf {
     uint32_t mac_algo_l;
     uint32_t mac_algo_h;
     uint32_t aead_algo;
+    uint32_t akcipher_algo;
 
     /* Maximum length of cipher key */
     uint32_t max_cipher_key_len;
@@ -71,9 +72,7 @@ typedef struct VirtIOCryptoReq {
     size_t in_len;
     VirtQueue *vq;
     struct VirtIOCrypto *vcrypto;
-    union {
-        CryptoDevBackendSymOpInfo *sym_op_info;
-    } u;
+    CryptoDevBackendOpInfo op_info;
 } VirtIOCryptoReq;
 
 typedef struct VirtIOCryptoQueue {
@@ -82,7 +81,7 @@ typedef struct VirtIOCryptoQueue {
     struct VirtIOCrypto *vcrypto;
 } VirtIOCryptoQueue;
 
-typedef struct VirtIOCrypto {
+struct VirtIOCrypto {
     VirtIODevice parent_obj;
 
     VirtQueue *ctrl_vq;
@@ -97,6 +96,6 @@ typedef struct VirtIOCrypto {
     uint32_t curr_queues;
     size_t config_size;
     uint8_t vhost_started;
-} VirtIOCrypto;
+};
 
 #endif /* QEMU_VIRTIO_CRYPTO_H */

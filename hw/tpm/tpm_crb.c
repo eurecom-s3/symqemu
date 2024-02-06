@@ -19,20 +19,20 @@
 #include "qemu/module.h"
 #include "qapi/error.h"
 #include "exec/address-spaces.h"
-
-#include "hw/qdev-core.h"
 #include "hw/qdev-properties.h"
 #include "hw/pci/pci_ids.h"
 #include "hw/acpi/tpm.h"
 #include "migration/vmstate.h"
 #include "sysemu/tpm_backend.h"
+#include "sysemu/tpm_util.h"
 #include "sysemu/reset.h"
-#include "tpm_int.h"
-#include "tpm_util.h"
+#include "sysemu/xen.h"
+#include "tpm_prop.h"
 #include "tpm_ppi.h"
 #include "trace.h"
+#include "qom/object.h"
 
-typedef struct CRBState {
+struct CRBState {
     DeviceState parent_obj;
 
     TPMBackend *tpmbe;
@@ -45,9 +45,11 @@ typedef struct CRBState {
 
     bool ppi_enabled;
     TPMPPI ppi;
-} CRBState;
+};
+typedef struct CRBState CRBState;
 
-#define CRB(obj) OBJECT_CHECK(CRBState, (obj), TYPE_TPM_CRB)
+DECLARE_INSTANCE_CHECKER(CRBState, CRB,
+                         TYPE_TPM_CRB)
 
 #define CRB_INTF_TYPE_CRB_ACTIVE 0b1
 #define CRB_INTF_VERSION_CRB 0b1
@@ -196,6 +198,7 @@ static void tpm_crb_request_completed(TPMIf *ti, int ret)
         ARRAY_FIELD_DP32(s->regs, CRB_CTRL_STS,
                          tpmSts, 1); /* fatal error */
     }
+    memory_region_set_dirty(&s->cmdmem, 0, CRB_CTRL_CMD_SIZE);
 }
 
 static enum TPMVersion tpm_crb_get_version(TPMIf *ti)
@@ -306,7 +309,11 @@ static void tpm_crb_realize(DeviceState *dev, Error **errp)
                      TPM_PPI_ADDR_BASE, OBJECT(s));
     }
 
-    qemu_register_reset(tpm_crb_reset, dev);
+    if (xen_enabled()) {
+        tpm_crb_reset(dev);
+    } else {
+        qemu_register_reset(tpm_crb_reset, dev);
+    }
 }
 
 static void tpm_crb_class_init(ObjectClass *klass, void *data)
@@ -315,7 +322,7 @@ static void tpm_crb_class_init(ObjectClass *klass, void *data)
     TPMIfClass *tc = TPM_IF_CLASS(klass);
 
     dc->realize = tpm_crb_realize;
-    dc->props = tpm_crb_properties;
+    device_class_set_props(dc, tpm_crb_properties);
     dc->vmsd  = &vmstate_tpm_crb;
     dc->user_creatable = true;
     tc->model = TPM_MODEL_TPM_CRB;

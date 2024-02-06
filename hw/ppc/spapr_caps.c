@@ -32,7 +32,7 @@
 #include "target/ppc/mmu-hash64.h"
 #include "cpu-models.h"
 #include "kvm_ppc.h"
-#include "sysemu/qtest.h"
+#include "migration/vmstate.h"
 #include "sysemu/tcg.h"
 
 #include "hw/ppc/spapr.h"
@@ -85,11 +85,8 @@ static void spapr_cap_set_bool(Object *obj, Visitor *v, const char *name,
     SpaprCapabilityInfo *cap = opaque;
     SpaprMachineState *spapr = SPAPR_MACHINE(obj);
     bool value;
-    Error *local_err = NULL;
 
-    visit_type_bool(v, name, &value, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!visit_type_bool(v, name, &value, errp)) {
         return;
     }
 
@@ -98,12 +95,12 @@ static void spapr_cap_set_bool(Object *obj, Visitor *v, const char *name,
 }
 
 
-static void  spapr_cap_get_string(Object *obj, Visitor *v, const char *name,
-                                  void *opaque, Error **errp)
+static void spapr_cap_get_string(Object *obj, Visitor *v, const char *name,
+                                 void *opaque, Error **errp)
 {
     SpaprCapabilityInfo *cap = opaque;
     SpaprMachineState *spapr = SPAPR_MACHINE(obj);
-    char *val = NULL;
+    g_autofree char *val = NULL;
     uint8_t value = spapr_get_cap(spapr, cap->index);
 
     if (value >= cap->possible->num) {
@@ -114,7 +111,6 @@ static void  spapr_cap_get_string(Object *obj, Visitor *v, const char *name,
     val = g_strdup(cap->possible->vals[value]);
 
     visit_type_str(v, name, &val, errp);
-    g_free(val);
 }
 
 static void spapr_cap_set_string(Object *obj, Visitor *v, const char *name,
@@ -122,32 +118,27 @@ static void spapr_cap_set_string(Object *obj, Visitor *v, const char *name,
 {
     SpaprCapabilityInfo *cap = opaque;
     SpaprMachineState *spapr = SPAPR_MACHINE(obj);
-    Error *local_err = NULL;
     uint8_t i;
-    char *val;
+    g_autofree char *val = NULL;
 
-    visit_type_str(v, name, &val, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!visit_type_str(v, name, &val, errp)) {
         return;
     }
 
     if (!strcmp(val, "?")) {
         error_setg(errp, "%s", cap->possible->help);
-        goto out;
+        return;
     }
     for (i = 0; i < cap->possible->num; i++) {
         if (!strcasecmp(val, cap->possible->vals[i])) {
             spapr->cmd_line_caps[cap->index] = true;
             spapr->eff.caps[cap->index] = i;
-            goto out;
+            return;
         }
     }
 
     error_setg(errp, "Invalid capability mode \"%s\" for cap-%s", val,
                cap->name);
-out:
-    g_free(val);
 }
 
 static void spapr_cap_get_pagesize(Object *obj, Visitor *v, const char *name,
@@ -168,11 +159,8 @@ static void spapr_cap_set_pagesize(Object *obj, Visitor *v, const char *name,
     SpaprMachineState *spapr = SPAPR_MACHINE(obj);
     uint64_t pagesize;
     uint8_t val;
-    Error *local_err = NULL;
 
-    visit_type_size(v, name, &pagesize, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!visit_type_size(v, name, &pagesize, errp)) {
         return;
     }
 
@@ -188,22 +176,24 @@ static void spapr_cap_set_pagesize(Object *obj, Visitor *v, const char *name,
 
 static void cap_htm_apply(SpaprMachineState *spapr, uint8_t val, Error **errp)
 {
+    ERRP_GUARD();
     if (!val) {
         /* TODO: We don't support disabling htm yet */
         return;
     }
     if (tcg_enabled()) {
-        error_setg(errp,
-                   "No Transactional Memory support in TCG, try cap-htm=off");
+        error_setg(errp, "No Transactional Memory support in TCG");
+        error_append_hint(errp, "Try appending -machine cap-htm=off\n");
     } else if (kvm_enabled() && !kvmppc_has_cap_htm()) {
         error_setg(errp,
-"KVM implementation does not support Transactional Memory, try cap-htm=off"
-            );
+                   "KVM implementation does not support Transactional Memory");
+        error_append_hint(errp, "Try appending -machine cap-htm=off\n");
     }
 }
 
 static void cap_vsx_apply(SpaprMachineState *spapr, uint8_t val, Error **errp)
 {
+    ERRP_GUARD();
     PowerPCCPU *cpu = POWERPC_CPU(first_cpu);
     CPUPPCState *env = &cpu->env;
 
@@ -215,12 +205,14 @@ static void cap_vsx_apply(SpaprMachineState *spapr, uint8_t val, Error **errp)
      * rid of anything that doesn't do VMX */
     g_assert(env->insns_flags & PPC_ALTIVEC);
     if (!(env->insns_flags2 & PPC2_VSX)) {
-        error_setg(errp, "VSX support not available, try cap-vsx=off");
+        error_setg(errp, "VSX support not available");
+        error_append_hint(errp, "Try appending -machine cap-vsx=off\n");
     }
 }
 
 static void cap_dfp_apply(SpaprMachineState *spapr, uint8_t val, Error **errp)
 {
+    ERRP_GUARD();
     PowerPCCPU *cpu = POWERPC_CPU(first_cpu);
     CPUPPCState *env = &cpu->env;
 
@@ -229,7 +221,8 @@ static void cap_dfp_apply(SpaprMachineState *spapr, uint8_t val, Error **errp)
         return;
     }
     if (!(env->insns_flags2 & PPC2_DFP)) {
-        error_setg(errp, "DFP support not available, try cap-dfp=off");
+        error_setg(errp, "DFP support not available");
+        error_append_hint(errp, "Try appending -machine cap-dfp=off\n");
     }
 }
 
@@ -243,22 +236,19 @@ SpaprCapPossible cap_cfpc_possible = {
 static void cap_safe_cache_apply(SpaprMachineState *spapr, uint8_t val,
                                  Error **errp)
 {
-    Error *local_err = NULL;
+    ERRP_GUARD();
     uint8_t kvm_val =  kvmppc_get_cap_safe_cache();
 
     if (tcg_enabled() && val) {
         /* TCG only supports broken, allow other values and print a warning */
-        error_setg(&local_err,
-                   "TCG doesn't support requested feature, cap-cfpc=%s",
-                   cap_cfpc_possible.vals[val]);
+        warn_report("TCG doesn't support requested feature, cap-cfpc=%s",
+                    cap_cfpc_possible.vals[val]);
     } else if (kvm_enabled() && (val > kvm_val)) {
         error_setg(errp,
-"Requested safe cache capability level not supported by kvm, try cap-cfpc=%s",
-                   cap_cfpc_possible.vals[kvm_val]);
+                   "Requested safe cache capability level not supported by KVM");
+        error_append_hint(errp, "Try appending -machine cap-cfpc=%s\n",
+                          cap_cfpc_possible.vals[kvm_val]);
     }
-
-    if (local_err != NULL)
-        warn_report_err(local_err);
 }
 
 SpaprCapPossible cap_sbbc_possible = {
@@ -271,22 +261,19 @@ SpaprCapPossible cap_sbbc_possible = {
 static void cap_safe_bounds_check_apply(SpaprMachineState *spapr, uint8_t val,
                                         Error **errp)
 {
-    Error *local_err = NULL;
+    ERRP_GUARD();
     uint8_t kvm_val =  kvmppc_get_cap_safe_bounds_check();
 
     if (tcg_enabled() && val) {
         /* TCG only supports broken, allow other values and print a warning */
-        error_setg(&local_err,
-                   "TCG doesn't support requested feature, cap-sbbc=%s",
-                   cap_sbbc_possible.vals[val]);
+        warn_report("TCG doesn't support requested feature, cap-sbbc=%s",
+                    cap_sbbc_possible.vals[val]);
     } else if (kvm_enabled() && (val > kvm_val)) {
         error_setg(errp,
-"Requested safe bounds check capability level not supported by kvm, try cap-sbbc=%s",
-                   cap_sbbc_possible.vals[kvm_val]);
+"Requested safe bounds check capability level not supported by KVM");
+        error_append_hint(errp, "Try appending -machine cap-sbbc=%s\n",
+                          cap_sbbc_possible.vals[kvm_val]);
     }
-
-    if (local_err != NULL)
-        warn_report_err(local_err);
 }
 
 SpaprCapPossible cap_ibs_possible = {
@@ -302,34 +289,30 @@ SpaprCapPossible cap_ibs_possible = {
 static void cap_safe_indirect_branch_apply(SpaprMachineState *spapr,
                                            uint8_t val, Error **errp)
 {
-    Error *local_err = NULL;
+    ERRP_GUARD();
     uint8_t kvm_val = kvmppc_get_cap_safe_indirect_branch();
 
     if (tcg_enabled() && val) {
         /* TCG only supports broken, allow other values and print a warning */
-        error_setg(&local_err,
-                   "TCG doesn't support requested feature, cap-ibs=%s",
-                   cap_ibs_possible.vals[val]);
+        warn_report("TCG doesn't support requested feature, cap-ibs=%s",
+                    cap_ibs_possible.vals[val]);
     } else if (kvm_enabled() && (val > kvm_val)) {
         error_setg(errp,
-"Requested safe indirect branch capability level not supported by kvm, try cap-ibs=%s",
-                   cap_ibs_possible.vals[kvm_val]);
-    }
-
-    if (local_err != NULL) {
-        warn_report_err(local_err);
+"Requested safe indirect branch capability level not supported by KVM");
+        error_append_hint(errp, "Try appending -machine cap-ibs=%s\n",
+                          cap_ibs_possible.vals[kvm_val]);
     }
 }
 
 #define VALUE_DESC_TRISTATE     " (broken, workaround, fixed)"
 
-void spapr_check_pagesize(SpaprMachineState *spapr, hwaddr pagesize,
+bool spapr_check_pagesize(SpaprMachineState *spapr, hwaddr pagesize,
                           Error **errp)
 {
     hwaddr maxpagesize = (1ULL << spapr->eff.caps[SPAPR_CAP_HPT_MAXPAGESIZE]);
 
     if (!kvmppc_hpt_needs_host_contiguous_pages()) {
-        return;
+        return true;
     }
 
     if (maxpagesize > pagesize) {
@@ -337,7 +320,10 @@ void spapr_check_pagesize(SpaprMachineState *spapr, hwaddr pagesize,
                    "Can't support %"HWADDR_PRIu" kiB guest pages with %"
                    HWADDR_PRIu" kiB host pages with this KVM implementation",
                    maxpagesize >> 10, pagesize >> 10);
+        return false;
     }
+
+    return true;
 }
 
 static void cap_hpt_maxpagesize_apply(SpaprMachineState *spapr,
@@ -382,6 +368,65 @@ static bool spapr_pagesize_cb(void *opaque, uint32_t seg_pshift,
     return true;
 }
 
+static void ppc_hash64_filter_pagesizes(PowerPCCPU *cpu,
+                                 bool (*cb)(void *, uint32_t, uint32_t),
+                                 void *opaque)
+{
+    PPCHash64Options *opts = cpu->hash64_opts;
+    int i;
+    int n = 0;
+    bool ci_largepage = false;
+
+    assert(opts);
+
+    n = 0;
+    for (i = 0; i < ARRAY_SIZE(opts->sps); i++) {
+        PPCHash64SegmentPageSizes *sps = &opts->sps[i];
+        int j;
+        int m = 0;
+
+        assert(n <= i);
+
+        if (!sps->page_shift) {
+            break;
+        }
+
+        for (j = 0; j < ARRAY_SIZE(sps->enc); j++) {
+            PPCHash64PageSize *ps = &sps->enc[j];
+
+            assert(m <= j);
+            if (!ps->page_shift) {
+                break;
+            }
+
+            if (cb(opaque, sps->page_shift, ps->page_shift)) {
+                if (ps->page_shift >= 16) {
+                    ci_largepage = true;
+                }
+                sps->enc[m++] = *ps;
+            }
+        }
+
+        /* Clear rest of the row */
+        for (j = m; j < ARRAY_SIZE(sps->enc); j++) {
+            memset(&sps->enc[j], 0, sizeof(sps->enc[j]));
+        }
+
+        if (m) {
+            n++;
+        }
+    }
+
+    /* Clear the rest of the table */
+    for (i = n; i < ARRAY_SIZE(opts->sps); i++) {
+        memset(&opts->sps[i], 0, sizeof(opts->sps[i]));
+    }
+
+    if (!ci_largepage) {
+        opts->flags &= ~PPC_HASH64_CI_LARGEPAGE;
+    }
+}
+
 static void cap_hpt_maxpagesize_cpu_apply(SpaprMachineState *spapr,
                                           PowerPCCPU *cpu,
                                           uint8_t val, Error **errp)
@@ -394,21 +439,53 @@ static void cap_hpt_maxpagesize_cpu_apply(SpaprMachineState *spapr,
 static void cap_nested_kvm_hv_apply(SpaprMachineState *spapr,
                                     uint8_t val, Error **errp)
 {
+    ERRP_GUARD();
+    PowerPCCPU *cpu = POWERPC_CPU(first_cpu);
+    CPUPPCState *env = &cpu->env;
+
     if (!val) {
         /* capability disabled by default */
         return;
     }
 
-    if (tcg_enabled()) {
-        error_setg(errp,
-                   "No Nested KVM-HV support in tcg, try cap-nested-hv=off");
-    } else if (kvm_enabled()) {
+    if (!(env->insns_flags2 & PPC2_ISA300)) {
+        error_setg(errp, "Nested-HV only supported on POWER9 and later");
+        error_append_hint(errp, "Try appending -machine cap-nested-hv=off\n");
+        return;
+    }
+
+    if (kvm_enabled()) {
+        if (!ppc_check_compat(cpu, CPU_POWERPC_LOGICAL_3_00, 0,
+                              spapr->max_compat_pvr)) {
+            error_setg(errp, "Nested-HV only supported on POWER9 and later");
+            error_append_hint(errp,
+                              "Try appending -machine max-cpu-compat=power9\n");
+            return;
+        }
+
         if (!kvmppc_has_cap_nested_kvm_hv()) {
             error_setg(errp,
-"KVM implementation does not support Nested KVM-HV, try cap-nested-hv=off");
+                       "KVM implementation does not support Nested-HV");
+            error_append_hint(errp,
+                              "Try appending -machine cap-nested-hv=off\n");
         } else if (kvmppc_set_cap_nested_kvm_hv(val) < 0) {
-                error_setg(errp,
-"Error enabling cap-nested-hv with KVM, try cap-nested-hv=off");
+                error_setg(errp, "Error enabling cap-nested-hv with KVM");
+                error_append_hint(errp,
+                                  "Try appending -machine cap-nested-hv=off\n");
+        }
+    } else if (tcg_enabled()) {
+        MachineState *ms = MACHINE(spapr);
+        unsigned int smp_threads = ms->smp.threads;
+
+        /*
+         * Nested-HV vCPU env state to L2, so SMT-shared SPR updates, for
+         * example, do not necessarily update the correct SPR value on sibling
+         * threads that are in a different guest/host context.
+         */
+        if (smp_threads > 1) {
+            error_setg(errp, "TCG does not support nested-HV with SMT");
+            error_append_hint(errp, "Try appending -machine cap-nested-hv=off "
+                                    "or use threads=1 with -smp\n");
         }
     }
 }
@@ -416,6 +493,7 @@ static void cap_nested_kvm_hv_apply(SpaprMachineState *spapr,
 static void cap_large_decr_apply(SpaprMachineState *spapr,
                                  uint8_t val, Error **errp)
 {
+    ERRP_GUARD();
     PowerPCCPU *cpu = POWERPC_CPU(first_cpu);
     PowerPCCPUClass *pcc = POWERPC_CPU_GET_CLASS(cpu);
 
@@ -426,20 +504,23 @@ static void cap_large_decr_apply(SpaprMachineState *spapr,
     if (tcg_enabled()) {
         if (!ppc_check_compat(cpu, CPU_POWERPC_LOGICAL_3_00, 0,
                               spapr->max_compat_pvr)) {
-            error_setg(errp,
-                "Large decrementer only supported on POWER9, try -cpu POWER9");
+            error_setg(errp, "Large decrementer only supported on POWER9");
+            error_append_hint(errp, "Try -cpu POWER9\n");
             return;
         }
     } else if (kvm_enabled()) {
         int kvm_nr_bits = kvmppc_get_cap_large_decr();
 
         if (!kvm_nr_bits) {
-            error_setg(errp,
-                       "No large decrementer support, try cap-large-decr=off");
+            error_setg(errp, "No large decrementer support");
+            error_append_hint(errp,
+                              "Try appending -machine cap-large-decr=off\n");
         } else if (pcc->lrg_decr_bits != kvm_nr_bits) {
             error_setg(errp,
-"KVM large decrementer size (%d) differs to model (%d), try -cap-large-decr=off",
-                kvm_nr_bits, pcc->lrg_decr_bits);
+                       "KVM large decrementer size (%d) differs to model (%d)",
+                       kvm_nr_bits, pcc->lrg_decr_bits);
+            error_append_hint(errp,
+                              "Try appending -machine cap-large-decr=off\n");
         }
     }
 }
@@ -448,13 +529,15 @@ static void cap_large_decr_cpu_apply(SpaprMachineState *spapr,
                                      PowerPCCPU *cpu,
                                      uint8_t val, Error **errp)
 {
+    ERRP_GUARD();
     CPUPPCState *env = &cpu->env;
     target_ulong lpcr = env->spr[SPR_LPCR];
 
     if (kvm_enabled()) {
         if (kvmppc_enable_cap_large_decr(cpu, val)) {
-            error_setg(errp,
-                       "No large decrementer support, try cap-large-decr=off");
+            error_setg(errp, "No large decrementer support");
+            error_append_hint(errp,
+                              "Try appending -machine cap-large-decr=off\n");
         }
     }
 
@@ -469,15 +552,106 @@ static void cap_large_decr_cpu_apply(SpaprMachineState *spapr,
 static void cap_ccf_assist_apply(SpaprMachineState *spapr, uint8_t val,
                                  Error **errp)
 {
+    ERRP_GUARD();
     uint8_t kvm_val = kvmppc_get_cap_count_cache_flush_assist();
 
     if (tcg_enabled() && val) {
-        /* TODO - for now only allow broken for TCG */
-        error_setg(errp,
-"Requested count cache flush assist capability level not supported by tcg, try cap-ccf-assist=off");
+        /* TCG doesn't implement anything here, but allow with a warning */
+        warn_report("TCG doesn't support requested feature, cap-ccf-assist=on");
     } else if (kvm_enabled() && (val > kvm_val)) {
+        uint8_t kvm_ibs = kvmppc_get_cap_safe_indirect_branch();
+
+        if (kvm_ibs == SPAPR_CAP_FIXED_CCD) {
+            /*
+             * If we don't have CCF assist on the host, the assist
+             * instruction is a harmless no-op.  It won't correctly
+             * implement the cache count flush *but* if we have
+             * count-cache-disabled in the host, that flush is
+             * unnecessary.  So, specifically allow this case.  This
+             * allows us to have better performance on POWER9 DD2.3,
+             * while still working on POWER9 DD2.2 and POWER8 host
+             * cpus.
+             */
+            return;
+        }
         error_setg(errp,
-"Requested count cache flush assist capability level not supported by kvm, try cap-ccf-assist=off");
+                   "Requested count cache flush assist capability level not supported by KVM");
+        error_append_hint(errp, "Try appending -machine cap-ccf-assist=off\n");
+    }
+}
+
+static void cap_fwnmi_apply(SpaprMachineState *spapr, uint8_t val,
+                                Error **errp)
+{
+    ERRP_GUARD();
+    if (!val) {
+        return; /* Disabled by default */
+    }
+
+    if (kvm_enabled()) {
+        if (!kvmppc_get_fwnmi()) {
+            error_setg(errp,
+"Firmware Assisted Non-Maskable Interrupts(FWNMI) not supported by KVM.");
+            error_append_hint(errp, "Try appending -machine cap-fwnmi=off\n");
+        }
+    }
+}
+
+static void cap_rpt_invalidate_apply(SpaprMachineState *spapr,
+                                     uint8_t val, Error **errp)
+{
+    ERRP_GUARD();
+
+    if (!val) {
+        /* capability disabled by default */
+        return;
+    }
+
+    if (tcg_enabled()) {
+        error_setg(errp, "No H_RPT_INVALIDATE support in TCG");
+        error_append_hint(errp,
+                          "Try appending -machine cap-rpt-invalidate=off\n");
+    } else if (kvm_enabled()) {
+        if (!kvmppc_has_cap_mmu_radix()) {
+            error_setg(errp, "H_RPT_INVALIDATE only supported on Radix");
+            return;
+        }
+
+        if (!kvmppc_has_cap_rpt_invalidate()) {
+            error_setg(errp,
+                       "KVM implementation does not support H_RPT_INVALIDATE");
+            error_append_hint(errp,
+                              "Try appending -machine cap-rpt-invalidate=off\n");
+        } else {
+            kvmppc_enable_h_rpt_invalidate();
+        }
+    }
+}
+
+static void cap_ail_mode_3_apply(SpaprMachineState *spapr,
+                                     uint8_t val, Error **errp)
+{
+    ERRP_GUARD();
+    PowerPCCPU *cpu = POWERPC_CPU(first_cpu);
+    PowerPCCPUClass *pcc = POWERPC_CPU_GET_CLASS(cpu);
+
+    if (!val) {
+        return;
+    }
+
+    if (tcg_enabled()) {
+        /* AIL-3 is only supported on POWER8 and above CPUs. */
+        if (!(pcc->insns_flags2 & PPC2_ISA207S)) {
+            error_setg(errp, "TCG only supports cap-ail-mode-3 on POWER8 and later CPUs");
+            error_append_hint(errp, "Try appending -machine cap-ail-mode-3=off\n");
+            return;
+        }
+    } else if (kvm_enabled()) {
+        if (!kvmppc_supports_ail_3()) {
+            error_setg(errp, "KVM implementation does not support cap-ail-mode-3");
+            error_append_hint(errp, "Try appending -machine cap-ail-mode-3=off\n");
+            return;
+        }
     }
 }
 
@@ -580,6 +754,33 @@ SpaprCapabilityInfo capability_table[SPAPR_CAP_NUM] = {
         .type = "bool",
         .apply = cap_ccf_assist_apply,
     },
+    [SPAPR_CAP_FWNMI] = {
+        .name = "fwnmi",
+        .description = "Implements PAPR FWNMI option",
+        .index = SPAPR_CAP_FWNMI,
+        .get = spapr_cap_get_bool,
+        .set = spapr_cap_set_bool,
+        .type = "bool",
+        .apply = cap_fwnmi_apply,
+    },
+    [SPAPR_CAP_RPT_INVALIDATE] = {
+        .name = "rpt-invalidate",
+        .description = "Allow H_RPT_INVALIDATE",
+        .index = SPAPR_CAP_RPT_INVALIDATE,
+        .get = spapr_cap_get_bool,
+        .set = spapr_cap_set_bool,
+        .type = "bool",
+        .apply = cap_rpt_invalidate_apply,
+    },
+    [SPAPR_CAP_AIL_MODE_3] = {
+        .name = "ail-mode-3",
+        .description = "Alternate Interrupt Location (AIL) mode 3 support",
+        .index = SPAPR_CAP_AIL_MODE_3,
+        .get = spapr_cap_get_bool,
+        .set = spapr_cap_set_bool,
+        .type = "bool",
+        .apply = cap_ail_mode_3_apply,
+    },
 };
 
 static SpaprCapabilities default_caps_with_cpu(SpaprMachineState *spapr,
@@ -599,6 +800,7 @@ static SpaprCapabilities default_caps_with_cpu(SpaprMachineState *spapr,
                                0, spapr->max_compat_pvr)) {
         caps.caps[SPAPR_CAP_HTM] = SPAPR_CAP_OFF;
         caps.caps[SPAPR_CAP_CFPC] = SPAPR_CAP_BROKEN;
+        caps.caps[SPAPR_CAP_AIL_MODE_3] = SPAPR_CAP_OFF;
     }
 
     if (!ppc_type_check_compat(cputype, CPU_POWERPC_LOGICAL_2_06_PLUS,
@@ -719,6 +921,8 @@ SPAPR_CAP_MIG_STATE(hpt_maxpagesize, SPAPR_CAP_HPT_MAXPAGESIZE);
 SPAPR_CAP_MIG_STATE(nested_kvm_hv, SPAPR_CAP_NESTED_KVM_HV);
 SPAPR_CAP_MIG_STATE(large_decr, SPAPR_CAP_LARGE_DECREMENTER);
 SPAPR_CAP_MIG_STATE(ccf_assist, SPAPR_CAP_CCF_ASSIST);
+SPAPR_CAP_MIG_STATE(fwnmi, SPAPR_CAP_FWNMI);
+SPAPR_CAP_MIG_STATE(rpt_invalidate, SPAPR_CAP_RPT_INVALIDATE);
 
 void spapr_caps_init(SpaprMachineState *spapr)
 {
@@ -770,31 +974,20 @@ void spapr_caps_cpu_apply(SpaprMachineState *spapr, PowerPCCPU *cpu)
     }
 }
 
-void spapr_caps_add_properties(SpaprMachineClass *smc, Error **errp)
+void spapr_caps_add_properties(SpaprMachineClass *smc)
 {
-    Error *local_err = NULL;
     ObjectClass *klass = OBJECT_CLASS(smc);
     int i;
 
     for (i = 0; i < ARRAY_SIZE(capability_table); i++) {
         SpaprCapabilityInfo *cap = &capability_table[i];
-        const char *name = g_strdup_printf("cap-%s", cap->name);
-        char *desc;
+        g_autofree char *name = g_strdup_printf("cap-%s", cap->name);
+        g_autofree char *desc = g_strdup_printf("%s", cap->description);
 
         object_class_property_add(klass, name, cap->type,
                                   cap->get, cap->set,
-                                  NULL, cap, &local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
-            return;
-        }
+                                  NULL, cap);
 
-        desc = g_strdup_printf("%s", cap->description);
-        object_class_property_set_description(klass, name, desc, &local_err);
-        g_free(desc);
-        if (local_err) {
-            error_propagate(errp, local_err);
-            return;
-        }
+        object_class_property_set_description(klass, name, desc);
     }
 }

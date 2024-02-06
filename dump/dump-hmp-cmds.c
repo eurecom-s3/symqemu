@@ -1,5 +1,5 @@
 /*
- * Human Monitor Interface commands
+ * Windows crashdump (Human Monitor Interface commands)
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
@@ -32,7 +32,7 @@ void hmp_dump_guest_memory(Monitor *mon, const QDict *qdict)
 
     if (zlib + lzo + snappy + win_dmp > 1) {
         error_setg(&err, "only one of '-z|-l|-s|-w' can be set");
-        hmp_handle_error(mon, &err);
+        hmp_handle_error(mon, err);
         return;
     }
 
@@ -66,7 +66,7 @@ void hmp_dump_guest_memory(Monitor *mon, const QDict *qdict)
 
     qmp_dump_guest_memory(paging, prot, true, detach, has_begin, begin,
                           has_length, length, true, dump_format, &err);
-    hmp_handle_error(mon, &err);
+    hmp_handle_error(mon, err);
     g_free(prot);
 }
 

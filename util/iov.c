@@ -17,7 +17,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/iov.h"
 #include "qemu/sockets.h"
 #include "qemu/cutils.h"
@@ -112,12 +111,17 @@ do_send_recv(int sockfd, struct iovec *iov, unsigned iov_cnt, bool do_send)
     /*XXX Note: windows has WSASend() and WSARecv() */
     unsigned i = 0;
     ssize_t ret = 0;
+    ssize_t off = 0;
     while (i < iov_cnt) {
         ssize_t r = do_send
-            ? send(sockfd, iov[i].iov_base, iov[i].iov_len, 0)
-            : recv(sockfd, iov[i].iov_base, iov[i].iov_len, 0);
+            ? send(sockfd, iov[i].iov_base + off, iov[i].iov_len - off, 0)
+            : recv(sockfd, iov[i].iov_base + off, iov[i].iov_len - off, 0);
         if (r > 0) {
             ret += r;
+            off += r;
+            if (off < iov[i].iov_len) {
+                continue;
+            }
         } else if (!r) {
             break;
         } else if (errno == EINTR) {
@@ -130,6 +134,7 @@ do_send_recv(int sockfd, struct iovec *iov, unsigned iov_cnt, bool do_send)
             }
             break;
         }
+        off = 0;
         i++;
     }
     return ret;
@@ -237,7 +242,7 @@ void iov_hexdump(const struct iovec *iov, const unsigned int iov_cnt,
     size = size > limit ? limit : size;
     buf = g_malloc(size);
     iov_to_buf(iov, iov_cnt, 0, buf, size);
-    qemu_hexdump(buf, fp, prefix, size);
+    qemu_hexdump(fp, prefix, buf, size);
     g_free(buf);
 }
 
@@ -373,15 +378,15 @@ static struct iovec *iov_skip_offset(struct iovec *iov, size_t offset,
 }
 
 /*
- * qiov_slice
+ * qemu_iovec_slice
  *
  * Find subarray of iovec's, containing requested range. @head would
  * be offset in first iov (returned by the function), @tail would be
  * count of extra bytes in last iovec (returned iov + @niov - 1).
  */
-static struct iovec *qiov_slice(QEMUIOVector *qiov,
-                                size_t offset, size_t len,
-                                size_t *head, size_t *tail, int *niov)
+struct iovec *qemu_iovec_slice(QEMUIOVector *qiov,
+                               size_t offset, size_t len,
+                               size_t *head, size_t *tail, int *niov)
 {
     struct iovec *iov, *end_iov;
 
@@ -401,53 +406,14 @@ static struct iovec *qiov_slice(QEMUIOVector *qiov,
     return iov;
 }
 
-/*
- * Compile new iovec, combining @head_buf buffer, sub-qiov of @mid_qiov,
- * and @tail_buf buffer into new qiov.
- */
-void qemu_iovec_init_extended(
-        QEMUIOVector *qiov,
-        void *head_buf, size_t head_len,
-        QEMUIOVector *mid_qiov, size_t mid_offset, size_t mid_len,
-        void *tail_buf, size_t tail_len)
+int qemu_iovec_subvec_niov(QEMUIOVector *qiov, size_t offset, size_t len)
 {
-    size_t mid_head, mid_tail;
-    int total_niov, mid_niov = 0;
-    struct iovec *p, *mid_iov;
+    size_t head, tail;
+    int niov;
 
-    if (mid_len) {
-        mid_iov = qiov_slice(mid_qiov, mid_offset, mid_len,
-                             &mid_head, &mid_tail, &mid_niov);
-    }
+    qemu_iovec_slice(qiov, offset, len, &head, &tail, &niov);
 
-    total_niov = !!head_len + mid_niov + !!tail_len;
-    if (total_niov == 1) {
-        qemu_iovec_init_buf(qiov, NULL, 0);
-        p = &qiov->local_iov;
-    } else {
-        qiov->niov = qiov->nalloc = total_niov;
-        qiov->size = head_len + mid_len + tail_len;
-        p = qiov->iov = g_new(struct iovec, qiov->niov);
-    }
-
-    if (head_len) {
-        p->iov_base = head_buf;
-        p->iov_len = head_len;
-        p++;
-    }
-
-    if (mid_len) {
-        memcpy(p, mid_iov, mid_niov * sizeof(*p));
-        p[0].iov_base = (uint8_t *)p[0].iov_base + mid_head;
-        p[0].iov_len -= mid_head;
-        p[mid_niov - 1].iov_len -= mid_tail;
-        p += mid_niov;
-    }
-
-    if (tail_len) {
-        p->iov_base = tail_buf;
-        p->iov_len = tail_len;
-    }
+    return niov;
 }
 
 /*
@@ -481,7 +447,21 @@ bool qemu_iovec_is_zero(QEMUIOVector *qiov, size_t offset, size_t bytes)
 void qemu_iovec_init_slice(QEMUIOVector *qiov, QEMUIOVector *source,
                            size_t offset, size_t len)
 {
-    qemu_iovec_init_extended(qiov, NULL, 0, source, offset, len, NULL, 0);
+    struct iovec *slice_iov;
+    int slice_niov;
+    size_t slice_head, slice_tail;
+
+    assert(source->size >= len);
+    assert(source->size - len >= offset);
+
+    slice_iov = qemu_iovec_slice(source, offset, len,
+                                 &slice_head, &slice_tail, &slice_niov);
+    if (slice_niov == 1) {
+        qemu_iovec_init_buf(qiov, slice_iov[0].iov_base + slice_head, len);
+    } else {
+        qemu_iovec_init(qiov, slice_niov);
+        qemu_iovec_concat_iov(qiov, slice_iov, slice_niov, slice_head, len);
+    }
 }
 
 void qemu_iovec_destroy(QEMUIOVector *qiov)
@@ -625,14 +605,33 @@ void qemu_iovec_clone(QEMUIOVector *dest, const QEMUIOVector *src, void *buf)
     }
 }
 
-size_t iov_discard_front(struct iovec **iov, unsigned int *iov_cnt,
-                         size_t bytes)
+void iov_discard_undo(IOVDiscardUndo *undo)
+{
+    /* Restore original iovec if it was modified */
+    if (undo->modified_iov) {
+        *undo->modified_iov = undo->orig;
+    }
+}
+
+size_t iov_discard_front_undoable(struct iovec **iov,
+                                  unsigned int *iov_cnt,
+                                  size_t bytes,
+                                  IOVDiscardUndo *undo)
 {
     size_t total = 0;
     struct iovec *cur;
 
+    if (undo) {
+        undo->modified_iov = NULL;
+    }
+
     for (cur = *iov; *iov_cnt > 0; cur++) {
         if (cur->iov_len > bytes) {
+            if (undo) {
+                undo->modified_iov = cur;
+                undo->orig = *cur;
+            }
+
             cur->iov_base += bytes;
             cur->iov_len -= bytes;
             total += bytes;
@@ -648,11 +647,23 @@ size_t iov_discard_front(struct iovec **iov, unsigned int *iov_cnt,
     return total;
 }
 
-size_t iov_discard_back(struct iovec *iov, unsigned int *iov_cnt,
-                        size_t bytes)
+size_t iov_discard_front(struct iovec **iov, unsigned int *iov_cnt,
+                         size_t bytes)
+{
+    return iov_discard_front_undoable(iov, iov_cnt, bytes, NULL);
+}
+
+size_t iov_discard_back_undoable(struct iovec *iov,
+                                 unsigned int *iov_cnt,
+                                 size_t bytes,
+                                 IOVDiscardUndo *undo)
 {
     size_t total = 0;
     struct iovec *cur;
+
+    if (undo) {
+        undo->modified_iov = NULL;
+    }
 
     if (*iov_cnt == 0) {
         return 0;
@@ -662,6 +673,11 @@ size_t iov_discard_back(struct iovec *iov, unsigned int *iov_cnt,
 
     while (*iov_cnt > 0) {
         if (cur->iov_len > bytes) {
+            if (undo) {
+                undo->modified_iov = cur;
+                undo->orig = *cur;
+            }
+
             cur->iov_len -= bytes;
             total += bytes;
             break;
@@ -674,6 +690,12 @@ size_t iov_discard_back(struct iovec *iov, unsigned int *iov_cnt,
     }
 
     return total;
+}
+
+size_t iov_discard_back(struct iovec *iov, unsigned int *iov_cnt,
+                        size_t bytes)
+{
+    return iov_discard_back_undoable(iov, iov_cnt, bytes, NULL);
 }
 
 void qemu_iovec_discard_back(QEMUIOVector *qiov, size_t bytes)

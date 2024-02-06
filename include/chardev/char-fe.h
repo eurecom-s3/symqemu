@@ -2,8 +2,9 @@
 #define QEMU_CHAR_FE_H
 
 #include "chardev/char.h"
+#include "qemu/main-loop.h"
 
-typedef void IOEventHandler(void *opaque, int event);
+typedef void IOEventHandler(void *opaque, QEMUChrEvent event);
 typedef int BackendChangeHandler(void *opaque);
 
 /* This is the backend as seen by frontend, the actual backend is
@@ -171,7 +172,10 @@ void qemu_chr_fe_set_open(CharBackend *be, int fe_open);
  * Chardev.
  */
 void qemu_chr_fe_printf(CharBackend *be, const char *fmt, ...)
-    GCC_FMT_ATTR(2, 3);
+    G_GNUC_PRINTF(2, 3);
+
+
+typedef gboolean (*FEWatchFunc)(void *do_not_use, GIOCondition condition, void *data);
 
 /**
  * qemu_chr_fe_add_watch:
@@ -187,10 +191,13 @@ void qemu_chr_fe_printf(CharBackend *be, const char *fmt, ...)
  * Note that you are responsible to update the front-end sources if
  * you are switching the main context with qemu_chr_fe_set_handlers().
  *
+ * Warning: DO NOT use the first callback argument (it may be either
+ * a GIOChannel or a QIOChannel, depending on the underlying chardev)
+ *
  * Returns: the source tag
  */
 guint qemu_chr_fe_add_watch(CharBackend *be, GIOCondition cond,
-                            GIOFunc func, void *user_data);
+                            FEWatchFunc func, void *user_data);
 
 /**
  * qemu_chr_fe_write:

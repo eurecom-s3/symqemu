@@ -22,9 +22,13 @@
  * THE SOFTWARE.
  */
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "dmg.h"
+
+/* Work around a -Wstrict-prototypes warning in LZFSE headers */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstrict-prototypes"
 #include <lzfse.h>
+#pragma GCC diagnostic pop
 
 static int dmg_uncompress_lzfse_do(char *next_in, unsigned int avail_in,
                                    char *next_out, unsigned int avail_out)

@@ -8,7 +8,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -23,17 +23,14 @@
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "qapi/visitor.h"
-#include "hw/hw.h"
 #include "qemu/log.h"
-#include "sysemu/sysemu.h"
-#include "hw/boards.h"
 #include "hw/loader.h"
 #include "elf.h"
 #include "hw/sysbus.h"
 #include "sysemu/kvm.h"
 #include "sysemu/device_tree.h"
 #include "kvm_ppc.h"
-#include "sysemu/qtest.h"
+#include "migration/vmstate.h"
 
 #include "hw/ppc/spapr.h"
 #include "hw/ppc/spapr_vio.h"
@@ -89,6 +86,7 @@ static int vio_make_devnode(SpaprVioDevice *dev,
     SpaprVioDeviceClass *pc = VIO_SPAPR_DEVICE_GET_CLASS(dev);
     int vdevice_off, node_off, ret;
     char *dt_name;
+    const char *dt_compatible;
 
     vdevice_off = fdt_path_offset(fdt, "/vdevice");
     if (vdevice_off < 0) {
@@ -115,9 +113,15 @@ static int vio_make_devnode(SpaprVioDevice *dev,
         }
     }
 
-    if (pc->dt_compatible) {
+    if (pc->get_dt_compatible) {
+        dt_compatible = pc->get_dt_compatible(dev);
+    } else {
+        dt_compatible = pc->dt_compatible;
+    }
+
+    if (dt_compatible) {
         ret = fdt_setprop_string(fdt, node_off, "compatible",
-                                 pc->dt_compatible);
+                                 dt_compatible);
         if (ret < 0) {
             return ret;
         }
@@ -295,7 +299,7 @@ int spapr_vio_send_crq(SpaprVioDevice *dev, uint8_t *crq)
     dev->crq.qnext = (dev->crq.qnext + 16) % dev->crq.qsize;
 
     if (dev->signal_state & 1) {
-        qemu_irq_pulse(spapr_vio_qirq(dev));
+        spapr_vio_irq_pulse(dev);
     }
 
     return 0;
@@ -306,7 +310,7 @@ int spapr_vio_send_crq(SpaprVioDevice *dev, uint8_t *crq)
 static void spapr_vio_quiesce_one(SpaprVioDevice *dev)
 {
     if (dev->tcet) {
-        device_reset(DEVICE(dev->tcet));
+        device_cold_reset(DEVICE(dev->tcet));
     }
     free_crq(dev);
 }
@@ -415,7 +419,7 @@ static void spapr_vio_busdev_reset(DeviceState *qdev)
 }
 
 /*
- * The register property of a VIO device is defined in livirt using
+ * The register property of a VIO device is defined in libvirt using
  * 0x1000 as a base register number plus a 0x1000 increment. For the
  * VIO tty device, the base number is changed to 0x30000000. QEMU uses
  * a base register number of 0x71000000 and then a simple increment.
@@ -445,7 +449,7 @@ static inline uint32_t spapr_vio_reg_to_irq(uint32_t reg)
 
     } else if (reg >= 0x30000000) {
         /*
-         * VIO tty devices register values, when allocated by livirt,
+         * VIO tty devices register values, when allocated by libvirt,
          * are mapped in range [0xf0 - 0xff], gives us a maximum of 16
          * vtys.
          */
@@ -454,7 +458,7 @@ static inline uint32_t spapr_vio_reg_to_irq(uint32_t reg)
     } else {
         /*
          * Other VIO devices register values, when allocated by
-         * livirt, should be mapped in range [0x00 - 0xef]. Conflicts
+         * libvirt, should be mapped in range [0x00 - 0xef]. Conflicts
          * will be detected when IRQ is claimed.
          */
         irq = (reg >> 12) & 0xff;
@@ -469,7 +473,6 @@ static void spapr_vio_busdev_realize(DeviceState *qdev, Error **errp)
     SpaprVioDevice *dev = (SpaprVioDevice *)qdev;
     SpaprVioDeviceClass *pc = VIO_SPAPR_DEVICE_GET_CLASS(dev);
     char *id;
-    Error *local_err = NULL;
 
     if (dev->reg != -1) {
         /*
@@ -505,16 +508,15 @@ static void spapr_vio_busdev_realize(DeviceState *qdev, Error **errp)
     dev->irq = spapr_vio_reg_to_irq(dev->reg);
 
     if (SPAPR_MACHINE_GET_CLASS(spapr)->legacy_irq_allocation) {
-        dev->irq = spapr_irq_findone(spapr, &local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
+        int irq = spapr_irq_findone(spapr, errp);
+
+        if (irq < 0) {
             return;
         }
+        dev->irq = irq;
     }
 
-    spapr_irq_claim(spapr, dev->irq, false, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (spapr_irq_claim(spapr, dev->irq, false, errp) < 0) {
         return;
     }
 
@@ -522,10 +524,10 @@ static void spapr_vio_busdev_realize(DeviceState *qdev, Error **errp)
         uint32_t liobn = SPAPR_VIO_LIOBN(dev->reg);
 
         memory_region_init(&dev->mrroot, OBJECT(dev), "iommu-spapr-root",
-                           ram_size);
+                           MACHINE(spapr)->ram_size);
         memory_region_init_alias(&dev->mrbypass, OBJECT(dev),
                                  "iommu-spapr-bypass", get_system_memory(),
-                                 0, ram_size);
+                                 0, MACHINE(spapr)->ram_size);
         memory_region_add_subregion_overlap(&dev->mrroot, 0, &dev->mrbypass, 1);
         address_space_init(&dev->as, &dev->mrroot, qdev->id);
 
@@ -571,11 +573,11 @@ SpaprVioBus *spapr_vio_bus_init(void)
     DeviceState *dev;
 
     /* Create bridge device */
-    dev = qdev_create(NULL, TYPE_SPAPR_VIO_BRIDGE);
-    qdev_init_nofail(dev);
+    dev = qdev_new(TYPE_SPAPR_VIO_BRIDGE);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     /* Create bus on bridge device */
-    qbus = qbus_create(TYPE_SPAPR_VIO_BUS, dev, "spapr-vio");
+    qbus = qbus_new(TYPE_SPAPR_VIO_BUS, dev, "spapr-vio");
     bus = SPAPR_VIO_BUS(qbus);
     bus->next_reg = SPAPR_VIO_REG_BASE;
 
@@ -724,7 +726,7 @@ void spapr_dt_vdevice(SpaprVioBus *bus, void *fdt)
 gchar *spapr_vio_stdout_path(SpaprVioBus *bus)
 {
     SpaprVioDevice *dev;
-    char *name, *path;
+    g_autofree char *name = NULL;
 
     dev = spapr_vty_get_default(bus);
     if (!dev) {
@@ -732,8 +734,6 @@ gchar *spapr_vio_stdout_path(SpaprVioBus *bus)
     }
 
     name = spapr_vio_get_dev_name(DEVICE(dev));
-    path = g_strdup_printf("/vdevice/%s", name);
 
-    g_free(name);
-    return path;
+    return g_strdup_printf("/vdevice/%s", name);
 }

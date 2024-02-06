@@ -1,60 +1,65 @@
 /*
-* QEMU INTEL 82574 GbE NIC emulation
-*
-* Software developer's manuals:
-* http://www.intel.com/content/dam/doc/datasheet/82574l-gbe-controller-datasheet.pdf
-*
-* Copyright (c) 2015 Ravello Systems LTD (http://ravellosystems.com)
-* Developed by Daynix Computing LTD (http://www.daynix.com)
-*
-* Authors:
-* Dmitry Fleytman <dmitry@daynix.com>
-* Leonid Bloch <leonid@daynix.com>
-* Yan Vugenfirer <yan@daynix.com>
-*
-* Based on work done by:
-* Nir Peleg, Tutis Systems Ltd. for Qumranet Inc.
-* Copyright (c) 2008 Qumranet
-* Based on work done by:
-* Copyright (c) 2007 Dan Aloni
-* Copyright (c) 2004 Antony T Curtis
-*
-* This library is free software; you can redistribute it and/or
-* modify it under the terms of the GNU Lesser General Public
-* License as published by the Free Software Foundation; either
-* version 2 of the License, or (at your option) any later version.
-*
-* This library is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-* Lesser General Public License for more details.
-*
-* You should have received a copy of the GNU Lesser General Public
-* License along with this library; if not, see <http://www.gnu.org/licenses/>.
-*/
+ * QEMU INTEL 82574 GbE NIC emulation
+ *
+ * Software developer's manuals:
+ * http://www.intel.com/content/dam/doc/datasheet/82574l-gbe-controller-datasheet.pdf
+ *
+ * Copyright (c) 2015 Ravello Systems LTD (http://ravellosystems.com)
+ * Developed by Daynix Computing LTD (http://www.daynix.com)
+ *
+ * Authors:
+ * Dmitry Fleytman <dmitry@daynix.com>
+ * Leonid Bloch <leonid@daynix.com>
+ * Yan Vugenfirer <yan@daynix.com>
+ *
+ * Based on work done by:
+ * Nir Peleg, Tutis Systems Ltd. for Qumranet Inc.
+ * Copyright (c) 2008 Qumranet
+ * Based on work done by:
+ * Copyright (c) 2007 Dan Aloni
+ * Copyright (c) 2004 Antony T Curtis
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ */
 
 #include "qemu/osdep.h"
 #include "qemu/units.h"
+#include "net/eth.h"
 #include "net/net.h"
 #include "net/tap.h"
 #include "qemu/module.h"
 #include "qemu/range.h"
 #include "sysemu/sysemu.h"
+#include "hw/hw.h"
+#include "hw/net/mii.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 
-#include "e1000_regs.h"
-
+#include "e1000_common.h"
 #include "e1000x_common.h"
 #include "e1000e_core.h"
 
 #include "trace.h"
 #include "qapi/error.h"
+#include "qom/object.h"
 
 #define TYPE_E1000E "e1000e"
-#define E1000E(obj) OBJECT_CHECK(E1000EState, (obj), TYPE_E1000E)
+OBJECT_DECLARE_SIMPLE_TYPE(E1000EState, E1000E)
 
-typedef struct E1000EState {
+struct E1000EState {
     PCIDevice parent_obj;
     NICState *nic;
     NICConf conf;
@@ -75,8 +80,9 @@ typedef struct E1000EState {
     bool disable_vnet;
 
     E1000ECore core;
-
-} E1000EState;
+    bool init_vet;
+    bool timadj;
+};
 
 #define E1000E_MMIO_IDX     0
 #define E1000E_FLASH_IDX    1
@@ -196,7 +202,7 @@ static const MemoryRegionOps io_ops = {
     },
 };
 
-static int
+static bool
 e1000e_nc_can_receive(NetClientState *nc)
 {
     E1000EState *s = qemu_get_nic_opaque(nc);
@@ -234,9 +240,9 @@ static NetClientInfo net_e1000e_info = {
 };
 
 /*
-* EEPROM (NVM) contents documented in Table 36, section 6.1
-* and generally 6.1.2 Software accessed words.
-*/
+ * EEPROM (NVM) contents documented in Table 36, section 6.1
+ * and generally 6.1.2 Software accessed words.
+ */
 static const uint16_t e1000e_eeprom_template[64] = {
   /*        Address        |    Compat.    | ImVer |   Compat.     */
     0x0000, 0x0000, 0x0000, 0x0420, 0xf746, 0x2010, 0xffff, 0xffff,
@@ -271,25 +277,18 @@ e1000e_unuse_msix_vectors(E1000EState *s, int num_vectors)
     }
 }
 
-static bool
+static void
 e1000e_use_msix_vectors(E1000EState *s, int num_vectors)
 {
     int i;
     for (i = 0; i < num_vectors; i++) {
-        int res = msix_vector_use(PCI_DEVICE(s), i);
-        if (res < 0) {
-            trace_e1000e_msix_use_vector_fail(i, res);
-            e1000e_unuse_msix_vectors(s, i);
-            return false;
-        }
+        msix_vector_use(PCI_DEVICE(s), i);
     }
-    return true;
 }
 
 static void
 e1000e_init_msix(E1000EState *s)
 {
-    PCIDevice *d = PCI_DEVICE(s);
     int res = msix_init(PCI_DEVICE(s), E1000E_MSIX_VEC_NUM,
                         &s->msix,
                         E1000E_MSIX_IDX, E1000E_MSIX_TABLE,
@@ -300,9 +299,7 @@ e1000e_init_msix(E1000EState *s)
     if (res < 0) {
         trace_e1000e_msix_init_fail(res);
     } else {
-        if (!e1000e_use_msix_vectors(s, E1000E_MSIX_VEC_NUM)) {
-            msix_uninit(d, &s->msix, &s->msix);
-        }
+        e1000e_use_msix_vectors(s, E1000E_MSIX_VEC_NUM);
     }
 }
 
@@ -325,7 +322,7 @@ e1000e_init_net_peer(E1000EState *s, PCIDevice *pci_dev, uint8_t *macaddr)
     s->nic = qemu_new_nic(&net_e1000e_info, &s->conf,
         object_get_typename(OBJECT(s)), dev->id, s);
 
-    s->core.max_queue_num = s->conf.peers.queues - 1;
+    s->core.max_queue_num = s->conf.peers.queues ? s->conf.peers.queues - 1 : 0;
 
     trace_e1000e_mac_set_permanent(MAC_ARG(macaddr));
     memcpy(s->core.permanent_mac, macaddr, sizeof(s->core.permanent_mac));
@@ -516,13 +513,17 @@ static void e1000e_pci_uninit(PCIDevice *pci_dev)
     msi_uninit(pci_dev);
 }
 
-static void e1000e_qdev_reset(DeviceState *dev)
+static void e1000e_qdev_reset_hold(Object *obj)
 {
-    E1000EState *s = E1000E(dev);
+    E1000EState *s = E1000E(obj);
 
-    trace_e1000e_cb_qdev_reset();
+    trace_e1000e_cb_qdev_reset_hold();
 
     e1000e_core_reset(&s->core);
+
+    if (s->init_vet) {
+        s->core.mac[VET] = ETH_P_VLAN;
+    }
 }
 
 static int e1000e_pre_save(void *opaque)
@@ -551,6 +552,12 @@ static int e1000e_post_load(void *opaque, int version_id)
     }
 
     return e1000e_core_post_load(&s->core);
+}
+
+static bool e1000e_migrate_timadj(void *opaque, int version_id)
+{
+    E1000EState *s = opaque;
+    return s->timadj;
 }
 
 static const VMStateDescription e1000e_vmstate_tx = {
@@ -630,12 +637,11 @@ static const VMStateDescription e1000e_vmstate = {
         VMSTATE_E1000E_INTR_DELAY_TIMER(core.tidv, E1000EState),
 
         VMSTATE_E1000E_INTR_DELAY_TIMER(core.itr, E1000EState),
-        VMSTATE_BOOL(core.itr_intr_pending, E1000EState),
+        VMSTATE_UNUSED(1),
 
         VMSTATE_E1000E_INTR_DELAY_TIMER_ARRAY(core.eitr, E1000EState,
                                               E1000E_MSIX_VEC_NUM),
-        VMSTATE_BOOL_ARRAY(core.eitr_intr_pending, E1000EState,
-                           E1000E_MSIX_VEC_NUM),
+        VMSTATE_UNUSED(E1000E_MSIX_VEC_NUM),
 
         VMSTATE_UINT32(core.itr_guest_value, E1000EState),
         VMSTATE_UINT32_ARRAY(core.eitr_guest_value, E1000EState,
@@ -645,6 +651,9 @@ static const VMStateDescription e1000e_vmstate = {
 
         VMSTATE_STRUCT_ARRAY(core.tx, E1000EState, E1000E_NUM_QUEUES, 0,
                              e1000e_vmstate_tx, struct e1000e_tx),
+
+        VMSTATE_INT64_TEST(core.timadj, E1000EState, e1000e_migrate_timadj),
+
         VMSTATE_END_OF_LIST()
     }
 };
@@ -662,12 +671,15 @@ static Property e1000e_properties[] = {
                         e1000e_prop_subsys_ven, uint16_t),
     DEFINE_PROP_SIGNED("subsys", E1000EState, subsys, 0,
                         e1000e_prop_subsys, uint16_t),
+    DEFINE_PROP_BOOL("init-vet", E1000EState, init_vet, true),
+    DEFINE_PROP_BOOL("migrate-timadj", E1000EState, timadj, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
 static void e1000e_class_init(ObjectClass *class, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(class);
+    ResettableClass *rc = RESETTABLE_CLASS(class);
     PCIDeviceClass *c = PCI_DEVICE_CLASS(class);
 
     c->realize = e1000e_pci_realize;
@@ -678,10 +690,10 @@ static void e1000e_class_init(ObjectClass *class, void *data)
     c->romfile = "efi-e1000e.rom";
     c->class_id = PCI_CLASS_NETWORK_ETHERNET;
 
+    rc->phases.hold = e1000e_qdev_reset_hold;
+
     dc->desc = "Intel 82574L GbE Controller";
-    dc->reset = e1000e_qdev_reset;
     dc->vmsd = &e1000e_vmstate;
-    dc->props = e1000e_properties;
 
     e1000e_prop_disable_vnet = qdev_prop_uint8;
     e1000e_prop_disable_vnet.description = "Do not use virtio headers, "
@@ -694,6 +706,7 @@ static void e1000e_class_init(ObjectClass *class, void *data)
     e1000e_prop_subsys = qdev_prop_uint16;
     e1000e_prop_subsys.description = "PCI device Subsystem ID";
 
+    device_class_set_props(dc, e1000e_properties);
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
 }
 
@@ -702,7 +715,7 @@ static void e1000e_instance_init(Object *obj)
     E1000EState *s = E1000E(obj);
     device_add_bootindex_property(obj, &s->conf.bootindex,
                                   "bootindex", "/ethernet-phy@0",
-                                  DEVICE(obj), NULL);
+                                  DEVICE(obj));
 }
 
 static const TypeInfo e1000e_info = {

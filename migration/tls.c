@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,43 +22,35 @@
 #include "channel.h"
 #include "migration.h"
 #include "tls.h"
-#include "io/channel-tls.h"
+#include "options.h"
 #include "crypto/tlscreds.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "trace.h"
 
 static QCryptoTLSCreds *
-migration_tls_get_creds(MigrationState *s,
-                        QCryptoTLSCredsEndpoint endpoint,
-                        Error **errp)
+migration_tls_get_creds(QCryptoTLSCredsEndpoint endpoint, Error **errp)
 {
     Object *creds;
+    const char *tls_creds = migrate_tls_creds();
     QCryptoTLSCreds *ret;
 
-    creds = object_resolve_path_component(
-        object_get_objects_root(), s->parameters.tls_creds);
+    creds = object_resolve_path_component(object_get_objects_root(), tls_creds);
     if (!creds) {
-        error_setg(errp, "No TLS credentials with id '%s'",
-                   s->parameters.tls_creds);
+        error_setg(errp, "No TLS credentials with id '%s'", tls_creds);
         return NULL;
     }
     ret = (QCryptoTLSCreds *)object_dynamic_cast(
         creds, TYPE_QCRYPTO_TLS_CREDS);
     if (!ret) {
         error_setg(errp, "Object with id '%s' is not TLS credentials",
-                   s->parameters.tls_creds);
+                   tls_creds);
         return NULL;
     }
-    if (ret->endpoint != endpoint) {
-        error_setg(errp,
-                   "Expected TLS credentials for a %s endpoint",
-                   endpoint == QCRYPTO_TLS_CREDS_ENDPOINT_CLIENT ?
-                   "client" : "server");
+    if (!qcrypto_tls_creds_check_endpoint(ret, endpoint, errp)) {
         return NULL;
     }
 
-    object_ref(OBJECT(ret));
     return ret;
 }
 
@@ -86,16 +78,12 @@ void migration_tls_channel_process_incoming(MigrationState *s,
     QCryptoTLSCreds *creds;
     QIOChannelTLS *tioc;
 
-    creds = migration_tls_get_creds(
-        s, QCRYPTO_TLS_CREDS_ENDPOINT_SERVER, errp);
+    creds = migration_tls_get_creds(QCRYPTO_TLS_CREDS_ENDPOINT_SERVER, errp);
     if (!creds) {
         return;
     }
 
-    tioc = qio_channel_tls_new_server(
-        ioc, creds,
-        s->parameters.tls_authz,
-        errp);
+    tioc = qio_channel_tls_new_server(ioc, creds, migrate_tls_authz(), errp);
     if (!tioc) {
         return;
     }
@@ -126,35 +114,39 @@ static void migration_tls_outgoing_handshake(QIOTask *task,
     object_unref(OBJECT(ioc));
 }
 
+QIOChannelTLS *migration_tls_client_create(QIOChannel *ioc,
+                                           const char *hostname,
+                                           Error **errp)
+{
+    QCryptoTLSCreds *creds;
+
+    creds = migration_tls_get_creds(QCRYPTO_TLS_CREDS_ENDPOINT_CLIENT, errp);
+    if (!creds) {
+        return NULL;
+    }
+
+    const char *tls_hostname = migrate_tls_hostname();
+    if (tls_hostname && *tls_hostname) {
+        hostname = tls_hostname;
+    }
+
+    return qio_channel_tls_new_client(ioc, creds, hostname, errp);
+}
 
 void migration_tls_channel_connect(MigrationState *s,
                                    QIOChannel *ioc,
                                    const char *hostname,
                                    Error **errp)
 {
-    QCryptoTLSCreds *creds;
     QIOChannelTLS *tioc;
 
-    creds = migration_tls_get_creds(
-        s, QCRYPTO_TLS_CREDS_ENDPOINT_CLIENT, errp);
-    if (!creds) {
-        return;
-    }
-
-    if (s->parameters.tls_hostname && *s->parameters.tls_hostname) {
-        hostname = s->parameters.tls_hostname;
-    }
-    if (!hostname) {
-        error_setg(errp, "No hostname available for TLS");
-        return;
-    }
-
-    tioc = qio_channel_tls_new_client(
-        ioc, creds, hostname, errp);
+    tioc = migration_tls_client_create(ioc, hostname, errp);
     if (!tioc) {
         return;
     }
 
+    /* Save hostname into MigrationState for handshake */
+    s->hostname = g_strdup(hostname);
     trace_migration_tls_outgoing_handshake_start(hostname);
     qio_channel_set_name(QIO_CHANNEL(tioc), "migration-tls-outgoing");
     qio_channel_tls_handshake(tioc,
@@ -162,4 +154,13 @@ void migration_tls_channel_connect(MigrationState *s,
                               s,
                               NULL,
                               NULL);
+}
+
+bool migrate_channel_requires_tls_upgrade(QIOChannel *ioc)
+{
+    if (!migrate_tls()) {
+        return false;
+    }
+
+    return !object_dynamic_cast(OBJECT(ioc), TYPE_QIO_CHANNEL_TLS);
 }

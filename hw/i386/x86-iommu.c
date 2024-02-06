@@ -19,8 +19,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "hw/boards.h"
 #include "hw/i386/x86-iommu.h"
+#include "hw/qdev-properties.h"
 #include "hw/i386/pc.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
@@ -63,7 +63,7 @@ void x86_iommu_irq_to_msi_message(X86IOMMUIrq *irq, MSIMessage *msg_out)
     msg.redir_hint = irq->redir_hint;
     msg.dest = irq->dest;
     msg.__addr_hi = irq->dest & 0xffffff00;
-    msg.__addr_head = cpu_to_le32(0xfee);
+    msg.__addr_head = 0xfee;
     /* Keep this from original MSI address bits */
     msg.__not_used = irq->msi_addr_last_bits;
 
@@ -77,36 +77,23 @@ void x86_iommu_irq_to_msi_message(X86IOMMUIrq *irq, MSIMessage *msg_out)
     msg_out->data = msg.msi_data;
 }
 
-/* Default X86 IOMMU device */
-static X86IOMMUState *x86_iommu_default = NULL;
-
-static void x86_iommu_set_default(X86IOMMUState *x86_iommu)
-{
-    assert(x86_iommu);
-
-    if (x86_iommu_default) {
-        error_report("QEMU does not support multiple vIOMMUs "
-                     "for x86 yet.");
-        exit(1);
-    }
-
-    x86_iommu_default = x86_iommu;
-}
-
 X86IOMMUState *x86_iommu_get_default(void)
 {
-    return x86_iommu_default;
-}
+    MachineState *ms = MACHINE(qdev_get_machine());
+    PCMachineState *pcms =
+        PC_MACHINE(object_dynamic_cast(OBJECT(ms), TYPE_PC_MACHINE));
 
-IommuType x86_iommu_get_type(void)
-{
-    return x86_iommu_default->type;
+    if (pcms &&
+        object_dynamic_cast(OBJECT(pcms->iommu), TYPE_X86_IOMMU_DEVICE)) {
+        return X86_IOMMU_DEVICE(pcms->iommu);
+    }
+    return NULL;
 }
 
 static void x86_iommu_realize(DeviceState *dev, Error **errp)
 {
     X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(dev);
-    X86IOMMUClass *x86_class = X86_IOMMU_GET_CLASS(dev);
+    X86IOMMUClass *x86_class = X86_IOMMU_DEVICE_GET_CLASS(dev);
     MachineState *ms = MACHINE(qdev_get_machine());
     MachineClass *mc = MACHINE_GET_CLASS(ms);
     PCMachineState *pcms =
@@ -136,8 +123,6 @@ static void x86_iommu_realize(DeviceState *dev, Error **errp)
     if (x86_class->realize) {
         x86_class->realize(dev, errp);
     }
-
-    x86_iommu_set_default(X86_IOMMU_DEVICE(dev));
 }
 
 static Property x86_iommu_properties[] = {
@@ -152,7 +137,7 @@ static void x86_iommu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->realize = x86_iommu_realize;
-    dc->props = x86_iommu_properties;
+    device_class_set_props(dc, x86_iommu_properties);
 }
 
 bool x86_iommu_ir_supported(X86IOMMUState *s)

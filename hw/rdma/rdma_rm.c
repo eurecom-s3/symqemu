@@ -23,62 +23,58 @@
 #include "rdma_backend.h"
 #include "rdma_rm.h"
 
-/* Page directory and page tables */
-#define PG_DIR_SZ { TARGET_PAGE_SIZE / sizeof(__u64) }
-#define PG_TBL_SZ { TARGET_PAGE_SIZE / sizeof(__u64) }
-
-void rdma_dump_device_counters(Monitor *mon, RdmaDeviceResources *dev_res)
+void rdma_format_device_counters(RdmaDeviceResources *dev_res, GString *buf)
 {
-    monitor_printf(mon, "\ttx               : %" PRId64 "\n",
-                   dev_res->stats.tx);
-    monitor_printf(mon, "\ttx_len           : %" PRId64 "\n",
-                   dev_res->stats.tx_len);
-    monitor_printf(mon, "\ttx_err           : %" PRId64 "\n",
-                   dev_res->stats.tx_err);
-    monitor_printf(mon, "\trx_bufs          : %" PRId64 "\n",
-                   dev_res->stats.rx_bufs);
-    monitor_printf(mon, "\trx_srq           : %" PRId64 "\n",
-                   dev_res->stats.rx_srq);
-    monitor_printf(mon, "\trx_bufs_len      : %" PRId64 "\n",
-                   dev_res->stats.rx_bufs_len);
-    monitor_printf(mon, "\trx_bufs_err      : %" PRId64 "\n",
-                   dev_res->stats.rx_bufs_err);
-    monitor_printf(mon, "\tcomps            : %" PRId64 "\n",
-                   dev_res->stats.completions);
-    monitor_printf(mon, "\tmissing_comps    : %" PRId32 "\n",
-                   dev_res->stats.missing_cqe);
-    monitor_printf(mon, "\tpoll_cq (bk)     : %" PRId64 "\n",
-                   dev_res->stats.poll_cq_from_bk);
-    monitor_printf(mon, "\tpoll_cq_ppoll_to : %" PRId64 "\n",
-                   dev_res->stats.poll_cq_ppoll_to);
-    monitor_printf(mon, "\tpoll_cq (fe)     : %" PRId64 "\n",
-                   dev_res->stats.poll_cq_from_guest);
-    monitor_printf(mon, "\tpoll_cq_empty    : %" PRId64 "\n",
-                   dev_res->stats.poll_cq_from_guest_empty);
-    monitor_printf(mon, "\tmad_tx           : %" PRId64 "\n",
-                   dev_res->stats.mad_tx);
-    monitor_printf(mon, "\tmad_tx_err       : %" PRId64 "\n",
-                   dev_res->stats.mad_tx_err);
-    monitor_printf(mon, "\tmad_rx           : %" PRId64 "\n",
-                   dev_res->stats.mad_rx);
-    monitor_printf(mon, "\tmad_rx_err       : %" PRId64 "\n",
-                   dev_res->stats.mad_rx_err);
-    monitor_printf(mon, "\tmad_rx_bufs      : %" PRId64 "\n",
-                   dev_res->stats.mad_rx_bufs);
-    monitor_printf(mon, "\tmad_rx_bufs_err  : %" PRId64 "\n",
-                   dev_res->stats.mad_rx_bufs_err);
-    monitor_printf(mon, "\tPDs              : %" PRId32 "\n",
-                   dev_res->pd_tbl.used);
-    monitor_printf(mon, "\tMRs              : %" PRId32 "\n",
-                   dev_res->mr_tbl.used);
-    monitor_printf(mon, "\tUCs              : %" PRId32 "\n",
-                   dev_res->uc_tbl.used);
-    monitor_printf(mon, "\tQPs              : %" PRId32 "\n",
-                   dev_res->qp_tbl.used);
-    monitor_printf(mon, "\tCQs              : %" PRId32 "\n",
-                   dev_res->cq_tbl.used);
-    monitor_printf(mon, "\tCEQ_CTXs         : %" PRId32 "\n",
-                   dev_res->cqe_ctx_tbl.used);
+    g_string_append_printf(buf, "\ttx               : %" PRId64 "\n",
+                           dev_res->stats.tx);
+    g_string_append_printf(buf, "\ttx_len           : %" PRId64 "\n",
+                           dev_res->stats.tx_len);
+    g_string_append_printf(buf, "\ttx_err           : %" PRId64 "\n",
+                           dev_res->stats.tx_err);
+    g_string_append_printf(buf, "\trx_bufs          : %" PRId64 "\n",
+                           dev_res->stats.rx_bufs);
+    g_string_append_printf(buf, "\trx_srq           : %" PRId64 "\n",
+                           dev_res->stats.rx_srq);
+    g_string_append_printf(buf, "\trx_bufs_len      : %" PRId64 "\n",
+                           dev_res->stats.rx_bufs_len);
+    g_string_append_printf(buf, "\trx_bufs_err      : %" PRId64 "\n",
+                           dev_res->stats.rx_bufs_err);
+    g_string_append_printf(buf, "\tcomps            : %" PRId64 "\n",
+                           dev_res->stats.completions);
+    g_string_append_printf(buf, "\tmissing_comps    : %" PRId32 "\n",
+                           dev_res->stats.missing_cqe);
+    g_string_append_printf(buf, "\tpoll_cq (bk)     : %" PRId64 "\n",
+                           dev_res->stats.poll_cq_from_bk);
+    g_string_append_printf(buf, "\tpoll_cq_ppoll_to : %" PRId64 "\n",
+                           dev_res->stats.poll_cq_ppoll_to);
+    g_string_append_printf(buf, "\tpoll_cq (fe)     : %" PRId64 "\n",
+                           dev_res->stats.poll_cq_from_guest);
+    g_string_append_printf(buf, "\tpoll_cq_empty    : %" PRId64 "\n",
+                           dev_res->stats.poll_cq_from_guest_empty);
+    g_string_append_printf(buf, "\tmad_tx           : %" PRId64 "\n",
+                           dev_res->stats.mad_tx);
+    g_string_append_printf(buf, "\tmad_tx_err       : %" PRId64 "\n",
+                           dev_res->stats.mad_tx_err);
+    g_string_append_printf(buf, "\tmad_rx           : %" PRId64 "\n",
+                           dev_res->stats.mad_rx);
+    g_string_append_printf(buf, "\tmad_rx_err       : %" PRId64 "\n",
+                           dev_res->stats.mad_rx_err);
+    g_string_append_printf(buf, "\tmad_rx_bufs      : %" PRId64 "\n",
+                           dev_res->stats.mad_rx_bufs);
+    g_string_append_printf(buf, "\tmad_rx_bufs_err  : %" PRId64 "\n",
+                           dev_res->stats.mad_rx_bufs_err);
+    g_string_append_printf(buf, "\tPDs              : %" PRId32 "\n",
+                           dev_res->pd_tbl.used);
+    g_string_append_printf(buf, "\tMRs              : %" PRId32 "\n",
+                           dev_res->mr_tbl.used);
+    g_string_append_printf(buf, "\tUCs              : %" PRId32 "\n",
+                           dev_res->uc_tbl.used);
+    g_string_append_printf(buf, "\tQPs              : %" PRId32 "\n",
+                           dev_res->qp_tbl.used);
+    g_string_append_printf(buf, "\tCQs              : %" PRId32 "\n",
+                           dev_res->cq_tbl.used);
+    g_string_append_printf(buf, "\tCEQ_CTXs         : %" PRId32 "\n",
+                           dev_res->cqe_ctx_tbl.used);
 }
 
 static inline void res_tbl_init(const char *name, RdmaRmResTbl *tbl,
@@ -147,14 +143,13 @@ static inline void rdma_res_tbl_dealloc(RdmaRmResTbl *tbl, uint32_t handle)
 {
     trace_rdma_res_tbl_dealloc(tbl->name, handle);
 
-    qemu_mutex_lock(&tbl->lock);
+    QEMU_LOCK_GUARD(&tbl->lock);
 
     if (handle < tbl->tbl_sz) {
         clear_bit(handle, tbl->bitmap);
         tbl->used--;
     }
 
-    qemu_mutex_unlock(&tbl->lock);
 }
 
 int rdma_rm_alloc_pd(RdmaDeviceResources *dev_res, RdmaBackendDev *backend_dev,
@@ -228,15 +223,19 @@ int rdma_rm_alloc_mr(RdmaDeviceResources *dev_res, uint32_t pd_handle,
         mr->virt += (mr->start & (TARGET_PAGE_SIZE - 1));
 
         ret = rdma_backend_create_mr(&mr->backend_mr, &pd->backend_pd, mr->virt,
-                                     mr->length, access_flags);
+                                     mr->length, guest_start, access_flags);
         if (ret) {
             ret = -EIO;
             goto out_dealloc_mr;
         }
+#ifdef LEGACY_RDMA_REG_MR
+        /* We keep mr_handle in lkey so send and recv get get mr ptr */
+        *lkey = *mr_handle;
+#else
+        *lkey = rdma_backend_mr_lkey(&mr->backend_mr);
+#endif
     }
 
-    /* We keep mr_handle in lkey so send and recv get get mr ptr */
-    *lkey = *mr_handle;
     *rkey = -1;
 
     mr->pd_handle = pd_handle;
@@ -787,7 +786,7 @@ int rdma_rm_init(RdmaDeviceResources *dev_res, struct ibv_device_attr *dev_attr)
     qemu_mutex_init(&dev_res->lock);
 
     memset(&dev_res->stats, 0, sizeof(dev_res->stats));
-    atomic_set(&dev_res->stats.missing_cqe, 0);
+    qatomic_set(&dev_res->stats.missing_cqe, 0);
 
     return 0;
 }

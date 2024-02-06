@@ -23,17 +23,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "exec/cpu-common.h"
 #include "tcg/tcg.h"
-
-#if defined(CONFIG_TCG_INTERPRETER)
-uintptr_t tci_tb_ptr;
-#endif
 
 TCGOpDef tcg_op_defs[] = {
 #define DEF(s, oargs, iargs, cargs, flags) \
-         { #s, oargs, iargs, cargs, iargs + oargs + cargs, flags },
-#include "tcg-opc.h"
+         { #s, oargs, iargs, cargs, iargs + oargs + cargs, flags, NULL },
+#include "tcg/tcg-opc.h"
 #undef DEF
 };
 const size_t tcg_op_defs_max = ARRAY_SIZE(tcg_op_defs);

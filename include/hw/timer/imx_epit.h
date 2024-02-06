@@ -32,6 +32,7 @@
 #include "hw/sysbus.h"
 #include "hw/ptimer.h"
 #include "hw/misc/imx_ccm.h"
+#include "qom/object.h"
 
 /*
  * EPIT: Enhanced periodic interrupt timer
@@ -42,7 +43,7 @@
 #define CR_OCIEN    (1 << 2)
 #define CR_RLD      (1 << 3)
 #define CR_PRESCALE_SHIFT (4)
-#define CR_PRESCALE_MASK  (0xfff)
+#define CR_PRESCALE_BITS  (12)
 #define CR_SWR      (1 << 16)
 #define CR_IOVW     (1 << 17)
 #define CR_DBGEN    (1 << 18)
@@ -50,14 +51,16 @@
 #define CR_DOZEN    (1 << 20)
 #define CR_STOPEN   (1 << 21)
 #define CR_CLKSRC_SHIFT (24)
-#define CR_CLKSRC_MASK  (0x3 << CR_CLKSRC_SHIFT)
+#define CR_CLKSRC_BITS  (2)
+
+#define SR_OCIF     (1 << 0)
 
 #define EPIT_TIMER_MAX  0XFFFFFFFFUL
 
 #define TYPE_IMX_EPIT "imx.epit"
-#define IMX_EPIT(obj) OBJECT_CHECK(IMXEPITState, (obj), TYPE_IMX_EPIT)
+OBJECT_DECLARE_SIMPLE_TYPE(IMXEPITState, IMX_EPIT)
 
-typedef struct IMXEPITState{
+struct IMXEPITState {
     /*< private >*/
     SysBusDevice parent_obj;
 
@@ -71,10 +74,8 @@ typedef struct IMXEPITState{
     uint32_t sr;
     uint32_t lr;
     uint32_t cmp;
-    uint32_t cnt;
 
-    uint32_t freq;
     qemu_irq irq;
-} IMXEPITState;
+};
 
 #endif /* IMX_EPIT_H */

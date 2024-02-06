@@ -6,7 +6,7 @@
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
- * License version 2 as published by the Free Software Foundation.
+ * License version 2.1 as published by the Free Software Foundation.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,11 +17,12 @@
  * License along with this library; if not, see
  * <http://www.gnu.org/licenses/>.
  */
+
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/boards.h"
 #include "hw/i2c/pm_smbus.h"
 #include "hw/i2c/smbus_master.h"
+#include "migration/vmstate.h"
 
 #define SMBHSTSTS       0x00
 #define SMBHSTCNT       0x02
@@ -127,14 +128,14 @@ static void smb_transaction(PMSMBus *s)
          * So at least Linux may or may not set the read bit here.
          * So just ignore the read bit for this command.
          */
-        if (i2c_start_transfer(bus, addr, 0)) {
+        if (i2c_start_send(bus, addr)) {
             goto error;
         }
         ret = i2c_send(bus, s->smb_data1);
         if (ret) {
             goto error;
         }
-        if (i2c_start_transfer(bus, addr, 1)) {
+        if (i2c_start_recv(bus, addr)) {
             goto error;
         }
         s->in_i2c_block_read = true;
@@ -183,7 +184,6 @@ static void smb_transaction(PMSMBus *s)
                 s->smb_stat |= STS_HOST_BUSY | STS_BYTE_DONE;
                 s->smb_data[0] = s->smb_blkdata;
                 s->smb_index = 0;
-                ret = 0;
             }
             goto out;
         }

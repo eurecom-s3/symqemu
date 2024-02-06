@@ -15,8 +15,11 @@
 #include "qapi/error.h"
 #include "trace.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/registerfields.h"
+#include "hw/irq.h"
 #include "hw/misc/tz-mpc.h"
+#include "hw/qdev-properties.h"
 
 /* Our IOMMU has two IOMMU indexes, one for secure transactions and one for
  * non-secure transactions.
@@ -79,8 +82,10 @@ static void tz_mpc_iommu_notify(TZMPC *s, uint32_t lutidx,
     /* Called when the LUT word at lutidx has changed from oldlut to newlut;
      * must call the IOMMU notifiers for the changed blocks.
      */
-    IOMMUTLBEntry entry = {
-        .addr_mask = s->blocksize - 1,
+    IOMMUTLBEvent event = {
+        .entry = {
+            .addr_mask = s->blocksize - 1,
+        }
     };
     hwaddr addr = lutidx * s->blocksize * 32;
     int i;
@@ -97,26 +102,28 @@ static void tz_mpc_iommu_notify(TZMPC *s, uint32_t lutidx,
         block_is_ns = newlut & (1 << i);
 
         trace_tz_mpc_iommu_notify(addr);
-        entry.iova = addr;
-        entry.translated_addr = addr;
+        event.entry.iova = addr;
+        event.entry.translated_addr = addr;
 
-        entry.perm = IOMMU_NONE;
-        memory_region_notify_iommu(&s->upstream, IOMMU_IDX_S, entry);
-        memory_region_notify_iommu(&s->upstream, IOMMU_IDX_NS, entry);
+        event.type = IOMMU_NOTIFIER_UNMAP;
+        event.entry.perm = IOMMU_NONE;
+        memory_region_notify_iommu(&s->upstream, IOMMU_IDX_S, event);
+        memory_region_notify_iommu(&s->upstream, IOMMU_IDX_NS, event);
 
-        entry.perm = IOMMU_RW;
+        event.type = IOMMU_NOTIFIER_MAP;
+        event.entry.perm = IOMMU_RW;
         if (block_is_ns) {
-            entry.target_as = &s->blocked_io_as;
+            event.entry.target_as = &s->blocked_io_as;
         } else {
-            entry.target_as = &s->downstream_as;
+            event.entry.target_as = &s->downstream_as;
         }
-        memory_region_notify_iommu(&s->upstream, IOMMU_IDX_S, entry);
+        memory_region_notify_iommu(&s->upstream, IOMMU_IDX_S, event);
         if (block_is_ns) {
-            entry.target_as = &s->downstream_as;
+            event.entry.target_as = &s->downstream_as;
         } else {
-            entry.target_as = &s->blocked_io_as;
+            event.entry.target_as = &s->blocked_io_as;
         }
-        memory_region_notify_iommu(&s->upstream, IOMMU_IDX_NS, entry);
+        memory_region_notify_iommu(&s->upstream, IOMMU_IDX_NS, event);
     }
 }
 
@@ -593,7 +600,7 @@ static void tz_mpc_class_init(ObjectClass *klass, void *data)
     dc->realize = tz_mpc_realize;
     dc->vmsd = &tz_mpc_vmstate;
     dc->reset = tz_mpc_reset;
-    dc->props = tz_mpc_properties;
+    device_class_set_props(dc, tz_mpc_properties);
 }
 
 static const TypeInfo tz_mpc_info = {

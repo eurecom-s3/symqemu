@@ -9,27 +9,29 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/qdev-properties.h"
 #include "hw/virtio/virtio.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "virtio-ccw.h"
+#include "hw/virtio/virtio-crypto.h"
+
+#define TYPE_VIRTIO_CRYPTO_CCW "virtio-crypto-ccw"
+OBJECT_DECLARE_SIMPLE_TYPE(VirtIOCryptoCcw, VIRTIO_CRYPTO_CCW)
+
+struct VirtIOCryptoCcw {
+    VirtioCcwDevice parent_obj;
+    VirtIOCrypto vdev;
+};
 
 static void virtio_ccw_crypto_realize(VirtioCcwDevice *ccw_dev, Error **errp)
 {
     VirtIOCryptoCcw *dev = VIRTIO_CRYPTO_CCW(ccw_dev);
     DeviceState *vdev = DEVICE(&dev->vdev);
-    Error *err = NULL;
 
-    qdev_set_parent_bus(vdev, BUS(&ccw_dev->bus));
-    object_property_set_bool(OBJECT(vdev), true, "realized", &err);
-    if (err) {
-        error_propagate(errp, err);
+    if (!qdev_realize(vdev, BUS(&ccw_dev->bus), errp)) {
         return;
     }
-
-    object_property_set_link(OBJECT(vdev),
-                             OBJECT(dev->vdev.conf.cryptodev), "cryptodev",
-                             NULL);
 }
 
 static void virtio_ccw_crypto_instance_init(Object *obj)
@@ -56,7 +58,7 @@ static void virtio_ccw_crypto_class_init(ObjectClass *klass, void *data)
     VirtIOCCWDeviceClass *k = VIRTIO_CCW_DEVICE_CLASS(klass);
 
     k->realize = virtio_ccw_crypto_realize;
-    dc->props = virtio_ccw_crypto_properties;
+    device_class_set_props(dc, virtio_ccw_crypto_properties);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 

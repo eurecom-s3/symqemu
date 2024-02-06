@@ -9,6 +9,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
+#include "hw/irq.h"
 #include "hw/ssi/pl022.h"
 #include "hw/ssi/ssi.h"
 #include "qemu/log.h"
@@ -172,7 +174,7 @@ static void pl022_write(void *opaque, hwaddr offset,
         s->cr1 = value;
         if ((s->cr1 & (PL022_CR1_MS | PL022_CR1_SSE))
                    == (PL022_CR1_MS | PL022_CR1_SSE)) {
-            BADF("SPI slave mode not implemented\n");
+            BADF("SPI peripheral mode not implemented\n");
         }
         pl022_xfer(s);
         break;

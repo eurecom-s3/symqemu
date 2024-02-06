@@ -16,6 +16,17 @@ config I8257
 
 config ZYNQ_DEVCFG
     bool
+    select REGISTER
+
+config XLNX_ZDMA
+    bool
 
 config STP2000
     bool
+
+config SIFIVE_PDMA
+    bool
+
+config XLNX_CSU_DMA
+    bool
+    select REGISTER

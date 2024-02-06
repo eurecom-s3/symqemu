@@ -25,20 +25,31 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
-#include "hw/input/adb.h"
+#include "hw/irq.h"
 #include "hw/misc/mos6522.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
+#include "monitor/monitor.h"
+#include "monitor/hmp.h"
+#include "qapi/type-helpers.h"
 #include "qemu/timer.h"
-#include "sysemu/sysemu.h"
 #include "qemu/cutils.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "trace.h"
 
+
+static const char *mos6522_reg_names[MOS6522_NUM_REGS] = {
+    "ORB", "ORA", "DDRB", "DDRA", "T1CL", "T1CH", "T1LL", "T1LH",
+    "T2CL", "T2CH", "SR", "ACR", "PCR", "IFR", "IER", "ANH"
+};
+
 /* XXX: implement all timer modes */
 
-static void mos6522_timer_update(MOS6522State *s, MOS6522Timer *ti,
-                                 int64_t current_time);
+static void mos6522_timer1_update(MOS6522State *s, MOS6522Timer *ti,
+                                  int64_t current_time);
+static void mos6522_timer2_update(MOS6522State *s, MOS6522Timer *ti,
+                                  int64_t current_time);
 
 static void mos6522_update_irq(MOS6522State *s)
 {
@@ -49,9 +60,76 @@ static void mos6522_update_irq(MOS6522State *s)
     }
 }
 
+static void mos6522_set_irq(void *opaque, int n, int level)
+{
+    MOS6522State *s = MOS6522(opaque);
+    int last_level = !!(s->last_irq_levels & (1 << n));
+    uint8_t last_ifr = s->ifr;
+    bool positive_edge = true;
+    int ctrl;
+
+    /*
+     * SR_INT is managed by mos6522 instances and cleared upon SR
+     * read. It is only the external CA1/2 and CB1/2 lines that
+     * are edge-triggered and latched in IFR
+     */
+    if (n != SR_INT_BIT && level == last_level) {
+        return;
+    }
+
+    /* Detect negative edge trigger */
+    if (last_level == 1 && level == 0) {
+        positive_edge = false;
+    }
+
+    switch (n) {
+    case CA2_INT_BIT:
+        ctrl = (s->pcr & CA2_CTRL_MASK) >> CA2_CTRL_SHIFT;
+        if ((positive_edge && (ctrl & C2_POS)) ||
+             (!positive_edge && !(ctrl & C2_POS))) {
+            s->ifr |= 1 << n;
+        }
+        break;
+    case CA1_INT_BIT:
+        ctrl = (s->pcr & CA1_CTRL_MASK) >> CA1_CTRL_SHIFT;
+        if ((positive_edge && (ctrl & C1_POS)) ||
+             (!positive_edge && !(ctrl & C1_POS))) {
+            s->ifr |= 1 << n;
+        }
+        break;
+    case SR_INT_BIT:
+        s->ifr |= 1 << n;
+        break;
+    case CB2_INT_BIT:
+        ctrl = (s->pcr & CB2_CTRL_MASK) >> CB2_CTRL_SHIFT;
+        if ((positive_edge && (ctrl & C2_POS)) ||
+             (!positive_edge && !(ctrl & C2_POS))) {
+            s->ifr |= 1 << n;
+        }
+        break;
+    case CB1_INT_BIT:
+        ctrl = (s->pcr & CB1_CTRL_MASK) >> CB1_CTRL_SHIFT;
+        if ((positive_edge && (ctrl & C1_POS)) ||
+             (!positive_edge && !(ctrl & C1_POS))) {
+            s->ifr |= 1 << n;
+        }
+        break;
+    }
+
+    if (s->ifr != last_ifr) {
+        mos6522_update_irq(s);
+    }
+
+    if (level) {
+        s->last_irq_levels |= 1 << n;
+    } else {
+        s->last_irq_levels &= ~(1 << n);
+    }
+}
+
 static uint64_t get_counter_value(MOS6522State *s, MOS6522Timer *ti)
 {
-    MOS6522DeviceClass *mdc = MOS6522_DEVICE_GET_CLASS(s);
+    MOS6522DeviceClass *mdc = MOS6522_GET_CLASS(s);
 
     if (ti->index == 0) {
         return mdc->get_timer1_counter_value(s, ti);
@@ -62,7 +140,7 @@ static uint64_t get_counter_value(MOS6522State *s, MOS6522Timer *ti)
 
 static uint64_t get_load_time(MOS6522State *s, MOS6522Timer *ti)
 {
-    MOS6522DeviceClass *mdc = MOS6522_DEVICE_GET_CLASS(s);
+    MOS6522DeviceClass *mdc = MOS6522_GET_CLASS(s);
 
     if (ti->index == 0) {
         return mdc->get_timer1_load_time(s, ti);
@@ -97,7 +175,11 @@ static void set_counter(MOS6522State *s, MOS6522Timer *ti, unsigned int val)
     trace_mos6522_set_counter(1 + ti->index, val);
     ti->load_time = get_load_time(s, ti);
     ti->counter_value = val;
-    mos6522_timer_update(s, ti, ti->load_time);
+    if (ti->index == 0) {
+        mos6522_timer1_update(s, ti, ti->load_time);
+    } else {
+        mos6522_timer2_update(s, ti, ti->load_time);
+    }
 }
 
 static int64_t get_next_irq_time(MOS6522State *s, MOS6522Timer *ti,
@@ -105,6 +187,10 @@ static int64_t get_next_irq_time(MOS6522State *s, MOS6522Timer *ti,
 {
     int64_t d, next_time;
     unsigned int counter;
+
+    if (ti->frequency == 0) {
+        return INT64_MAX;
+    }
 
     /* current counter value */
     d = muldiv64(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - ti->load_time,
@@ -129,22 +215,37 @@ static int64_t get_next_irq_time(MOS6522State *s, MOS6522Timer *ti,
     trace_mos6522_get_next_irq_time(ti->latch, d, next_time - d);
     next_time = muldiv64(next_time, NANOSECONDS_PER_SECOND, ti->frequency) +
                          ti->load_time;
+
     if (next_time <= current_time) {
         next_time = current_time + 1;
     }
     return next_time;
 }
 
-static void mos6522_timer_update(MOS6522State *s, MOS6522Timer *ti,
+static void mos6522_timer1_update(MOS6522State *s, MOS6522Timer *ti,
                                  int64_t current_time)
 {
     if (!ti->timer) {
         return;
     }
-    if (ti->index == 0 && (s->acr & T1MODE) != T1MODE_CONT) {
+    ti->next_irq_time = get_next_irq_time(s, ti, current_time);
+    if ((s->ier & T1_INT) == 0 || (s->acr & T1MODE) != T1MODE_CONT) {
         timer_del(ti->timer);
     } else {
-        ti->next_irq_time = get_next_irq_time(s, ti, current_time);
+        timer_mod(ti->timer, ti->next_irq_time);
+    }
+}
+
+static void mos6522_timer2_update(MOS6522State *s, MOS6522Timer *ti,
+                                 int64_t current_time)
+{
+    if (!ti->timer) {
+        return;
+    }
+    ti->next_irq_time = get_next_irq_time(s, ti, current_time);
+    if ((s->ier & T2_INT) == 0) {
+        timer_del(ti->timer);
+    } else {
         timer_mod(ti->timer, ti->next_irq_time);
     }
 }
@@ -154,7 +255,7 @@ static void mos6522_timer1(void *opaque)
     MOS6522State *s = opaque;
     MOS6522Timer *ti = &s->timers[0];
 
-    mos6522_timer_update(s, ti, ti->next_irq_time);
+    mos6522_timer1_update(s, ti, ti->next_irq_time);
     s->ifr |= T1_INT;
     mos6522_update_irq(s);
 }
@@ -164,15 +265,8 @@ static void mos6522_timer2(void *opaque)
     MOS6522State *s = opaque;
     MOS6522Timer *ti = &s->timers[1];
 
-    mos6522_timer_update(s, ti, ti->next_irq_time);
+    mos6522_timer2_update(s, ti, ti->next_irq_time);
     s->ifr |= T2_INT;
-    mos6522_update_irq(s);
-}
-
-static void mos6522_set_sr_int(MOS6522State *s)
-{
-    trace_mos6522_set_sr_int();
-    s->ifr |= SR_INT;
     mos6522_update_irq(s);
 }
 
@@ -203,13 +297,38 @@ uint64_t mos6522_read(void *opaque, hwaddr addr, unsigned size)
 {
     MOS6522State *s = opaque;
     uint32_t val;
+    int ctrl;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
+    if (now >= s->timers[0].next_irq_time) {
+        mos6522_timer1_update(s, &s->timers[0], now);
+        s->ifr |= T1_INT;
+    }
+    if (now >= s->timers[1].next_irq_time) {
+        mos6522_timer2_update(s, &s->timers[1], now);
+        s->ifr |= T2_INT;
+    }
     switch (addr) {
     case VIA_REG_B:
         val = s->b;
+        ctrl = (s->pcr & CB2_CTRL_MASK) >> CB2_CTRL_SHIFT;
+        if (!(ctrl & C2_IND)) {
+            s->ifr &= ~CB2_INT;
+        }
+        s->ifr &= ~CB1_INT;
+        mos6522_update_irq(s);
         break;
     case VIA_REG_A:
+       qemu_log_mask(LOG_UNIMP, "Read access to register A with handshake");
+       /* fall through */
+    case VIA_REG_ANH:
         val = s->a;
+        ctrl = (s->pcr & CA2_CTRL_MASK) >> CA2_CTRL_SHIFT;
+        if (!(ctrl & C2_IND)) {
+            s->ifr &= ~CA2_INT;
+        }
+        s->ifr &= ~CA1_INT;
+        mos6522_update_irq(s);
         break;
     case VIA_REG_DIRB:
         val = s->dirb;
@@ -262,13 +381,11 @@ uint64_t mos6522_read(void *opaque, hwaddr addr, unsigned size)
         val = s->ier | 0x80;
         break;
     default:
-    case VIA_REG_ANH:
-        val = s->anh;
-        break;
+        g_assert_not_reached();
     }
 
     if (addr != VIA_REG_IFR || val != 0) {
-        trace_mos6522_read(addr, val);
+        trace_mos6522_read(addr, mos6522_reg_names[addr], val);
     }
 
     return val;
@@ -277,18 +394,34 @@ uint64_t mos6522_read(void *opaque, hwaddr addr, unsigned size)
 void mos6522_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 {
     MOS6522State *s = opaque;
-    MOS6522DeviceClass *mdc = MOS6522_DEVICE_GET_CLASS(s);
+    MOS6522DeviceClass *mdc = MOS6522_GET_CLASS(s);
+    int ctrl;
 
-    trace_mos6522_write(addr, val);
+    trace_mos6522_write(addr, mos6522_reg_names[addr], val);
 
     switch (addr) {
     case VIA_REG_B:
         s->b = (s->b & ~s->dirb) | (val & s->dirb);
         mdc->portB_write(s);
+        ctrl = (s->pcr & CB2_CTRL_MASK) >> CB2_CTRL_SHIFT;
+        if (!(ctrl & C2_IND)) {
+            s->ifr &= ~CB2_INT;
+        }
+        s->ifr &= ~CB1_INT;
+        mos6522_update_irq(s);
         break;
     case VIA_REG_A:
+       qemu_log_mask(LOG_UNIMP, "Write access to register A with handshake");
+       /* fall through */
+    case VIA_REG_ANH:
         s->a = (s->a & ~s->dira) | (val & s->dira);
         mdc->portA_write(s);
+        ctrl = (s->pcr & CA2_CTRL_MASK) >> CA2_CTRL_SHIFT;
+        if (!(ctrl & C2_IND)) {
+            s->ifr &= ~CA2_INT;
+        }
+        s->ifr &= ~CA1_INT;
+        mos6522_update_irq(s);
         break;
     case VIA_REG_DIRB:
         s->dirb = val;
@@ -298,8 +431,8 @@ void mos6522_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
         break;
     case VIA_REG_T1CL:
         s->timers[0].latch = (s->timers[0].latch & 0xff00) | val;
-        mos6522_timer_update(s, &s->timers[0],
-                             qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+        mos6522_timer1_update(s, &s->timers[0],
+                              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
         break;
     case VIA_REG_T1CH:
         s->timers[0].latch = (s->timers[0].latch & 0xff) | (val << 8);
@@ -308,14 +441,14 @@ void mos6522_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
         break;
     case VIA_REG_T1LL:
         s->timers[0].latch = (s->timers[0].latch & 0xff00) | val;
-        mos6522_timer_update(s, &s->timers[0],
-                             qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+        mos6522_timer1_update(s, &s->timers[0],
+                              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
         break;
     case VIA_REG_T1LH:
         s->timers[0].latch = (s->timers[0].latch & 0xff) | (val << 8);
         s->ifr &= ~T1_INT;
-        mos6522_timer_update(s, &s->timers[0],
-                             qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+        mos6522_timer1_update(s, &s->timers[0],
+                              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
         break;
     case VIA_REG_T2CL:
         s->timers[1].latch = (s->timers[1].latch & 0xff00) | val;
@@ -333,8 +466,8 @@ void mos6522_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
         break;
     case VIA_REG_ACR:
         s->acr = val;
-        mos6522_timer_update(s, &s->timers[0],
-                             qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+        mos6522_timer1_update(s, &s->timers[0],
+                              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
         break;
     case VIA_REG_PCR:
         s->pcr = val;
@@ -353,12 +486,115 @@ void mos6522_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
             s->ier &= ~val;
         }
         mos6522_update_irq(s);
+        /* if IER is modified starts needed timers */
+        mos6522_timer1_update(s, &s->timers[0],
+                              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+        mos6522_timer2_update(s, &s->timers[1],
+                              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
         break;
     default:
-    case VIA_REG_ANH:
-        s->anh = val;
-        break;
+        g_assert_not_reached();
     }
+}
+
+static int qmp_x_query_via_foreach(Object *obj, void *opaque)
+{
+    GString *buf = opaque;
+
+    if (object_dynamic_cast(obj, TYPE_MOS6522)) {
+        MOS6522State *s = MOS6522(obj);
+        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        uint16_t t1counter = get_counter(s, &s->timers[0]);
+        uint16_t t2counter = get_counter(s, &s->timers[1]);
+
+        g_string_append_printf(buf, "%s:\n", object_get_typename(obj));
+
+        g_string_append_printf(buf, "  Registers:\n");
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[0], s->b);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[1], s->a);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[2], s->dirb);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[3], s->dira);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[4], t1counter & 0xff);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[5], t1counter >> 8);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[6],
+                               s->timers[0].latch & 0xff);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[7],
+                               s->timers[0].latch >> 8);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[8], t2counter & 0xff);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[9], t2counter >> 8);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[10], s->sr);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[11], s->acr);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[12], s->pcr);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[13], s->ifr);
+        g_string_append_printf(buf, "    %-*s:    0x%x\n", 4,
+                               mos6522_reg_names[14], s->ier);
+
+        g_string_append_printf(buf, "  Timers:\n");
+        g_string_append_printf(buf, "    Using current time now(ns)=%"PRId64
+                                    "\n", now);
+        g_string_append_printf(buf, "    T1 freq(hz)=%"PRId64
+                               " mode=%s"
+                               " counter=0x%x"
+                               " latch=0x%x\n"
+                               "       load_time(ns)=%"PRId64
+                               " next_irq_time(ns)=%"PRId64 "\n",
+                               s->timers[0].frequency,
+                               ((s->acr & T1MODE) == T1MODE_CONT) ? "continuous"
+                                                                  : "one-shot",
+                               t1counter,
+                               s->timers[0].latch,
+                               s->timers[0].load_time,
+                               get_next_irq_time(s, &s->timers[0], now));
+        g_string_append_printf(buf, "    T2 freq(hz)=%"PRId64
+                               " mode=%s"
+                               " counter=0x%x"
+                               " latch=0x%x\n"
+                               "       load_time(ns)=%"PRId64
+                               " next_irq_time(ns)=%"PRId64 "\n",
+                               s->timers[1].frequency,
+                               "one-shot",
+                               t2counter,
+                               s->timers[1].latch,
+                               s->timers[1].load_time,
+                               get_next_irq_time(s, &s->timers[1], now));
+    }
+
+    return 0;
+}
+
+static HumanReadableText *qmp_x_query_via(Error **errp)
+{
+    g_autoptr(GString) buf = g_string_new("");
+
+    object_child_foreach_recursive(object_get_root(),
+                                   qmp_x_query_via_foreach, buf);
+
+    return human_readable_text_from_str(buf);
+}
+
+void hmp_info_via(Monitor *mon, const QDict *qdict)
+{
+    Error *err = NULL;
+    g_autoptr(HumanReadableText) info = qmp_x_query_via(&err);
+
+    if (hmp_handle_error(mon, err)) {
+        return;
+    }
+    monitor_puts(mon, info->human_readable_text);
 }
 
 static const MemoryRegionOps mos6522_ops = {
@@ -387,8 +623,8 @@ static const VMStateDescription vmstate_mos6522_timer = {
 
 const VMStateDescription vmstate_mos6522 = {
     .name = "mos6522",
-    .version_id = 0,
-    .minimum_version_id = 0,
+    .version_id = 1,
+    .minimum_version_id = 1,
     .fields = (VMStateField[]) {
         VMSTATE_UINT8(a, MOS6522State),
         VMSTATE_UINT8(b, MOS6522State),
@@ -399,16 +635,16 @@ const VMStateDescription vmstate_mos6522 = {
         VMSTATE_UINT8(pcr, MOS6522State),
         VMSTATE_UINT8(ifr, MOS6522State),
         VMSTATE_UINT8(ier, MOS6522State),
-        VMSTATE_UINT8(anh, MOS6522State),
+        VMSTATE_UINT8(last_irq_levels, MOS6522State),
         VMSTATE_STRUCT_ARRAY(timers, MOS6522State, 2, 0,
                              vmstate_mos6522_timer, MOS6522Timer),
         VMSTATE_END_OF_LIST()
     }
 };
 
-static void mos6522_reset(DeviceState *dev)
+static void mos6522_reset_hold(Object *obj)
 {
-    MOS6522State *s = MOS6522(dev);
+    MOS6522State *s = MOS6522(obj);
 
     s->b = 0;
     s->a = 0;
@@ -420,14 +656,15 @@ static void mos6522_reset(DeviceState *dev)
     s->ifr = 0;
     s->ier = 0;
     /* s->ier = T1_INT | SR_INT; */
-    s->anh = 0;
 
     s->timers[0].frequency = s->frequency;
     s->timers[0].latch = 0xffff;
     set_counter(s, &s->timers[0], 0xffff);
+    timer_del(s->timers[0].timer);
 
     s->timers[1].frequency = s->frequency;
     s->timers[1].latch = 0xffff;
+    timer_del(s->timers[1].timer);
 }
 
 static void mos6522_init(Object *obj)
@@ -436,7 +673,8 @@ static void mos6522_init(Object *obj)
     MOS6522State *s = MOS6522(obj);
     int i;
 
-    memory_region_init_io(&s->mem, obj, &mos6522_ops, s, "mos6522", 0x10);
+    memory_region_init_io(&s->mem, obj, &mos6522_ops, s, "mos6522",
+                          MOS6522_NUM_REGS);
     sysbus_init_mmio(sbd, &s->mem);
     sysbus_init_irq(sbd, &s->irq);
 
@@ -446,6 +684,16 @@ static void mos6522_init(Object *obj)
 
     s->timers[0].timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mos6522_timer1, s);
     s->timers[1].timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mos6522_timer2, s);
+
+    qdev_init_gpio_in(DEVICE(obj), mos6522_set_irq, VIA_NUM_INTS);
+}
+
+static void mos6522_finalize(Object *obj)
+{
+    MOS6522State *s = MOS6522(obj);
+
+    timer_free(s->timers[0].timer);
+    timer_free(s->timers[1].timer);
 }
 
 static Property mos6522_properties[] = {
@@ -456,16 +704,14 @@ static Property mos6522_properties[] = {
 static void mos6522_class_init(ObjectClass *oc, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
-    MOS6522DeviceClass *mdc = MOS6522_DEVICE_CLASS(oc);
+    ResettableClass *rc = RESETTABLE_CLASS(oc);
+    MOS6522DeviceClass *mdc = MOS6522_CLASS(oc);
 
-    dc->reset = mos6522_reset;
+    rc->phases.hold = mos6522_reset_hold;
     dc->vmsd = &vmstate_mos6522;
-    dc->props = mos6522_properties;
-    mdc->parent_reset = dc->reset;
-    mdc->set_sr_int = mos6522_set_sr_int;
+    device_class_set_props(dc, mos6522_properties);
     mdc->portB_write = mos6522_portB_write;
     mdc->portA_write = mos6522_portA_write;
-    mdc->update_irq = mos6522_update_irq;
     mdc->get_timer1_counter_value = mos6522_get_counter_value;
     mdc->get_timer2_counter_value = mos6522_get_counter_value;
     mdc->get_timer1_load_time = mos6522_get_load_time;
@@ -477,6 +723,7 @@ static const TypeInfo mos6522_type_info = {
     .parent = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(MOS6522State),
     .instance_init = mos6522_init,
+    .instance_finalize = mos6522_finalize,
     .abstract = true,
     .class_size = sizeof(MOS6522DeviceClass),
     .class_init = mos6522_class_init,

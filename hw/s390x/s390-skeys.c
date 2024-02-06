@@ -17,7 +17,10 @@
 #include "qapi/qapi-commands-misc-target.h"
 #include "qapi/qmp/qdict.h"
 #include "qemu/error-report.h"
+#include "sysemu/memory_mapping.h"
+#include "exec/address-spaces.h"
 #include "sysemu/kvm.h"
+#include "migration/qemu-file-types.h"
 #include "migration/register.h"
 
 #define S390_SKEYS_BUFFER_SIZE (128 * KiB)  /* Room for 128k storage keys */
@@ -44,10 +47,10 @@ void s390_skeys_init(void)
         obj = object_new(TYPE_QEMU_S390_SKEYS);
     }
     object_property_add_child(qdev_get_machine(), TYPE_S390_SKEYS,
-                              obj, NULL);
+                              obj);
     object_unref(obj);
 
-    qdev_init_nofail(DEVICE(obj));
+    qdev_realize(DEVICE(obj), NULL, &error_fatal);
 }
 
 static void write_keys(FILE *f, uint8_t *keys, uint64_t startgfn,
@@ -79,8 +82,15 @@ void hmp_info_skeys(Monitor *mon, const QDict *qdict)
     int r;
 
     /* Quick check to see if guest is using storage keys*/
-    if (!skeyclass->skeys_enabled(ss)) {
+    if (!skeyclass->skeys_are_enabled(ss)) {
         monitor_printf(mon, "Error: This guest is not using storage keys\n");
+        return;
+    }
+
+    if (!address_space_access_valid(&address_space_memory,
+                                    addr & TARGET_PAGE_MASK, TARGET_PAGE_SIZE,
+                                    false, MEMTXATTRS_UNSPECIFIED)) {
+        monitor_printf(mon, "Error: The given address is not valid\n");
         return;
     }
 
@@ -108,23 +118,23 @@ void qmp_dump_skeys(const char *filename, Error **errp)
 {
     S390SKeysState *ss = s390_get_skeys_device();
     S390SKeysClass *skeyclass = S390_SKEYS_GET_CLASS(ss);
-    const uint64_t total_count = ram_size / TARGET_PAGE_SIZE;
-    uint64_t handled_count = 0, cur_count;
+    GuestPhysBlockList guest_phys_blocks;
+    GuestPhysBlock *block;
+    uint64_t pages, gfn;
     Error *lerr = NULL;
-    vaddr cur_gfn = 0;
     uint8_t *buf;
     int ret;
     int fd;
     FILE *f;
 
     /* Quick check to see if guest is using storage keys*/
-    if (!skeyclass->skeys_enabled(ss)) {
+    if (!skeyclass->skeys_are_enabled(ss)) {
         error_setg(errp, "This guest is not using storage keys - "
                          "nothing to dump");
         return;
     }
 
-    fd = qemu_open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    fd = qemu_open_old(filename, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         error_setg_file_open(errp, errno, filename);
         return;
@@ -142,53 +152,86 @@ void qmp_dump_skeys(const char *filename, Error **errp)
         goto out;
     }
 
-    /* we'll only dump initial memory for now */
-    while (handled_count < total_count) {
-        /* Calculate how many keys to ask for & handle overflow case */
-        cur_count = MIN(total_count - handled_count, S390_SKEYS_BUFFER_SIZE);
+    assert(qemu_mutex_iothread_locked());
+    guest_phys_blocks_init(&guest_phys_blocks);
+    guest_phys_blocks_append(&guest_phys_blocks);
 
-        ret = skeyclass->get_skeys(ss, cur_gfn, cur_count, buf);
-        if (ret < 0) {
-            error_setg(errp, "get_keys error %d", ret);
-            goto out_free;
+    QTAILQ_FOREACH(block, &guest_phys_blocks.head, next) {
+        assert(QEMU_IS_ALIGNED(block->target_start, TARGET_PAGE_SIZE));
+        assert(QEMU_IS_ALIGNED(block->target_end, TARGET_PAGE_SIZE));
+
+        gfn = block->target_start / TARGET_PAGE_SIZE;
+        pages = (block->target_end - block->target_start) / TARGET_PAGE_SIZE;
+
+        while (pages) {
+            const uint64_t cur_pages = MIN(pages, S390_SKEYS_BUFFER_SIZE);
+
+            ret = skeyclass->get_skeys(ss, gfn, cur_pages, buf);
+            if (ret < 0) {
+                error_setg_errno(errp, -ret, "get_keys error");
+                goto out_free;
+            }
+
+            /* write keys to stream */
+            write_keys(f, buf, gfn, cur_pages, &lerr);
+            if (lerr) {
+                goto out_free;
+            }
+
+            gfn += cur_pages;
+            pages -= cur_pages;
         }
-
-        /* write keys to stream */
-        write_keys(f, buf, cur_gfn, cur_count, &lerr);
-        if (lerr) {
-            goto out_free;
-        }
-
-        cur_gfn += cur_count;
-        handled_count += cur_count;
     }
 
 out_free:
+    guest_phys_blocks_free(&guest_phys_blocks);
     error_propagate(errp, lerr);
     g_free(buf);
 out:
     fclose(f);
 }
 
-static void qemu_s390_skeys_init(Object *obj)
+static bool qemu_s390_skeys_are_enabled(S390SKeysState *ss)
 {
-    QEMUS390SKeysState *skeys = QEMU_S390_SKEYS(obj);
-    MachineState *machine = MACHINE(qdev_get_machine());
+    QEMUS390SKeysState *skeys = QEMU_S390_SKEYS(ss);
 
-    skeys->key_count = machine->maxram_size / TARGET_PAGE_SIZE;
-    skeys->keydata = g_malloc0(skeys->key_count);
+    /* Lockless check is sufficient. */
+    return !!skeys->keydata;
 }
 
-static int qemu_s390_skeys_enabled(S390SKeysState *ss)
+static bool qemu_s390_enable_skeys(S390SKeysState *ss)
 {
-    return 1;
+    QEMUS390SKeysState *skeys = QEMU_S390_SKEYS(ss);
+    static gsize initialized;
+
+    if (likely(skeys->keydata)) {
+        return true;
+    }
+
+    /*
+     * TODO: Modern Linux doesn't use storage keys unless running KVM guests
+     *       that use storage keys. Therefore, we keep it simple for now.
+     *
+     * 1) We should initialize to "referenced+changed" for an initial
+     *    over-indication. Let's avoid touching megabytes of data for now and
+     *    assume that any sane user will issue a storage key instruction before
+     *    actually relying on this data.
+     * 2) Relying on ram_size and allocating a big array is ugly. We should
+     *    allocate and manage storage key data per RAMBlock or optimally using
+     *    some sparse data structure.
+     * 3) We only ever have a single S390SKeysState, so relying on
+     *    g_once_init_enter() is good enough.
+     */
+    if (g_once_init_enter(&initialized)) {
+        MachineState *machine = MACHINE(qdev_get_machine());
+
+        skeys->key_count = machine->ram_size / TARGET_PAGE_SIZE;
+        skeys->keydata = g_malloc0(skeys->key_count);
+        g_once_init_leave(&initialized, 1);
+    }
+    return false;
 }
 
-/*
- * TODO: for memory hotplug support qemu_s390_skeys_set and qemu_s390_skeys_get
- * will have to make sure that the given gfn belongs to a memory region and not
- * a memory hole.
- */
 static int qemu_s390_skeys_set(S390SKeysState *ss, uint64_t start_gfn,
                               uint64_t count, uint8_t *keys)
 {
@@ -196,9 +239,10 @@ static int qemu_s390_skeys_set(S390SKeysState *ss, uint64_t start_gfn,
     int i;
 
     /* Check for uint64 overflow and access beyond end of key data */
-    if (start_gfn + count > skeydev->key_count || start_gfn + count < count) {
-        error_report("Error: Setting storage keys for page beyond the end "
-                     "of memory: gfn=%" PRIx64 " count=%" PRId64,
+    if (unlikely(!skeydev->keydata || start_gfn + count > skeydev->key_count ||
+                  start_gfn + count < count)) {
+        error_report("Error: Setting storage keys for pages with unallocated "
+                     "storage key memory: gfn=%" PRIx64 " count=%" PRId64,
                      start_gfn, count);
         return -EINVAL;
     }
@@ -216,9 +260,10 @@ static int qemu_s390_skeys_get(S390SKeysState *ss, uint64_t start_gfn,
     int i;
 
     /* Check for uint64 overflow and access beyond end of key data */
-    if (start_gfn + count > skeydev->key_count || start_gfn + count < count) {
-        error_report("Error: Getting storage keys for page beyond the end "
-                     "of memory: gfn=%" PRIx64 " count=%" PRId64,
+    if (unlikely(!skeydev->keydata || start_gfn + count > skeydev->key_count ||
+                  start_gfn + count < count)) {
+        error_report("Error: Getting storage keys for pages with unallocated "
+                     "storage key memory: gfn=%" PRIx64 " count=%" PRId64,
                      start_gfn, count);
         return -EINVAL;
     }
@@ -234,7 +279,8 @@ static void qemu_s390_skeys_class_init(ObjectClass *oc, void *data)
     S390SKeysClass *skeyclass = S390_SKEYS_CLASS(oc);
     DeviceClass *dc = DEVICE_CLASS(oc);
 
-    skeyclass->skeys_enabled = qemu_s390_skeys_enabled;
+    skeyclass->skeys_are_enabled = qemu_s390_skeys_are_enabled;
+    skeyclass->enable_skeys = qemu_s390_enable_skeys;
     skeyclass->get_skeys = qemu_s390_skeys_get;
     skeyclass->set_skeys = qemu_s390_skeys_set;
 
@@ -245,7 +291,6 @@ static void qemu_s390_skeys_class_init(ObjectClass *oc, void *data)
 static const TypeInfo qemu_s390_skeys_info = {
     .name          = TYPE_QEMU_S390_SKEYS,
     .parent        = TYPE_S390_SKEYS,
-    .instance_init = qemu_s390_skeys_init,
     .instance_size = sizeof(QEMUS390SKeysState),
     .class_init    = qemu_s390_skeys_class_init,
     .class_size    = sizeof(S390SKeysClass),
@@ -255,13 +300,13 @@ static void s390_storage_keys_save(QEMUFile *f, void *opaque)
 {
     S390SKeysState *ss = S390_SKEYS(opaque);
     S390SKeysClass *skeyclass = S390_SKEYS_GET_CLASS(ss);
-    uint64_t pages_left = ram_size / TARGET_PAGE_SIZE;
-    uint64_t read_count, eos = S390_SKEYS_SAVE_FLAG_EOS;
-    vaddr cur_gfn = 0;
+    GuestPhysBlockList guest_phys_blocks;
+    GuestPhysBlock *block;
+    uint64_t pages, gfn;
     int error = 0;
     uint8_t *buf;
 
-    if (!skeyclass->skeys_enabled(ss)) {
+    if (!skeyclass->skeys_are_enabled(ss)) {
         goto end_stream;
     }
 
@@ -271,36 +316,52 @@ static void s390_storage_keys_save(QEMUFile *f, void *opaque)
         goto end_stream;
     }
 
-    /* We only support initial memory. Standby memory is not handled yet. */
-    qemu_put_be64(f, (cur_gfn * TARGET_PAGE_SIZE) | S390_SKEYS_SAVE_FLAG_SKEYS);
-    qemu_put_be64(f, pages_left);
+    guest_phys_blocks_init(&guest_phys_blocks);
+    guest_phys_blocks_append(&guest_phys_blocks);
 
-    while (pages_left) {
-        read_count = MIN(pages_left, S390_SKEYS_BUFFER_SIZE);
+    /* Send each contiguous physical memory range separately. */
+    QTAILQ_FOREACH(block, &guest_phys_blocks.head, next) {
+        assert(QEMU_IS_ALIGNED(block->target_start, TARGET_PAGE_SIZE));
+        assert(QEMU_IS_ALIGNED(block->target_end, TARGET_PAGE_SIZE));
 
-        if (!error) {
-            error = skeyclass->get_skeys(ss, cur_gfn, read_count, buf);
-            if (error) {
-                /*
-                 * If error: we want to fill the stream with valid data instead
-                 * of stopping early so we pad the stream with 0x00 values and
-                 * use S390_SKEYS_SAVE_FLAG_ERROR to indicate failure to the
-                 * reading side.
-                 */
-                error_report("S390_GET_KEYS error %d", error);
-                memset(buf, 0, S390_SKEYS_BUFFER_SIZE);
-                eos = S390_SKEYS_SAVE_FLAG_ERROR;
+        gfn = block->target_start / TARGET_PAGE_SIZE;
+        pages = (block->target_end - block->target_start) / TARGET_PAGE_SIZE;
+        qemu_put_be64(f, block->target_start | S390_SKEYS_SAVE_FLAG_SKEYS);
+        qemu_put_be64(f, pages);
+
+        while (pages) {
+            const uint64_t cur_pages = MIN(pages, S390_SKEYS_BUFFER_SIZE);
+
+            if (!error) {
+                error = skeyclass->get_skeys(ss, gfn, cur_pages, buf);
+                if (error) {
+                    /*
+                     * Create a valid stream with all 0x00 and indicate
+                     * S390_SKEYS_SAVE_FLAG_ERROR to the destination.
+                     */
+                    error_report("S390_GET_KEYS error %d", error);
+                    memset(buf, 0, S390_SKEYS_BUFFER_SIZE);
+                }
             }
+
+            qemu_put_buffer(f, buf, cur_pages);
+            gfn += cur_pages;
+            pages -= cur_pages;
         }
 
-        qemu_put_buffer(f, buf, read_count);
-        cur_gfn += read_count;
-        pages_left -= read_count;
+        if (error) {
+            break;
+        }
     }
 
+    guest_phys_blocks_free(&guest_phys_blocks);
     g_free(buf);
 end_stream:
-    qemu_put_be64(f, eos);
+    if (error) {
+        qemu_put_be64(f, S390_SKEYS_SAVE_FLAG_ERROR);
+    } else {
+        qemu_put_be64(f, S390_SKEYS_SAVE_FLAG_EOS);
+    }
 }
 
 static int s390_storage_keys_load(QEMUFile *f, void *opaque, int version_id)
@@ -308,6 +369,14 @@ static int s390_storage_keys_load(QEMUFile *f, void *opaque, int version_id)
     S390SKeysState *ss = S390_SKEYS(opaque);
     S390SKeysClass *skeyclass = S390_SKEYS_GET_CLASS(ss);
     int ret = 0;
+
+    /*
+     * Make sure to lazy-enable if required to be done explicitly. No need to
+     * flush any TLB as the VM is not running yet.
+     */
+    if (skeyclass->enable_skeys) {
+        skeyclass->enable_skeys(ss);
+    }
 
     while (!ret) {
         ram_addr_t addr;
@@ -388,10 +457,10 @@ static inline void s390_skeys_set_migration_enabled(Object *obj, bool value,
     ss->migration_enabled = value;
 
     if (ss->migration_enabled) {
-        register_savevm_live(NULL, TYPE_S390_SKEYS, 0, 1,
+        register_savevm_live(TYPE_S390_SKEYS, 0, 1,
                              &savevm_s390_storage_keys, ss);
     } else {
-        unregister_savevm(DEVICE(ss), TYPE_S390_SKEYS, ss);
+        unregister_savevm(VMSTATE_IF(ss), TYPE_S390_SKEYS, ss);
     }
 }
 
@@ -399,8 +468,8 @@ static void s390_skeys_instance_init(Object *obj)
 {
     object_property_add_bool(obj, "migration-enabled",
                              s390_skeys_get_migration_enabled,
-                             s390_skeys_set_migration_enabled, NULL);
-    object_property_set_bool(obj, true, "migration-enabled", NULL);
+                             s390_skeys_set_migration_enabled);
+    object_property_set_bool(obj, "migration-enabled", true, NULL);
 }
 
 static void s390_skeys_class_init(ObjectClass *oc, void *data)

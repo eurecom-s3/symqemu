@@ -12,9 +12,9 @@
  * GNU GPL, version 2 or (at your option) any later version.
  */
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
-#include "hw/hw.h"
 #include "hw/arm/pxa.h"
 #include "hw/arm/boot.h"
 #include "net/net.h"
@@ -23,7 +23,6 @@
 #include "hw/block/flash.h"
 #include "hw/sysbus.h"
 #include "exec/address-spaces.h"
-#include "sysemu/qtest.h"
 #include "cpu.h"
 
 /* Device addresses */
@@ -101,61 +100,41 @@ static const struct keymap map[0xE0] = {
 
 enum mainstone_model_e { mainstone };
 
-#define MAINSTONE_RAM	0x04000000
-#define MAINSTONE_ROM	0x00800000
-#define MAINSTONE_FLASH	0x02000000
+#define MAINSTONE_RAM_SIZE      (64 * MiB)
+#define MAINSTONE_ROM_SIZE      (8 * MiB)
+#define MAINSTONE_FLASH_SIZE    (32 * MiB)
 
 static struct arm_boot_info mainstone_binfo = {
     .loader_start = PXA2XX_SDRAM_BASE,
-    .ram_size = 0x04000000,
+    .ram_size = MAINSTONE_RAM_SIZE,
 };
 
-static void mainstone_common_init(MemoryRegion *address_space_mem,
-                                  MachineState *machine,
+#define FLASH_SECTOR_SIZE   (256 * KiB)
+
+static void mainstone_common_init(MachineState *machine,
                                   enum mainstone_model_e model, int arm_id)
 {
-    uint32_t sector_len = 256 * 1024;
     hwaddr mainstone_flash_base[] = { MST_FLASH_0, MST_FLASH_1 };
     PXA2xxState *mpu;
     DeviceState *mst_irq;
     DriveInfo *dinfo;
     int i;
-    int be;
     MemoryRegion *rom = g_new(MemoryRegion, 1);
 
     /* Setup CPU & memory */
-    mpu = pxa270_init(address_space_mem, mainstone_binfo.ram_size,
-                      machine->cpu_type);
-    memory_region_init_ram(rom, NULL, "mainstone.rom", MAINSTONE_ROM,
+    mpu = pxa270_init(mainstone_binfo.ram_size, machine->cpu_type);
+    memory_region_init_rom(rom, NULL, "mainstone.rom", MAINSTONE_ROM_SIZE,
                            &error_fatal);
-    memory_region_set_readonly(rom, true);
-    memory_region_add_subregion(address_space_mem, 0, rom);
+    memory_region_add_subregion(get_system_memory(), 0x00000000, rom);
 
-#ifdef TARGET_WORDS_BIGENDIAN
-    be = 1;
-#else
-    be = 0;
-#endif
     /* There are two 32MiB flash devices on the board */
     for (i = 0; i < 2; i ++) {
         dinfo = drive_get(IF_PFLASH, 0, i);
-        if (!dinfo) {
-            if (qtest_enabled()) {
-                break;
-            }
-            error_report("Two flash images must be given with the "
-                         "'pflash' parameter");
-            exit(1);
-        }
-
-        if (!pflash_cfi01_register(mainstone_flash_base[i],
-                                   i ? "mainstone.flash1" : "mainstone.flash0",
-                                   MAINSTONE_FLASH,
-                                   blk_by_legacy_dinfo(dinfo),
-                                   sector_len, 4, 0, 0, 0, 0, be)) {
-            error_report("Error registering flash memory");
-            exit(1);
-        }
+        pflash_cfi01_register(mainstone_flash_base[i],
+                              i ? "mainstone.flash1" : "mainstone.flash0",
+                              MAINSTONE_FLASH_SIZE,
+                              dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
+                              FLASH_SECTOR_SIZE, 4, 0, 0, 0, 0, 0);
     }
 
     mst_irq = sysbus_create_simple("mainstone-fpga", MST_FPGA_PHYS,
@@ -177,16 +156,13 @@ static void mainstone_common_init(MemoryRegion *address_space_mem,
     smc91c111_init(&nd_table[0], MST_ETH_PHYS,
                     qdev_get_gpio_in(mst_irq, ETHERNET_IRQ));
 
-    mainstone_binfo.kernel_filename = machine->kernel_filename;
-    mainstone_binfo.kernel_cmdline = machine->kernel_cmdline;
-    mainstone_binfo.initrd_filename = machine->initrd_filename;
     mainstone_binfo.board_id = arm_id;
-    arm_load_kernel(mpu->cpu, &mainstone_binfo);
+    arm_load_kernel(mpu->cpu, machine, &mainstone_binfo);
 }
 
 static void mainstone_init(MachineState *machine)
 {
-    mainstone_common_init(get_system_memory(), machine, mainstone, 0x196);
+    mainstone_common_init(machine, mainstone, 0x196);
 }
 
 static void mainstone2_machine_init(MachineClass *mc)

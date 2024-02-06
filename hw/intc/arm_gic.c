@@ -19,14 +19,16 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/irq.h"
 #include "hw/sysbus.h"
 #include "gic_internal.h"
 #include "qapi/error.h"
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "trace.h"
 #include "sysemu/kvm.h"
+#include "sysemu/qtest.h"
 
 /* #define DEBUG_GIC */
 
@@ -56,7 +58,7 @@ static const uint8_t gic_id_gicv2[] = {
 
 static inline int gic_get_current_cpu(GICState *s)
 {
-    if (s->num_cpu > 1) {
+    if (!qtest_enabled() && s->num_cpu > 1) {
         return current_cpu->cpu_index;
     }
     return 0;
@@ -140,6 +142,8 @@ static inline void gic_get_best_virq(GICState *s, int cpu,
 static inline bool gic_irq_signaling_enabled(GICState *s, int cpu, bool virt,
                                     int group_mask)
 {
+    int cpu_iface = virt ? (cpu + GIC_NCPU) : cpu;
+
     if (!virt && !(s->ctlr & group_mask)) {
         return false;
     }
@@ -148,7 +152,7 @@ static inline bool gic_irq_signaling_enabled(GICState *s, int cpu, bool virt,
         return false;
     }
 
-    if (!(s->cpu_ctlr[cpu] & group_mask)) {
+    if (!(s->cpu_ctlr[cpu_iface] & group_mask)) {
         return false;
     }
 
@@ -235,7 +239,7 @@ static inline bool gic_lr_entry_is_free(uint32_t entry)
 }
 
 /* Return true if this LR should trigger an EOI maintenance interrupt, i.e. the
- * corrsponding bit in EISR is set.
+ * corresponding bit in EISR is set.
  */
 static inline bool gic_lr_entry_is_eoi(uint32_t entry)
 {
@@ -640,6 +644,23 @@ uint32_t gic_acknowledge_irq(GICState *s, int cpu, MemTxAttrs attrs)
     return ret;
 }
 
+static uint32_t gic_fullprio_mask(GICState *s, int cpu)
+{
+    /*
+     * Return a mask word which clears the unimplemented priority
+     * bits from a priority value for an interrupt. (Not to be
+     * confused with the group priority, whose mask depends on BPR.)
+     */
+    int priBits;
+
+    if (gic_is_vcpu(cpu)) {
+        priBits = GIC_VIRT_MAX_GROUP_PRIO_BITS;
+    } else {
+        priBits = s->n_prio_bits;
+    }
+    return ~0U << (8 - priBits);
+}
+
 void gic_dist_set_priority(GICState *s, int cpu, int irq, uint8_t val,
                       MemTxAttrs attrs)
 {
@@ -649,6 +670,8 @@ void gic_dist_set_priority(GICState *s, int cpu, int irq, uint8_t val,
         }
         val = 0x80 | (val >> 1); /* Non-secure view */
     }
+
+    val &= gic_fullprio_mask(s, cpu);
 
     if (irq < GIC_INTERNAL) {
         s->priority1[irq][cpu] = val;
@@ -668,7 +691,7 @@ static uint32_t gic_dist_get_priority(GICState *s, int cpu, int irq,
         }
         prio = (prio << 1) & 0xff; /* Non-secure view */
     }
-    return prio;
+    return prio & gic_fullprio_mask(s, cpu);
 }
 
 static void gic_set_priority_mask(GICState *s, int cpu, uint8_t pmask,
@@ -683,7 +706,7 @@ static void gic_set_priority_mask(GICState *s, int cpu, uint8_t pmask,
             return;
         }
     }
-    s->priority_mask[cpu] = pmask;
+    s->priority_mask[cpu] = pmask & gic_fullprio_mask(s, cpu);
 }
 
 static uint32_t gic_get_priority_mask(GICState *s, int cpu, MemTxAttrs attrs)
@@ -918,7 +941,7 @@ static void gic_complete_irq(GICState *s, int cpu, int irq, MemTxAttrs attrs)
     gic_update(s);
 }
 
-static uint32_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
+static uint8_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
 {
     GICState *s = (GICState *)opaque;
     uint32_t res;
@@ -932,6 +955,7 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
     cm = 1 << cpu;
     if (offset < 0x100) {
         if (offset == 0) {      /* GICD_CTLR */
+            /* We rely here on the only non-zero bits being in byte 0 */
             if (s->security_extn && !attrs.secure) {
                 /* The NS bank of this register is just an alias of the
                  * EnableGrp1 bit in the S bank version.
@@ -941,13 +965,26 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
                 return s->ctlr;
             }
         }
-        if (offset == 4)
-            /* Interrupt Controller Type Register */
-            return ((s->num_irq / 32) - 1)
-                    | ((s->num_cpu - 1) << 5)
-                    | (s->security_extn << 10);
-        if (offset < 0x08)
+        if (offset == 4) {
+            /* GICD_TYPER byte 0 */
+            return ((s->num_irq / 32) - 1) | ((s->num_cpu - 1) << 5);
+        }
+        if (offset == 5) {
+            /* GICD_TYPER byte 1 */
+            return (s->security_extn << 2);
+        }
+        if (offset == 8) {
+            /* GICD_IIDR byte 0 */
+            return 0x3b; /* Arm JEP106 identity */
+        }
+        if (offset == 9) {
+            /* GICD_IIDR byte 1 */
+            return 0x04; /* Arm JEP106 identity */
+        }
+        if (offset < 0x0c) {
+            /* All other bytes in this range are RAZ */
             return 0;
+        }
         if (offset >= 0x80) {
             /* Interrupt Group Registers: these RAZ/WI if this is an NS
              * access to a GIC with the security extensions, or if the GIC
@@ -1296,7 +1333,7 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
 
             /* ??? This currently clears the pending bit for all CPUs, even
                for per-CPU interrupts.  It's unclear whether this is the
-               corect behavior.  */
+               correct behavior.  */
             if (value & (1 << i)) {
                 GIC_DIST_CLEAR_PENDING(irq + i, ALL_CPU_MASK);
             }
@@ -1454,7 +1491,7 @@ static void gic_dist_writel(void *opaque, hwaddr offset,
         int target_cpu;
 
         cpu = gic_get_current_cpu(s);
-        irq = value & 0x3ff;
+        irq = value & 0xf;
         switch ((value >> 24) & 3) {
         case 0:
             mask = (value >> 16) & ALL_CPU_MASK;
@@ -1639,6 +1676,15 @@ static MemTxResult gic_cpu_read(GICState *s, int cpu, int offset,
         }
         break;
     }
+    case 0xfc:
+        if (s->revision == REV_11MPCORE) {
+            /* Reserved on 11MPCore */
+            *data = 0;
+        } else {
+            /* GICv1 or v2; Arm implementation */
+            *data = (s->revision << 16) | 0x43b;
+        }
+        break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
                       "gic_cpu_read: Bad offset %x\n", (int)offset);
@@ -1704,6 +1750,7 @@ static MemTxResult gic_cpu_write(GICState *s, int cpu, int offset,
         } else {
             s->apr[regno][cpu] = value;
         }
+        s->running_priority[cpu] = gic_get_prio_from_apr_bits(s, cpu);
         break;
     }
     case 0xe0: case 0xe4: case 0xe8: case 0xec:
@@ -1720,6 +1767,7 @@ static MemTxResult gic_cpu_write(GICState *s, int cpu, int offset,
             return MEMTX_OK;
         }
         s->nsapr[regno][cpu] = value;
+        s->running_priority[cpu] = gic_get_prio_from_apr_bits(s, cpu);
         break;
     }
     case 0x1000:
@@ -2051,6 +2099,16 @@ static void arm_gic_realize(DeviceState *dev, Error **errp)
     if (kvm_enabled() && !kvm_arm_supports_user_irq()) {
         error_setg(errp, "KVM with user space irqchip only works when the "
                          "host kernel supports KVM_CAP_ARM_USER_IRQ");
+        return;
+    }
+
+    if (s->n_prio_bits > GIC_MAX_PRIORITY_BITS ||
+       (s->virt_extn ? s->n_prio_bits < GIC_VIRT_MAX_GROUP_PRIO_BITS :
+        s->n_prio_bits < GIC_MIN_PRIORITY_BITS)) {
+        error_setg(errp, "num-priority-bits cannot be greater than %d"
+                   " or less than %d", GIC_MAX_PRIORITY_BITS,
+                   s->virt_extn ? GIC_VIRT_MAX_GROUP_PRIO_BITS :
+                   GIC_MIN_PRIORITY_BITS);
         return;
     }
 

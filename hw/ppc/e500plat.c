@@ -13,7 +13,6 @@
 #include "qemu/units.h"
 #include "e500.h"
 #include "hw/net/fsl_etsec/etsec.h"
-#include "hw/boards.h"
 #include "sysemu/device_tree.h"
 #include "sysemu/kvm.h"
 #include "hw/sysbus.h"
@@ -47,11 +46,10 @@ static void e500plat_machine_device_plug_cb(HotplugHandler *hotplug_dev,
                                             DeviceState *dev, Error **errp)
 {
     PPCE500MachineState *pms = PPCE500_MACHINE(hotplug_dev);
+    MachineClass *mc = MACHINE_GET_CLASS(pms);
 
-    if (pms->pbus_dev) {
-        if (object_dynamic_cast(OBJECT(dev), TYPE_SYS_BUS_DEVICE)) {
-            platform_bus_link_device(pms->pbus_dev, SYS_BUS_DEVICE(dev));
-        }
+    if (device_is_dynamic_sysbus(mc, dev)) {
+        platform_bus_link_device(pms->pbus_dev, SYS_BUS_DEVICE(dev));
     }
 }
 
@@ -59,7 +57,9 @@ static
 HotplugHandler *e500plat_machine_get_hotpug_handler(MachineState *machine,
                                                     DeviceState *dev)
 {
-    if (object_dynamic_cast(OBJECT(dev), TYPE_SYS_BUS_DEVICE)) {
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
+
+    if (device_is_dynamic_sysbus(mc, dev)) {
         return HOTPLUG_HANDLER(machine);
     }
 
@@ -83,7 +83,7 @@ static void e500plat_machine_class_init(ObjectClass *oc, void *data)
     pmc->fixup_devtree = e500plat_fixup_devtree;
     pmc->mpic_version = OPENPIC_MODEL_FSL_MPIC_42;
     pmc->has_mpc8xxx_gpio = true;
-    pmc->has_platform_bus = true;
+    pmc->has_esdhc = true;
     pmc->platform_bus_base = 0xf00000000ULL;
     pmc->platform_bus_size = 128 * MiB;
     pmc->platform_bus_first_irq = 5;
@@ -98,6 +98,8 @@ static void e500plat_machine_class_init(ObjectClass *oc, void *data)
     mc->init = e500plat_init;
     mc->max_cpus = 32;
     mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("e500v2_v30");
+    mc->default_ram_id = "mpc8544ds.ram";
+    mc->default_nic = "virtio-net-pci";
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_ETSEC_COMMON);
  }
 

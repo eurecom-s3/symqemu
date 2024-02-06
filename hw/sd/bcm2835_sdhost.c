@@ -15,12 +15,16 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "sysemu/blockdev.h"
+#include "hw/irq.h"
 #include "hw/sd/bcm2835_sdhost.h"
+#include "migration/vmstate.h"
 #include "trace.h"
+#include "qom/object.h"
 
 #define TYPE_BCM2835_SDHOST_BUS "bcm2835-sdhost-bus"
-#define BCM2835_SDHOST_BUS(obj) \
-    OBJECT_CHECK(SDBus, (obj), TYPE_BCM2835_SDHOST_BUS)
+/* This is reusing the SDBus typedef from SD_BUS */
+DECLARE_INSTANCE_CHECKER(SDBus, BCM2835_SDHOST_BUS,
+                         TYPE_BCM2835_SDHOST_BUS)
 
 #define SDCMD  0x00 /* Command to SD card              - 16 R/W */
 #define SDARG  0x04 /* Argument to SD card             - 32 R/W */
@@ -188,7 +192,7 @@ static void bcm2835_sdhost_fifo_run(BCM2835SDHostState *s)
         if (is_read) {
             n = 0;
             while (s->datacnt && s->fifo_len < BCM2835_SDHOST_FIFO_LEN) {
-                value |= (uint32_t)sdbus_read_data(&s->sdbus) << (n * 8);
+                value |= (uint32_t)sdbus_read_byte(&s->sdbus) << (n * 8);
                 s->datacnt--;
                 n++;
                 if (n == 4) {
@@ -221,7 +225,7 @@ static void bcm2835_sdhost_fifo_run(BCM2835SDHostState *s)
                 }
                 n--;
                 s->datacnt--;
-                sdbus_write_data(&s->sdbus, value & 0xff);
+                sdbus_write_byte(&s->sdbus, value & 0xff);
                 value >>= 8;
             }
         }
@@ -399,8 +403,8 @@ static void bcm2835_sdhost_init(Object *obj)
 {
     BCM2835SDHostState *s = BCM2835_SDHOST(obj);
 
-    qbus_create_inplace(&s->sdbus, sizeof(s->sdbus),
-                        TYPE_BCM2835_SDHOST_BUS, DEVICE(s), "sd-bus");
+    qbus_init(&s->sdbus, sizeof(s->sdbus),
+              TYPE_BCM2835_SDHOST_BUS, DEVICE(s), "sd-bus");
 
     memory_region_init_io(&s->iomem, obj, &bcm2835_sdhost_ops, s,
                           TYPE_BCM2835_SDHOST, 0x1000);
@@ -432,7 +436,7 @@ static void bcm2835_sdhost_class_init(ObjectClass *klass, void *data)
     dc->vmsd = &vmstate_bcm2835_sdhost;
 }
 
-static TypeInfo bcm2835_sdhost_info = {
+static const TypeInfo bcm2835_sdhost_info = {
     .name          = TYPE_BCM2835_SDHOST,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(BCM2835SDHostState),

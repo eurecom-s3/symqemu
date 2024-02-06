@@ -1,30 +1,30 @@
 static void glue(bswap_ehdr, SZ)(struct elfhdr *ehdr)
 {
-    bswap16s(&ehdr->e_type);			/* Object file type */
-    bswap16s(&ehdr->e_machine);		/* Architecture */
-    bswap32s(&ehdr->e_version);		/* Object file version */
-    bswapSZs(&ehdr->e_entry);		/* Entry point virtual address */
-    bswapSZs(&ehdr->e_phoff);		/* Program header table file offset */
-    bswapSZs(&ehdr->e_shoff);		/* Section header table file offset */
-    bswap32s(&ehdr->e_flags);		/* Processor-specific flags */
-    bswap16s(&ehdr->e_ehsize);		/* ELF header size in bytes */
-    bswap16s(&ehdr->e_phentsize);		/* Program header table entry size */
-    bswap16s(&ehdr->e_phnum);		/* Program header table entry count */
-    bswap16s(&ehdr->e_shentsize);		/* Section header table entry size */
-    bswap16s(&ehdr->e_shnum);		/* Section header table entry count */
-    bswap16s(&ehdr->e_shstrndx);		/* Section header string table index */
+    bswap16s(&ehdr->e_type);      /* Object file type */
+    bswap16s(&ehdr->e_machine);   /* Architecture */
+    bswap32s(&ehdr->e_version);   /* Object file version */
+    bswapSZs(&ehdr->e_entry);     /* Entry point virtual address */
+    bswapSZs(&ehdr->e_phoff);     /* Program header table file offset */
+    bswapSZs(&ehdr->e_shoff);     /* Section header table file offset */
+    bswap32s(&ehdr->e_flags);     /* Processor-specific flags */
+    bswap16s(&ehdr->e_ehsize);    /* ELF header size in bytes */
+    bswap16s(&ehdr->e_phentsize); /* Program header table entry size */
+    bswap16s(&ehdr->e_phnum);     /* Program header table entry count */
+    bswap16s(&ehdr->e_shentsize); /* Section header table entry size */
+    bswap16s(&ehdr->e_shnum);     /* Section header table entry count */
+    bswap16s(&ehdr->e_shstrndx);  /* Section header string table index */
 }
 
 static void glue(bswap_phdr, SZ)(struct elf_phdr *phdr)
 {
-    bswap32s(&phdr->p_type);			/* Segment type */
-    bswapSZs(&phdr->p_offset);		/* Segment file offset */
-    bswapSZs(&phdr->p_vaddr);		/* Segment virtual address */
-    bswapSZs(&phdr->p_paddr);		/* Segment physical address */
-    bswapSZs(&phdr->p_filesz);		/* Segment size in file */
-    bswapSZs(&phdr->p_memsz);		/* Segment size in memory */
-    bswap32s(&phdr->p_flags);		/* Segment flags */
-    bswapSZs(&phdr->p_align);		/* Segment alignment */
+    bswap32s(&phdr->p_type);   /* Segment type */
+    bswapSZs(&phdr->p_offset); /* Segment file offset */
+    bswapSZs(&phdr->p_vaddr);  /* Segment virtual address */
+    bswapSZs(&phdr->p_paddr);  /* Segment physical address */
+    bswapSZs(&phdr->p_filesz); /* Segment size in file */
+    bswapSZs(&phdr->p_memsz);  /* Segment size in memory */
+    bswap32s(&phdr->p_flags);  /* Segment flags */
+    bswapSZs(&phdr->p_align);  /* Segment alignment */
 }
 
 static void glue(bswap_shdr, SZ)(struct elf_shdr *shdr)
@@ -104,19 +104,21 @@ static int glue(symcmp, SZ)(const void *s0, const void *s1)
         : ((sym0->st_value > sym1->st_value) ? 1 : 0);
 }
 
-static int glue(load_symbols, SZ)(struct elfhdr *ehdr, int fd, int must_swab,
-                                  int clear_lsb, symbol_fn_t sym_cb)
+static void glue(load_symbols, SZ)(struct elfhdr *ehdr, int fd, int must_swab,
+                                   int clear_lsb, symbol_fn_t sym_cb)
 {
-    struct elf_shdr *symtab, *strtab, *shdr_table = NULL;
-    struct elf_sym *syms = NULL;
+    struct elf_shdr *symtab, *strtab;
+    g_autofree struct elf_shdr *shdr_table = NULL;
+    g_autofree struct elf_sym *syms = NULL;
+    g_autofree char *str = NULL;
     struct syminfo *s;
     int nsyms, i;
-    char *str = NULL;
 
     shdr_table = load_at(fd, ehdr->e_shoff,
                          sizeof(struct elf_shdr) * ehdr->e_shnum);
-    if (!shdr_table)
-        return -1;
+    if (!shdr_table) {
+        return;
+    }
 
     if (must_swab) {
         for (i = 0; i < ehdr->e_shnum; i++) {
@@ -125,23 +127,25 @@ static int glue(load_symbols, SZ)(struct elfhdr *ehdr, int fd, int must_swab,
     }
 
     symtab = glue(find_section, SZ)(shdr_table, ehdr->e_shnum, SHT_SYMTAB);
-    if (!symtab)
-        goto fail;
+    if (!symtab) {
+        return;
+    }
     syms = load_at(fd, symtab->sh_offset, symtab->sh_size);
-    if (!syms)
-        goto fail;
+    if (!syms) {
+        return;
+    }
 
     nsyms = symtab->sh_size / sizeof(struct elf_sym);
 
     /* String table */
     if (symtab->sh_link >= ehdr->e_shnum) {
-        goto fail;
+        return;
     }
     strtab = &shdr_table[symtab->sh_link];
 
     str = load_at(fd, strtab->sh_offset, strtab->sh_size);
     if (!str) {
-        goto fail;
+        return;
     }
 
     i = 0;
@@ -170,8 +174,13 @@ static int glue(load_symbols, SZ)(struct elfhdr *ehdr, int fd, int must_swab,
         }
         i++;
     }
-    syms = g_realloc(syms, nsyms * sizeof(*syms));
 
+    /* check we have symbols left */
+    if (nsyms == 0) {
+        return;
+    }
+
+    syms = g_realloc(syms, nsyms * sizeof(*syms));
     qsort(syms, nsyms, sizeof(*syms), glue(symcmp, SZ));
     for (i = 0; i < nsyms - 1; i++) {
         if (syms[i].st_size == 0) {
@@ -182,18 +191,11 @@ static int glue(load_symbols, SZ)(struct elfhdr *ehdr, int fd, int must_swab,
     /* Commit */
     s = g_malloc0(sizeof(*s));
     s->lookup_symbol = glue(lookup_symbol, SZ);
-    glue(s->disas_symtab.elf, SZ) = syms;
+    glue(s->disas_symtab.elf, SZ) = g_steal_pointer(&syms);
     s->disas_num_syms = nsyms;
-    s->disas_strtab = str;
+    s->disas_strtab = g_steal_pointer(&str);
     s->next = syminfos;
     syminfos = s;
-    g_free(shdr_table);
-    return 0;
- fail:
-    g_free(syms);
-    g_free(str);
-    g_free(shdr_table);
-    return -1;
 }
 
 static int glue(elf_reloc, SZ)(struct elfhdr *ehdr, int fd, int must_swab,
@@ -310,24 +312,26 @@ static struct elf_note *glue(get_elf_note_type, SZ)(struct elf_note *nhdr,
     return nhdr;
 }
 
-static int glue(load_elf, SZ)(const char *name, int fd,
-                              uint64_t (*elf_note_fn)(void *, void *, bool),
-                              uint64_t (*translate_fn)(void *, uint64_t),
-                              void *translate_opaque,
-                              int must_swab, uint64_t *pentry,
-                              uint64_t *lowaddr, uint64_t *highaddr,
-                              int elf_machine, int clear_lsb, int data_swab,
-                              AddressSpace *as, bool load_rom,
-                              symbol_fn_t sym_cb)
+static ssize_t glue(load_elf, SZ)(const char *name, int fd,
+                                  uint64_t (*elf_note_fn)(void *, void *, bool),
+                                  uint64_t (*translate_fn)(void *, uint64_t),
+                                  void *translate_opaque,
+                                  int must_swab, uint64_t *pentry,
+                                  uint64_t *lowaddr, uint64_t *highaddr,
+                                  uint32_t *pflags, int elf_machine,
+                                  int clear_lsb, int data_swab,
+                                  AddressSpace *as, bool load_rom,
+                                  symbol_fn_t sym_cb)
 {
     struct elfhdr ehdr;
     struct elf_phdr *phdr = NULL, *ph;
-    int size, i, total_size;
-    elf_word mem_size, file_size;
+    int size, i;
+    ssize_t total_size;
+    elf_word mem_size, file_size, data_offset;
     uint64_t addr, low = (uint64_t)-1, high = 0;
+    GMappedFile *mapped_file = NULL;
     uint8_t *data = NULL;
-    char label[128];
-    int ret = ELF_LOAD_FAILED;
+    ssize_t ret = ELF_LOAD_FAILED;
 
     if (read(fd, &ehdr, sizeof(ehdr)) != sizeof(ehdr))
         goto fail;
@@ -365,14 +369,6 @@ static int glue(load_elf, SZ)(const char *name, int fd,
                 }
             }
             break;
-        case EM_MOXIE:
-            if (ehdr.e_machine != EM_MOXIE) {
-                if (ehdr.e_machine != EM_MOXIE_OLD) {
-                    ret = ELF_LOAD_WRONG_ARCH;
-                    goto fail;
-                }
-            }
-            break;
         case EM_MIPS:
         case EM_NANOMIPS:
             if ((ehdr.e_machine != EM_MIPS) &&
@@ -388,6 +384,9 @@ static int glue(load_elf, SZ)(const char *name, int fd,
             }
     }
 
+    if (pflags) {
+        *pflags = (elf_word)ehdr.e_flags;
+    }
     if (pentry)
         *pentry = (uint64_t)(elf_sword)ehdr.e_entry;
 
@@ -409,20 +408,32 @@ static int glue(load_elf, SZ)(const char *name, int fd,
         }
     }
 
+    /*
+     * Since we want to be able to modify the mapped buffer, we set the
+     * 'writable' parameter to 'true'. Modifications to the buffer are not
+     * written back to the file.
+     */
+    mapped_file = g_mapped_file_new_from_fd(fd, true, NULL);
+    if (!mapped_file) {
+        goto fail;
+    }
+
     total_size = 0;
     for(i = 0; i < ehdr.e_phnum; i++) {
         ph = &phdr[i];
         if (ph->p_type == PT_LOAD) {
             mem_size = ph->p_memsz; /* Size of the ROM */
             file_size = ph->p_filesz; /* Size of the allocated data */
-            data = g_malloc0(file_size);
-            if (ph->p_filesz > 0) {
-                if (lseek(fd, ph->p_offset, SEEK_SET) < 0) {
+            data_offset = ph->p_offset; /* Offset where the data is located */
+
+            if (file_size > 0) {
+                if (g_mapped_file_get_length(mapped_file) <
+                    file_size + data_offset) {
                     goto fail;
                 }
-                if (read(fd, data, file_size) != file_size) {
-                    goto fail;
-                }
+
+                data = (uint8_t *)g_mapped_file_get_contents(mapped_file);
+                data += data_offset;
             }
 
             /* The ELF spec is somewhat vague about the purpose of the
@@ -472,6 +483,11 @@ static int glue(load_elf, SZ)(const char *name, int fd,
                 }
             }
 
+            if (mem_size > SSIZE_MAX - total_size) {
+                ret = ELF_LOAD_TOO_BIG;
+                goto fail;
+            }
+
             /* address_offset is hack for kernel images that are
                linked at the wrong physical address.  */
             if (translate_fn) {
@@ -513,25 +529,45 @@ static int glue(load_elf, SZ)(const char *name, int fd,
                 *pentry = ehdr.e_entry - ph->p_vaddr + ph->p_paddr;
             }
 
-            if (mem_size == 0) {
-                /* Some ELF files really do have segments of zero size;
-                 * just ignore them rather than trying to create empty
-                 * ROM blobs, because the zero-length blob can falsely
-                 * trigger the overlapping-ROM-blobs check.
-                 */
-                g_free(data);
-            } else {
+            /* Some ELF files really do have segments of zero size;
+             * just ignore them rather than trying to create empty
+             * ROM blobs, because the zero-length blob can falsely
+             * trigger the overlapping-ROM-blobs check.
+             */
+            if (mem_size != 0) {
                 if (load_rom) {
-                    snprintf(label, sizeof(label), "phdr #%d: %s", i, name);
+                    g_autofree char *label =
+                        g_strdup_printf("%s ELF program header segment %d",
+                                        name, i);
 
-                    /* rom_add_elf_program() seize the ownership of 'data' */
-                    rom_add_elf_program(label, data, file_size, mem_size,
-                                        addr, as);
+                    /*
+                     * rom_add_elf_program() takes its own reference to
+                     * 'mapped_file'.
+                     */
+                    rom_add_elf_program(label, mapped_file, data, file_size,
+                                        mem_size, addr, as);
                 } else {
-                    address_space_write(as ? as : &address_space_memory,
-                                        addr, MEMTXATTRS_UNSPECIFIED,
-                                        data, file_size);
-                    g_free(data);
+                    MemTxResult res;
+
+                    res = address_space_write(as ? as : &address_space_memory,
+                                              addr, MEMTXATTRS_UNSPECIFIED,
+                                              data, file_size);
+                    if (res != MEMTX_OK) {
+                        goto fail;
+                    }
+                    /*
+                     * We need to zero'ify the space that is not copied
+                     * from file
+                     */
+                    if (file_size < mem_size) {
+                        res = address_space_set(as ? as : &address_space_memory,
+                                                addr + file_size, 0,
+                                                mem_size - file_size,
+                                                MEMTXATTRS_UNSPECIFIED);
+                        if (res != MEMTX_OK) {
+                            goto fail;
+                        }
+                    }
                 }
             }
 
@@ -547,14 +583,16 @@ static int glue(load_elf, SZ)(const char *name, int fd,
             struct elf_note *nhdr = NULL;
 
             file_size = ph->p_filesz; /* Size of the range of ELF notes */
-            data = g_malloc0(file_size);
-            if (ph->p_filesz > 0) {
-                if (lseek(fd, ph->p_offset, SEEK_SET) < 0) {
+            data_offset = ph->p_offset; /* Offset where the notes are located */
+
+            if (file_size > 0) {
+                if (g_mapped_file_get_length(mapped_file) <
+                    file_size + data_offset) {
                     goto fail;
                 }
-                if (read(fd, data, file_size) != file_size) {
-                    goto fail;
-                }
+
+                data = (uint8_t *)g_mapped_file_get_contents(mapped_file);
+                data += data_offset;
             }
 
             /*
@@ -566,23 +604,21 @@ static int glue(load_elf, SZ)(const char *name, int fd,
             nhdr = glue(get_elf_note_type, SZ)(nhdr, file_size, ph->p_align,
                                                *(uint64_t *)translate_opaque);
             if (nhdr != NULL) {
-                bool is64 =
-                    sizeof(struct elf_note) == sizeof(struct elf64_note);
-                elf_note_fn((void *)nhdr, (void *)&ph->p_align, is64);
+                elf_note_fn((void *)nhdr, (void *)&ph->p_align, SZ == 64);
             }
-            g_free(data);
             data = NULL;
         }
     }
 
-    g_free(phdr);
     if (lowaddr)
         *lowaddr = (uint64_t)(elf_sword)low;
     if (highaddr)
         *highaddr = (uint64_t)(elf_sword)high;
-    return total_size;
+    ret = total_size;
  fail:
-    g_free(data);
+    if (mapped_file) {
+        g_mapped_file_unref(mapped_file);
+    }
     g_free(phdr);
     return ret;
 }

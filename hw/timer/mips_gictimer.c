@@ -7,8 +7,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
-#include "hw/sysbus.h"
 #include "qemu/timer.h"
 #include "hw/timer/mips_gictimer.h"
 

@@ -24,15 +24,16 @@
  * THE SOFTWARE.
  *
  */
+
 #include "qemu/osdep.h"
-#include "cpu.h"
 #include "qemu/log.h"
 #include "qemu/error-report.h"
 #include "sysemu/sysemu.h"
-#include "hw/qdev.h"
 #include "sysemu/device_tree.h"
 #include "sysemu/cpus.h"
 #include "sysemu/hw_accel.h"
+#include "sysemu/runstate.h"
+#include "sysemu/qtest.h"
 #include "kvm_ppc.h"
 
 #include "hw/ppc/spapr.h"
@@ -40,7 +41,6 @@
 #include "hw/ppc/spapr_rtas.h"
 #include "hw/ppc/spapr_cpu_core.h"
 #include "hw/ppc/ppc.h"
-#include "hw/boards.h"
 
 #include <libfdt.h>
 #include "hw/ppc/spapr_drc.h"
@@ -49,6 +49,8 @@
 #include "hw/ppc/fdt.h"
 #include "target/ppc/mmu-hash64.h"
 #include "target/ppc/mmu-book3s-v3.h"
+#include "migration/blocker.h"
+#include "helper_regs.h"
 
 static void rtas_display_character(PowerPCCPU *cpu, SpaprMachineState *spapr,
                                    uint32_t token, uint32_t nargs,
@@ -131,8 +133,8 @@ static void rtas_start_cpu(PowerPCCPU *callcpu, SpaprMachineState *spapr,
     target_ulong id, start, r3;
     PowerPCCPU *newcpu;
     CPUPPCState *env;
-    PowerPCCPUClass *pcc;
     target_ulong lpcr;
+    target_ulong caller_lpcr;
 
     if (nargs != 3 || nret != 1) {
         rtas_st(rets, 0, RTAS_OUT_PARAM_ERROR);
@@ -151,7 +153,6 @@ static void rtas_start_cpu(PowerPCCPU *callcpu, SpaprMachineState *spapr,
     }
 
     env = &newcpu->env;
-    pcc = POWERPC_CPU_GET_CLASS(newcpu);
 
     if (!CPU(newcpu)->halted) {
         rtas_st(rets, 0, RTAS_OUT_HW_ERROR);
@@ -161,12 +162,17 @@ static void rtas_start_cpu(PowerPCCPU *callcpu, SpaprMachineState *spapr,
     cpu_synchronize_state(CPU(newcpu));
 
     env->msr = (1ULL << MSR_SF) | (1ULL << MSR_ME);
+    hreg_compute_hflags(env);
 
-    /* Enable Power-saving mode Exit Cause exceptions for the new CPU */
+    caller_lpcr = callcpu->env.spr[SPR_LPCR];
     lpcr = env->spr[SPR_LPCR];
-    if (!pcc->interrupts_big_endian(callcpu)) {
-        lpcr |= LPCR_ILE;
-    }
+
+    /* Set ILE the same way */
+    lpcr = (lpcr & ~LPCR_ILE) | (caller_lpcr & LPCR_ILE);
+
+    /* Set AIL the same way */
+    lpcr = (lpcr & ~LPCR_AIL) | (caller_lpcr & LPCR_AIL);
+
     if (env->mmu_model == POWERPC_MMU_3_00) {
         /*
          * New cpus are expected to start in the same radix/hash mode
@@ -188,7 +194,7 @@ static void rtas_start_cpu(PowerPCCPU *callcpu, SpaprMachineState *spapr,
      */
     newcpu->env.tb_env->tb_offset = callcpu->env.tb_env->tb_offset;
 
-    spapr_cpu_set_entry_state(newcpu, start, r3);
+    spapr_cpu_set_entry_state(newcpu, start, 0, r3, 0);
 
     qemu_cpu_kick(CPU(newcpu));
 
@@ -209,11 +215,41 @@ static void rtas_stop_self(PowerPCCPU *cpu, SpaprMachineState *spapr,
      * guest.
      * For the same reason, set PSSCR_EC.
      */
-    ppc_store_lpcr(cpu, env->spr[SPR_LPCR] & ~pcc->lpcr_pm);
     env->spr[SPR_PSSCR] |= PSSCR_EC;
     cs->halted = 1;
+    ppc_store_lpcr(cpu, env->spr[SPR_LPCR] & ~pcc->lpcr_pm);
     kvmppc_set_reg_ppc_online(cpu, 0);
     qemu_cpu_kick(cs);
+}
+
+static void rtas_ibm_suspend_me(PowerPCCPU *cpu, SpaprMachineState *spapr,
+                                uint32_t token, uint32_t nargs,
+                                target_ulong args,
+                                uint32_t nret, target_ulong rets)
+{
+    CPUState *cs;
+
+    if (nargs != 0 || nret != 1) {
+        rtas_st(rets, 0, RTAS_OUT_PARAM_ERROR);
+        return;
+    }
+
+    CPU_FOREACH(cs) {
+        PowerPCCPU *c = POWERPC_CPU(cs);
+        CPUPPCState *e = &c->env;
+        if (c == cpu) {
+            continue;
+        }
+
+        /* See h_join */
+        if (!cs->halted || (e->msr & (1ULL << MSR_EE))) {
+            rtas_st(rets, 0, H_MULTI_THREADS_ACTIVE);
+            return;
+        }
+    }
+
+    qemu_system_suspend_request();
+    rtas_st(rets, 0, RTAS_OUT_SUCCESS);
 }
 
 static inline int sysparm_st(target_ulong addr, target_ulong len,
@@ -235,8 +271,8 @@ static void rtas_ibm_get_system_parameter(PowerPCCPU *cpu,
                                           target_ulong args,
                                           uint32_t nret, target_ulong rets)
 {
-    MachineState *ms = MACHINE(qdev_get_machine());
-    unsigned int max_cpus = ms->smp.max_cpus;
+    PowerPCCPUClass *pcc = POWERPC_CPU_GET_CLASS(cpu);
+    MachineState *ms = MACHINE(spapr);
     target_ulong parameter = rtas_ld(args, 0);
     target_ulong buffer = rtas_ld(args, 1);
     target_ulong length = rtas_ld(args, 2);
@@ -244,16 +280,29 @@ static void rtas_ibm_get_system_parameter(PowerPCCPU *cpu,
 
     switch (parameter) {
     case RTAS_SYSPARM_SPLPAR_CHARACTERISTICS: {
-        char *param_val = g_strdup_printf("MaxEntCap=%d,"
-                                          "DesMem=%" PRIu64 ","
-                                          "DesProcs=%d,"
-                                          "MaxPlatProcs=%d",
-                                          max_cpus,
-                                          current_machine->ram_size / MiB,
-                                          ms->smp.cpus,
-                                          max_cpus);
+        g_autofree char *param_val = g_strdup_printf("MaxEntCap=%d,"
+                                                     "DesMem=%" PRIu64 ","
+                                                     "DesProcs=%d,"
+                                                     "MaxPlatProcs=%d",
+                                                     ms->smp.max_cpus,
+                                                     ms->ram_size / MiB,
+                                                     ms->smp.cpus,
+                                                     ms->smp.max_cpus);
+        if (pcc->n_host_threads > 0) {
+            /*
+             * Add HostThrs property. This property is not present in PAPR but
+             * is expected by some guests to communicate the number of physical
+             * host threads per core on the system so that they can scale
+             * information which varies based on the thread configuration.
+             */
+            g_autofree char *hostthr_val = g_strdup_printf(",HostThrs=%d",
+                                                           pcc->n_host_threads);
+            char *old = param_val;
+
+            param_val = g_strconcat(param_val, hostthr_val, NULL);
+            g_free(old);
+        }
         ret = sysparm_st(buffer, length, param_val, strlen(param_val) + 1);
-        g_free(param_val);
         break;
     }
     case RTAS_SYSPARM_DIAGNOSTICS_RUN_MODE: {
@@ -299,6 +348,13 @@ static void rtas_ibm_os_term(PowerPCCPU *cpu,
                             target_ulong args,
                             uint32_t nret, target_ulong rets)
 {
+    target_ulong msgaddr = rtas_ld(args, 0);
+    char msg[512];
+
+    cpu_physical_memory_read(msgaddr, msg, sizeof(msg) - 1);
+    msg[sizeof(msg) - 1] = 0;
+
+    error_report("OS terminated: %s", msg);
     qemu_system_guest_panicked(NULL);
 
     rtas_st(rets, 0, RTAS_OUT_SUCCESS);
@@ -354,6 +410,95 @@ static void rtas_get_power_level(PowerPCCPU *cpu, SpaprMachineState *spapr,
     rtas_st(rets, 1, 100);
 }
 
+static void rtas_ibm_nmi_register(PowerPCCPU *cpu,
+                                  SpaprMachineState *spapr,
+                                  uint32_t token, uint32_t nargs,
+                                  target_ulong args,
+                                  uint32_t nret, target_ulong rets)
+{
+    hwaddr rtas_addr;
+    target_ulong sreset_addr, mce_addr;
+
+    if (spapr_get_cap(spapr, SPAPR_CAP_FWNMI) == SPAPR_CAP_OFF) {
+        rtas_st(rets, 0, RTAS_OUT_NOT_SUPPORTED);
+        return;
+    }
+
+    rtas_addr = spapr_get_rtas_addr();
+    if (!rtas_addr) {
+        rtas_st(rets, 0, RTAS_OUT_NOT_SUPPORTED);
+        return;
+    }
+
+    sreset_addr = rtas_ld(args, 0);
+    mce_addr = rtas_ld(args, 1);
+
+    /* PAPR requires these are in the first 32M of memory and within RMA */
+    if (sreset_addr >= 32 * MiB || sreset_addr >= spapr->rma_size ||
+           mce_addr >= 32 * MiB ||    mce_addr >= spapr->rma_size) {
+        rtas_st(rets, 0, RTAS_OUT_PARAM_ERROR);
+        return;
+    }
+
+    if (kvm_enabled()) {
+        if (kvmppc_set_fwnmi(cpu) < 0) {
+            rtas_st(rets, 0, RTAS_OUT_NOT_SUPPORTED);
+            return;
+        }
+    }
+
+    spapr->fwnmi_system_reset_addr = sreset_addr;
+    spapr->fwnmi_machine_check_addr = mce_addr;
+
+    rtas_st(rets, 0, RTAS_OUT_SUCCESS);
+}
+
+static void rtas_ibm_nmi_interlock(PowerPCCPU *cpu,
+                                   SpaprMachineState *spapr,
+                                   uint32_t token, uint32_t nargs,
+                                   target_ulong args,
+                                   uint32_t nret, target_ulong rets)
+{
+    if (spapr_get_cap(spapr, SPAPR_CAP_FWNMI) == SPAPR_CAP_OFF) {
+        rtas_st(rets, 0, RTAS_OUT_NOT_SUPPORTED);
+        return;
+    }
+
+    if (spapr->fwnmi_machine_check_addr == -1) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+"FWNMI: ibm,nmi-interlock RTAS called with FWNMI not registered.\n");
+
+        /* NMI register not called */
+        rtas_st(rets, 0, RTAS_OUT_PARAM_ERROR);
+        return;
+    }
+
+    if (spapr->fwnmi_machine_check_interlock != cpu->vcpu_id) {
+        /*
+         * The vCPU that hit the NMI should invoke "ibm,nmi-interlock"
+         * This should be PARAM_ERROR, but Linux calls "ibm,nmi-interlock"
+         * for system reset interrupts, despite them not being interlocked.
+         * PowerVM silently ignores this and returns success here. Returning
+         * failure causes Linux to print the error "FWNMI: nmi-interlock
+         * failed: -3", although no other apparent ill effects, this is a
+         * regression for the user when enabling FWNMI. So for now, match
+         * PowerVM. When most Linux clients are fixed, this could be
+         * changed.
+         */
+        rtas_st(rets, 0, RTAS_OUT_SUCCESS);
+        return;
+    }
+
+    /*
+     * vCPU issuing "ibm,nmi-interlock" is done with NMI handling,
+     * hence unset fwnmi_machine_check_interlock.
+     */
+    spapr->fwnmi_machine_check_interlock = -1;
+    qemu_cond_signal(&spapr->fwnmi_machine_check_interlock_cond);
+    rtas_st(rets, 0, RTAS_OUT_SUCCESS);
+    migrate_del_blocker(spapr->fwnmi_migration_blocker);
+}
+
 static struct rtas_call {
     const char *name;
     spapr_rtas_fn fn;
@@ -404,6 +549,32 @@ uint64_t qtest_rtas_call(char *cmd, uint32_t nargs, uint64_t args,
     return H_PARAMETER;
 }
 
+static bool spapr_qtest_callback(CharBackend *chr, gchar **words)
+{
+    if (strcmp(words[0], "rtas") == 0) {
+        uint64_t res, args, ret;
+        unsigned long nargs, nret;
+        int rc;
+
+        rc = qemu_strtoul(words[2], NULL, 0, &nargs);
+        g_assert(rc == 0);
+        rc = qemu_strtou64(words[3], NULL, 0, &args);
+        g_assert(rc == 0);
+        rc = qemu_strtoul(words[4], NULL, 0, &nret);
+        g_assert(rc == 0);
+        rc = qemu_strtou64(words[5], NULL, 0, &ret);
+        g_assert(rc == 0);
+        res = qtest_rtas_call(words[1], nargs, args, nret, ret);
+
+        qtest_send_prefix(chr);
+        qtest_sendf(chr, "OK %"PRIu64"\n", res);
+
+        return true;
+    }
+
+    return false;
+}
+
 void spapr_rtas_register(int token, const char *name, spapr_rtas_fn fn)
 {
     assert((token >= RTAS_TOKEN_BASE) && (token < RTAS_TOKEN_MAX));
@@ -431,45 +602,30 @@ void spapr_dt_rtas_tokens(void *fdt, int rtas)
     }
 }
 
-void spapr_load_rtas(SpaprMachineState *spapr, void *fdt, hwaddr addr)
+hwaddr spapr_get_rtas_addr(void)
 {
+    SpaprMachineState *spapr = SPAPR_MACHINE(qdev_get_machine());
     int rtas_node;
-    int ret;
+    const fdt32_t *rtas_data;
+    void *fdt = spapr->fdt_blob;
 
-    /* Copy RTAS blob into guest RAM */
-    cpu_physical_memory_write(addr, spapr->rtas_blob, spapr->rtas_size);
-
-    ret = fdt_add_mem_rsv(fdt, addr, spapr->rtas_size);
-    if (ret < 0) {
-        error_report("Couldn't add RTAS reserve entry: %s",
-                     fdt_strerror(ret));
-        exit(1);
-    }
-
-    /* Update the device tree with the blob's location */
+    /* fetch rtas addr from fdt */
     rtas_node = fdt_path_offset(fdt, "/rtas");
-    assert(rtas_node >= 0);
-
-    ret = fdt_setprop_cell(fdt, rtas_node, "linux,rtas-base", addr);
-    if (ret < 0) {
-        error_report("Couldn't add linux,rtas-base property: %s",
-                     fdt_strerror(ret));
-        exit(1);
+    if (rtas_node < 0) {
+        return 0;
     }
 
-    ret = fdt_setprop_cell(fdt, rtas_node, "linux,rtas-entry", addr);
-    if (ret < 0) {
-        error_report("Couldn't add linux,rtas-entry property: %s",
-                     fdt_strerror(ret));
-        exit(1);
+    rtas_data = fdt_getprop(fdt, rtas_node, "linux,rtas-base", NULL);
+    if (!rtas_data) {
+        return 0;
     }
 
-    ret = fdt_setprop_cell(fdt, rtas_node, "rtas-size", spapr->rtas_size);
-    if (ret < 0) {
-        error_report("Couldn't add rtas-size property: %s",
-                     fdt_strerror(ret));
-        exit(1);
-    }
+    /*
+     * We assume that the OS called RTAS instantiate-rtas, but some other
+     * OS might call RTAS instantiate-rtas-64 instead. This fine as of now
+     * as SLOF only supports 32-bit variant.
+     */
+    return (hwaddr)fdt32_to_cpu(*rtas_data);
 }
 
 static void core_rtas_register_types(void)
@@ -483,6 +639,8 @@ static void core_rtas_register_types(void)
                         rtas_query_cpu_stopped_state);
     spapr_rtas_register(RTAS_START_CPU, "start-cpu", rtas_start_cpu);
     spapr_rtas_register(RTAS_STOP_SELF, "stop-self", rtas_stop_self);
+    spapr_rtas_register(RTAS_IBM_SUSPEND_ME, "ibm,suspend-me",
+                        rtas_ibm_suspend_me);
     spapr_rtas_register(RTAS_IBM_GET_SYSTEM_PARAMETER,
                         "ibm,get-system-parameter",
                         rtas_ibm_get_system_parameter);
@@ -495,6 +653,12 @@ static void core_rtas_register_types(void)
                         rtas_set_power_level);
     spapr_rtas_register(RTAS_GET_POWER_LEVEL, "get-power-level",
                         rtas_get_power_level);
+    spapr_rtas_register(RTAS_IBM_NMI_REGISTER, "ibm,nmi-register",
+                        rtas_ibm_nmi_register);
+    spapr_rtas_register(RTAS_IBM_NMI_INTERLOCK, "ibm,nmi-interlock",
+                        rtas_ibm_nmi_interlock);
+
+    qtest_set_command_cb(spapr_qtest_callback);
 }
 
 type_init(core_rtas_register_types)

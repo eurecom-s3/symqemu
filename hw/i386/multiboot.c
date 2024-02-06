@@ -25,7 +25,6 @@
 #include "qemu/osdep.h"
 #include "qemu/option.h"
 #include "cpu.h"
-#include "hw/hw.h"
 #include "hw/nvram/fw_cfg.h"
 #include "multiboot.h"
 #include "hw/loader.h"
@@ -138,13 +137,14 @@ static void mb_add_mod(MultibootState *s,
     stl_p(p + MB_MOD_END,     end);
     stl_p(p + MB_MOD_CMDLINE, cmdline_phys);
 
-    mb_debug("mod%02d: "TARGET_FMT_plx" - "TARGET_FMT_plx,
+    mb_debug("mod%02d: "HWADDR_FMT_plx" - "HWADDR_FMT_plx,
              s->mb_mods_count, start, end);
 
     s->mb_mods_count++;
 }
 
-int load_multiboot(FWCfgState *fw_cfg,
+int load_multiboot(X86MachineState *x86ms,
+                   FWCfgState *fw_cfg,
                    FILE *f,
                    const char *kernel_filename,
                    const char *initrd_filename,
@@ -152,6 +152,7 @@ int load_multiboot(FWCfgState *fw_cfg,
                    int kernel_file_size,
                    uint8_t *header)
 {
+    bool multiboot_dma_enabled = X86_MACHINE_GET_CLASS(x86ms)->fwcfg_dma_enabled;
     int i, is_multiboot = 0;
     uint32_t flags = 0;
     uint32_t mh_entry_addr;
@@ -162,6 +163,7 @@ int load_multiboot(FWCfgState *fw_cfg,
     uint8_t *mb_bootinfo_data;
     uint32_t cmdline_len;
     GList *mods = NULL;
+    g_autofree char *kcmdline = NULL;
 
     /* Ok, let's see if it is a multiboot image.
        The header is 12x32bit long, so the latest entry may be 8192 - 48. */
@@ -200,7 +202,7 @@ int load_multiboot(FWCfgState *fw_cfg,
         }
 
         kernel_size = load_elf(kernel_filename, NULL, NULL, NULL, &elf_entry,
-                               &elf_low, &elf_high, 0, I386_ELF_MACHINE,
+                               &elf_low, &elf_high, NULL, 0, I386_ELF_MACHINE,
                                0, 0);
         if (kernel_size < 0) {
             error_report("Error while loading elf kernel");
@@ -351,7 +353,7 @@ int load_multiboot(FWCfgState *fw_cfg,
             mb_add_mod(&mbs, mbs.mb_buf_phys + offs,
                        mbs.mb_buf_phys + offs + mb_mod_length, c);
 
-            mb_debug("mod_start: %p\nmod_end:   %p\n  cmdline: "TARGET_FMT_plx,
+            mb_debug("mod_start: %p\nmod_end:   %p\n  cmdline: "HWADDR_FMT_plx,
                      (char *)mbs.mb_buf + offs,
                      (char *)mbs.mb_buf + offs + mb_mod_length, c);
             g_free(one_file);
@@ -361,9 +363,7 @@ int load_multiboot(FWCfgState *fw_cfg,
     }
 
     /* Commandline support */
-    char kcmdline[strlen(kernel_filename) + strlen(kernel_cmdline) + 2];
-    snprintf(kcmdline, sizeof(kcmdline), "%s %s",
-             kernel_filename, kernel_cmdline);
+    kcmdline = g_strdup_printf("%s %s", kernel_filename, kernel_cmdline);
     stl_p(bootinfo + MBI_CMDLINE, mb_add_cmdline(&mbs, kcmdline));
 
     stl_p(bootinfo + MBI_BOOTLOADER, mb_add_bootloader(&mbs, bootloader_name));
@@ -382,8 +382,8 @@ int load_multiboot(FWCfgState *fw_cfg,
     stl_p(bootinfo + MBI_MMAP_ADDR,   ADDR_E820_MAP);
 
     mb_debug("multiboot: entry_addr = %#x", mh_entry_addr);
-    mb_debug("           mb_buf_phys   = "TARGET_FMT_plx, mbs.mb_buf_phys);
-    mb_debug("           mod_start     = "TARGET_FMT_plx,
+    mb_debug("           mb_buf_phys   = "HWADDR_FMT_plx, mbs.mb_buf_phys);
+    mb_debug("           mod_start     = "HWADDR_FMT_plx,
              mbs.mb_buf_phys + mbs.offset_mods);
     mb_debug("           mb_mods_count = %d", mbs.mb_mods_count);
 
@@ -402,7 +402,11 @@ int load_multiboot(FWCfgState *fw_cfg,
     fw_cfg_add_bytes(fw_cfg, FW_CFG_INITRD_DATA, mb_bootinfo_data,
                      sizeof(bootinfo));
 
-    option_rom[nb_option_roms].name = "multiboot.bin";
+    if (multiboot_dma_enabled) {
+        option_rom[nb_option_roms].name = "multiboot_dma.bin";
+    } else {
+        option_rom[nb_option_roms].name = "multiboot.bin";
+    }
     option_rom[nb_option_roms].bootindex = 0;
     nb_option_roms++;
 

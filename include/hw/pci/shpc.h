@@ -3,7 +3,8 @@
 
 #include "exec/memory.h"
 #include "hw/hotplug.h"
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
+#include "migration/vmstate.h"
 
 struct SHPCDevice {
     /* Capability offset in device's config space */

@@ -14,9 +14,9 @@
 /* TODO: Implement PEC.  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/i2c/i2c.h"
 #include "hw/i2c/smbus_slave.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
 
 //#define DEBUG_SMBUS 1
@@ -143,6 +143,10 @@ static int smbus_i2c_event(I2CSlave *s, enum i2c_event event)
             dev->mode = SMBUS_CONFUSED;
             break;
         }
+        break;
+
+    default:
+        return -1;
     }
 
     return 0;

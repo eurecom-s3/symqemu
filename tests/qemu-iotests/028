@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw backing quick
 #
 # Test that backing files can be smaller than the image
 #
@@ -22,7 +23,7 @@
 #
 
 # creator
-owner=stefanha@linux.vnet.ibm.com
+owner=stefanha@redhat.com
 
 seq=`basename $0`
 echo "QA output created by $seq"
@@ -32,7 +33,7 @@ status=1	# failure is the default!
 _cleanup()
 {
     _cleanup_qemu
-    rm -f "${TEST_IMG}.copy"
+    _rm_test_img "${TEST_IMG}.copy"
     _cleanup_test_img
 }
 trap "_cleanup; exit \$status" 0 1 2 3 15
@@ -46,7 +47,7 @@ trap "_cleanup; exit \$status" 0 1 2 3 15
 # Any format supporting backing files except vmdk and qcow which do not support
 # smaller backing files.
 _supported_fmt qcow2 qed
-_supported_proto file
+_supported_proto file fuse
 _supported_os Linux
 
 # Choose a size that is not necessarily a cluster size multiple for image
@@ -76,7 +77,7 @@ echo "Creating test image with backing file"
 echo
 
 TEST_IMG="$TEST_IMG_SAVE"
-_make_test_img -b "$TEST_IMG.base" $image_size
+_make_test_img -b "$TEST_IMG.base" -F $IMGFMT $image_size
 
 echo "Filling test image"
 echo
@@ -101,23 +102,26 @@ io_zero readv $(( offset + 32 * 1024 )) 512 1024 32
 _check_test_img
 
 # Rebase it on top of its base image
-$QEMU_IMG rebase -b "$TEST_IMG.base" "$TEST_IMG"
+$QEMU_IMG rebase -b "$TEST_IMG.base" -F $IMGFMT "$TEST_IMG"
 
 echo
 echo block-backup
 echo
 
 qemu_comm_method="monitor"
-_launch_qemu -drive file="${TEST_IMG}",cache=${CACHEMODE},id=disk
+_launch_qemu -drive file="${TEST_IMG}",cache=${CACHEMODE},aio=${AIOMODE},id=disk
 h=$QEMU_HANDLE
-QEMU_COMM_TIMEOUT=1
+if [ "${VALGRIND_QEMU}" == "y" ]; then
+    QEMU_COMM_TIMEOUT=7
+else
+    QEMU_COMM_TIMEOUT=1
+fi
 
-# Silence output since it contains the disk image path and QEMU's readline
-# character echoing makes it very hard to filter the output. Plus, there
-# is no telling how many times the command will repeat before succeeding.
-_send_qemu_cmd $h "drive_backup disk ${TEST_IMG}.copy" "(qemu)" >/dev/null
-_send_qemu_cmd $h "" "Formatting" | _filter_img_create
-qemu_cmd_repeat=20 _send_qemu_cmd $h "info block-jobs" "No active jobs" >/dev/null
+TEST_IMG="$TEST_IMG.copy" _make_test_img $image_size
+_send_qemu_cmd $h "drive_backup -n disk ${TEST_IMG}.copy" "(qemu)" \
+    | _filter_imgfmt
+
+silent=y qemu_cmd_repeat=20 _send_qemu_cmd $h "info block-jobs" "No active jobs"
 _send_qemu_cmd $h "info block-jobs" "No active jobs"
 _send_qemu_cmd $h 'quit' ""
 
@@ -132,6 +136,25 @@ TEST_IMG="${TEST_IMG}.copy" io_zero readv $(( offset + 32 * 1024 )) 512 1024 32
 
 
 _check_test_img
+
+echo
+echo '=== Reading across backing EOF in one operation ==='
+echo
+
+# Use a cluster boundary as the base end here
+base_size=$((3 * 1024 * 1024 * 1024))
+
+TEST_IMG="$TEST_IMG.base" _make_test_img $base_size
+_make_test_img -b "$TEST_IMG.base" -F $IMGFMT $image_size
+
+# Write 16 times 42 at the end of the base image
+$QEMU_IO -c "write -P 42 $((base_size - 16)) 16" "$TEST_IMG.base" \
+    | _filter_qemu_io
+
+# Read 32 bytes across the base EOF from the top;
+# should be 16 times 0x2a, then 16 times 0x00
+$QEMU_IO -c "read -v $((base_size - 16)) 32" "$TEST_IMG" \
+    | _filter_qemu_io
 
 # success, all done
 echo "*** done"

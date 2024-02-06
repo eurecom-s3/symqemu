@@ -10,17 +10,14 @@
 
 #include "qemu/osdep.h"
 #include "qemu/units.h"
-#include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
-#include "cpu.h"
-#include "hw/hw.h"
-#include "exec/address-spaces.h"
-#include "exec/memory.h"
-#include "hw/ppc/ppc.h"
+#include "hw/irq.h"
+#include "hw/ppc/ppc4xx.h"
+#include "hw/qdev-properties.h"
 #include "hw/pci/pci.h"
-#include "sysemu/block-backend.h"
+#include "sysemu/reset.h"
+#include "cpu.h"
 #include "ppc440.h"
 
 /*****************************************************************************/
@@ -377,10 +374,6 @@ enum {
     PESDR1_RSTSTA = 0x365,
 };
 
-#define SDR0_DDR0_DDRM_ENCODE(n)  ((((unsigned long)(n)) & 0x03) << 29)
-#define SDR0_DDR0_DDRM_DDR1       0x20000000
-#define SDR0_DDR0_DDRM_DDR2       0x40000000
-
 static uint32_t dcr_read_sdr(void *opaque, int dcrn)
 {
     ppc4xx_sdr_t *sdr = opaque;
@@ -477,262 +470,6 @@ void ppc4xx_sdr_init(CPUPPCState *env)
                      sdr, &dcr_read_sdr, &dcr_write_sdr);
     ppc_dcr_register(env, SDR0_USB0,
                      sdr, &dcr_read_sdr, &dcr_write_sdr);
-}
-
-/*****************************************************************************/
-/* SDRAM controller */
-typedef struct ppc440_sdram_t {
-    uint32_t addr;
-    int nbanks;
-    MemoryRegion containers[4]; /* used for clipping */
-    MemoryRegion *ram_memories;
-    hwaddr ram_bases[4];
-    hwaddr ram_sizes[4];
-    uint32_t bcr[4];
-} ppc440_sdram_t;
-
-enum {
-    SDRAM0_CFGADDR = 0x10,
-    SDRAM0_CFGDATA,
-    SDRAM_R0BAS = 0x40,
-    SDRAM_R1BAS,
-    SDRAM_R2BAS,
-    SDRAM_R3BAS,
-    SDRAM_CONF1HB = 0x45,
-    SDRAM_PLBADDULL = 0x4a,
-    SDRAM_CONF1LL = 0x4b,
-    SDRAM_CONFPATHB = 0x4f,
-    SDRAM_PLBADDUHB = 0x50,
-};
-
-static uint32_t sdram_bcr(hwaddr ram_base, hwaddr ram_size)
-{
-    uint32_t bcr;
-
-    switch (ram_size) {
-    case (8 * MiB):
-        bcr = 0xffc0;
-        break;
-    case (16 * MiB):
-        bcr = 0xff80;
-        break;
-    case (32 * MiB):
-        bcr = 0xff00;
-        break;
-    case (64 * MiB):
-        bcr = 0xfe00;
-        break;
-    case (128 * MiB):
-        bcr = 0xfc00;
-        break;
-    case (256 * MiB):
-        bcr = 0xf800;
-        break;
-    case (512 * MiB):
-        bcr = 0xf000;
-        break;
-    case (1 * GiB):
-        bcr = 0xe000;
-        break;
-    case (2 * GiB):
-        bcr = 0xc000;
-        break;
-    case (4 * GiB):
-        bcr = 0x8000;
-        break;
-    default:
-        error_report("invalid RAM size " TARGET_FMT_plx, ram_size);
-        return 0;
-    }
-    bcr |= ram_base >> 2 & 0xffe00000;
-    bcr |= 1;
-
-    return bcr;
-}
-
-static inline hwaddr sdram_base(uint32_t bcr)
-{
-    return (bcr & 0xffe00000) << 2;
-}
-
-static uint64_t sdram_size(uint32_t bcr)
-{
-    uint64_t size;
-    int sh;
-
-    sh = 1024 - ((bcr >> 6) & 0x3ff);
-    size = 8 * MiB * sh;
-
-    return size;
-}
-
-static void sdram_set_bcr(ppc440_sdram_t *sdram, int i,
-                          uint32_t bcr, int enabled)
-{
-    if (sdram->bcr[i] & 1) {
-        /* First unmap RAM if enabled */
-        memory_region_del_subregion(get_system_memory(),
-                                    &sdram->containers[i]);
-        memory_region_del_subregion(&sdram->containers[i],
-                                    &sdram->ram_memories[i]);
-        object_unparent(OBJECT(&sdram->containers[i]));
-    }
-    sdram->bcr[i] = bcr & 0xffe0ffc1;
-    if (enabled && (bcr & 1)) {
-        memory_region_init(&sdram->containers[i], NULL, "sdram-containers",
-                           sdram_size(bcr));
-        memory_region_add_subregion(&sdram->containers[i], 0,
-                                    &sdram->ram_memories[i]);
-        memory_region_add_subregion(get_system_memory(),
-                                    sdram_base(bcr),
-                                    &sdram->containers[i]);
-    }
-}
-
-static void sdram_map_bcr(ppc440_sdram_t *sdram)
-{
-    int i;
-
-    for (i = 0; i < sdram->nbanks; i++) {
-        if (sdram->ram_sizes[i] != 0) {
-            sdram_set_bcr(sdram, i, sdram_bcr(sdram->ram_bases[i],
-                                              sdram->ram_sizes[i]), 1);
-        } else {
-            sdram_set_bcr(sdram, i, 0, 0);
-        }
-    }
-}
-
-static uint32_t dcr_read_sdram(void *opaque, int dcrn)
-{
-    ppc440_sdram_t *sdram = opaque;
-    uint32_t ret = 0;
-
-    switch (dcrn) {
-    case SDRAM_R0BAS:
-    case SDRAM_R1BAS:
-    case SDRAM_R2BAS:
-    case SDRAM_R3BAS:
-        if (sdram->ram_sizes[dcrn - SDRAM_R0BAS]) {
-            ret = sdram_bcr(sdram->ram_bases[dcrn - SDRAM_R0BAS],
-                            sdram->ram_sizes[dcrn - SDRAM_R0BAS]);
-        }
-        break;
-    case SDRAM_CONF1HB:
-    case SDRAM_CONF1LL:
-    case SDRAM_CONFPATHB:
-    case SDRAM_PLBADDULL:
-    case SDRAM_PLBADDUHB:
-        break;
-    case SDRAM0_CFGADDR:
-        ret = sdram->addr;
-        break;
-    case SDRAM0_CFGDATA:
-        switch (sdram->addr) {
-        case 0x14: /* SDRAM_MCSTAT (405EX) */
-        case 0x1F:
-            ret = 0x80000000;
-            break;
-        case 0x21: /* SDRAM_MCOPT2 */
-            ret = 0x08000000;
-            break;
-        case 0x40: /* SDRAM_MB0CF */
-            ret = 0x00008001;
-            break;
-        case 0x7A: /* SDRAM_DLCR */
-            ret = 0x02000000;
-            break;
-        case 0xE1: /* SDR0_DDR0 */
-            ret = SDR0_DDR0_DDRM_ENCODE(1) | SDR0_DDR0_DDRM_DDR1;
-            break;
-        default:
-            break;
-        }
-        break;
-    default:
-        break;
-    }
-
-    return ret;
-}
-
-static void dcr_write_sdram(void *opaque, int dcrn, uint32_t val)
-{
-    ppc440_sdram_t *sdram = opaque;
-
-    switch (dcrn) {
-    case SDRAM_R0BAS:
-    case SDRAM_R1BAS:
-    case SDRAM_R2BAS:
-    case SDRAM_R3BAS:
-    case SDRAM_CONF1HB:
-    case SDRAM_CONF1LL:
-    case SDRAM_CONFPATHB:
-    case SDRAM_PLBADDULL:
-    case SDRAM_PLBADDUHB:
-        break;
-    case SDRAM0_CFGADDR:
-        sdram->addr = val;
-        break;
-    case SDRAM0_CFGDATA:
-        switch (sdram->addr) {
-        case 0x00: /* B0CR */
-            break;
-        default:
-            break;
-        }
-        break;
-    default:
-        break;
-    }
-}
-
-static void sdram_reset(void *opaque)
-{
-    ppc440_sdram_t *sdram = opaque;
-
-    sdram->addr = 0;
-}
-
-void ppc440_sdram_init(CPUPPCState *env, int nbanks,
-                       MemoryRegion *ram_memories,
-                       hwaddr *ram_bases, hwaddr *ram_sizes,
-                       int do_init)
-{
-    ppc440_sdram_t *sdram;
-
-    sdram = g_malloc0(sizeof(*sdram));
-    sdram->nbanks = nbanks;
-    sdram->ram_memories = ram_memories;
-    memcpy(sdram->ram_bases, ram_bases, nbanks * sizeof(hwaddr));
-    memcpy(sdram->ram_sizes, ram_sizes, nbanks * sizeof(hwaddr));
-    qemu_register_reset(&sdram_reset, sdram);
-    ppc_dcr_register(env, SDRAM0_CFGADDR,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    ppc_dcr_register(env, SDRAM0_CFGDATA,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    if (do_init) {
-        sdram_map_bcr(sdram);
-    }
-
-    ppc_dcr_register(env, SDRAM_R0BAS,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    ppc_dcr_register(env, SDRAM_R1BAS,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    ppc_dcr_register(env, SDRAM_R2BAS,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    ppc_dcr_register(env, SDRAM_R3BAS,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    ppc_dcr_register(env, SDRAM_CONF1HB,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    ppc_dcr_register(env, SDRAM_PLBADDULL,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    ppc_dcr_register(env, SDRAM_CONF1LL,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    ppc_dcr_register(env, SDRAM_CONFPATHB,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
-    ppc_dcr_register(env, SDRAM_PLBADDUHB,
-                     sdram, &dcr_read_sdram, &dcr_write_sdram);
 }
 
 /*****************************************************************************/
@@ -903,12 +640,17 @@ static void dcr_write_dma(void *opaque, int dcrn, uint32_t val)
                     int width, i, sidx, didx;
                     uint8_t *rptr, *wptr;
                     hwaddr rlen, wlen;
+                    hwaddr xferlen;
 
                     sidx = didx = 0;
                     width = 1 << ((val & DMA0_CR_PW) >> 25);
-                    rptr = cpu_physical_memory_map(dma->ch[chnl].sa, &rlen, 0);
-                    wptr = cpu_physical_memory_map(dma->ch[chnl].da, &wlen, 1);
-                    if (rptr && wptr) {
+                    xferlen = count * width;
+                    wlen = rlen = xferlen;
+                    rptr = cpu_physical_memory_map(dma->ch[chnl].sa, &rlen,
+                                                   false);
+                    wptr = cpu_physical_memory_map(dma->ch[chnl].da, &wlen,
+                                                   true);
+                    if (rptr && rlen == xferlen && wptr && wlen == xferlen) {
                         if (!(val & DMA0_CR_DEC) &&
                             val & DMA0_CR_SAI && val & DMA0_CR_DAI) {
                             /* optimise common case */
@@ -1022,21 +764,23 @@ void ppc4xx_dma_init(CPUPPCState *env, int dcr_base)
 
 /*****************************************************************************/
 /* PCI Express controller */
-/* FIXME: This is not complete and does not work, only implemented partially
+/*
+ * FIXME: This is not complete and does not work, only implemented partially
  * to allow firmware and guests to find an empty bus. Cards should use PCI.
  */
 #include "hw/pci/pcie_host.h"
 
-#define TYPE_PPC460EX_PCIE_HOST "ppc460ex-pcie-host"
-#define PPC460EX_PCIE_HOST(obj) \
-    OBJECT_CHECK(PPC460EXPCIEState, (obj), TYPE_PPC460EX_PCIE_HOST)
+OBJECT_DECLARE_SIMPLE_TYPE(PPC460EXPCIEState, PPC460EX_PCIE_HOST)
 
-typedef struct PPC460EXPCIEState {
-    PCIExpressHost host;
+struct PPC460EXPCIEState {
+    PCIExpressHost parent_obj;
 
+    MemoryRegion busmem;
     MemoryRegion iomem;
     qemu_irq irq[4];
+    int32_t num;
     int32_t dcrn_base;
+    PowerPCCPU *cpu;
 
     uint64_t cfg_base;
     uint32_t cfg_mask;
@@ -1052,10 +796,7 @@ typedef struct PPC460EXPCIEState {
     uint32_t reg_mask;
     uint32_t special;
     uint32_t cfg;
-} PPC460EXPCIEState;
-
-#define DCRN_PCIE0_BASE 0x100
-#define DCRN_PCIE1_BASE 0x120
+};
 
 enum {
     PEGPL_CFGBAH = 0x0,
@@ -1085,78 +826,78 @@ enum {
 
 static uint32_t dcr_read_pcie(void *opaque, int dcrn)
 {
-    PPC460EXPCIEState *state = opaque;
+    PPC460EXPCIEState *s = opaque;
     uint32_t ret = 0;
 
-    switch (dcrn - state->dcrn_base) {
+    switch (dcrn - s->dcrn_base) {
     case PEGPL_CFGBAH:
-        ret = state->cfg_base >> 32;
+        ret = s->cfg_base >> 32;
         break;
     case PEGPL_CFGBAL:
-        ret = state->cfg_base;
+        ret = s->cfg_base;
         break;
     case PEGPL_CFGMSK:
-        ret = state->cfg_mask;
+        ret = s->cfg_mask;
         break;
     case PEGPL_MSGBAH:
-        ret = state->msg_base >> 32;
+        ret = s->msg_base >> 32;
         break;
     case PEGPL_MSGBAL:
-        ret = state->msg_base;
+        ret = s->msg_base;
         break;
     case PEGPL_MSGMSK:
-        ret = state->msg_mask;
+        ret = s->msg_mask;
         break;
     case PEGPL_OMR1BAH:
-        ret = state->omr1_base >> 32;
+        ret = s->omr1_base >> 32;
         break;
     case PEGPL_OMR1BAL:
-        ret = state->omr1_base;
+        ret = s->omr1_base;
         break;
     case PEGPL_OMR1MSKH:
-        ret = state->omr1_mask >> 32;
+        ret = s->omr1_mask >> 32;
         break;
     case PEGPL_OMR1MSKL:
-        ret = state->omr1_mask;
+        ret = s->omr1_mask;
         break;
     case PEGPL_OMR2BAH:
-        ret = state->omr2_base >> 32;
+        ret = s->omr2_base >> 32;
         break;
     case PEGPL_OMR2BAL:
-        ret = state->omr2_base;
+        ret = s->omr2_base;
         break;
     case PEGPL_OMR2MSKH:
-        ret = state->omr2_mask >> 32;
+        ret = s->omr2_mask >> 32;
         break;
     case PEGPL_OMR2MSKL:
-        ret = state->omr3_mask;
+        ret = s->omr3_mask;
         break;
     case PEGPL_OMR3BAH:
-        ret = state->omr3_base >> 32;
+        ret = s->omr3_base >> 32;
         break;
     case PEGPL_OMR3BAL:
-        ret = state->omr3_base;
+        ret = s->omr3_base;
         break;
     case PEGPL_OMR3MSKH:
-        ret = state->omr3_mask >> 32;
+        ret = s->omr3_mask >> 32;
         break;
     case PEGPL_OMR3MSKL:
-        ret = state->omr3_mask;
+        ret = s->omr3_mask;
         break;
     case PEGPL_REGBAH:
-        ret = state->reg_base >> 32;
+        ret = s->reg_base >> 32;
         break;
     case PEGPL_REGBAL:
-        ret = state->reg_base;
+        ret = s->reg_base;
         break;
     case PEGPL_REGMSK:
-        ret = state->reg_mask;
+        ret = s->reg_mask;
         break;
     case PEGPL_SPECIAL:
-        ret = state->special;
+        ret = s->special;
         break;
     case PEGPL_CFG:
-        ret = state->cfg;
+        ret = s->cfg;
         break;
     }
 
@@ -1178,9 +919,15 @@ static void dcr_write_pcie(void *opaque, int dcrn, uint32_t val)
     case PEGPL_CFGMSK:
         s->cfg_mask = val;
         size = ~(val & 0xfffffffe) + 1;
-        qemu_mutex_lock_iothread();
+        /*
+         * Firmware sets this register to E0000001. Why we are not sure,
+         * but the current guess is anything above PCIE_MMCFG_SIZE_MAX is
+         * ignored.
+         */
+        if (size > PCIE_MMCFG_SIZE_MAX) {
+            size = PCIE_MMCFG_SIZE_MAX;
+        }
         pcie_host_mmcfg_update(PCIE_HOST_BRIDGE(s), val & 1, s->cfg_base, size);
-        qemu_mutex_unlock_iothread();
         break;
     case PEGPL_MSGBAH:
         s->msg_base = ((uint64_t)val << 32) | (s->msg_base & 0xffffffff);
@@ -1253,37 +1000,72 @@ static void ppc460ex_set_irq(void *opaque, int irq_num, int level)
        qemu_set_irq(s->irq[irq_num], level);
 }
 
+#define PPC440_PCIE_DCR(s, dcrn) \
+    ppc_dcr_register(&(s)->cpu->env, (s)->dcrn_base + (dcrn), (s), \
+                     &dcr_read_pcie, &dcr_write_pcie)
+
+
+static void ppc460ex_pcie_register_dcrs(PPC460EXPCIEState *s)
+{
+    PPC440_PCIE_DCR(s, PEGPL_CFGBAH);
+    PPC440_PCIE_DCR(s, PEGPL_CFGBAL);
+    PPC440_PCIE_DCR(s, PEGPL_CFGMSK);
+    PPC440_PCIE_DCR(s, PEGPL_MSGBAH);
+    PPC440_PCIE_DCR(s, PEGPL_MSGBAL);
+    PPC440_PCIE_DCR(s, PEGPL_MSGMSK);
+    PPC440_PCIE_DCR(s, PEGPL_OMR1BAH);
+    PPC440_PCIE_DCR(s, PEGPL_OMR1BAL);
+    PPC440_PCIE_DCR(s, PEGPL_OMR1MSKH);
+    PPC440_PCIE_DCR(s, PEGPL_OMR1MSKL);
+    PPC440_PCIE_DCR(s, PEGPL_OMR2BAH);
+    PPC440_PCIE_DCR(s, PEGPL_OMR2BAL);
+    PPC440_PCIE_DCR(s, PEGPL_OMR2MSKH);
+    PPC440_PCIE_DCR(s, PEGPL_OMR2MSKL);
+    PPC440_PCIE_DCR(s, PEGPL_OMR3BAH);
+    PPC440_PCIE_DCR(s, PEGPL_OMR3BAL);
+    PPC440_PCIE_DCR(s, PEGPL_OMR3MSKH);
+    PPC440_PCIE_DCR(s, PEGPL_OMR3MSKL);
+    PPC440_PCIE_DCR(s, PEGPL_REGBAH);
+    PPC440_PCIE_DCR(s, PEGPL_REGBAL);
+    PPC440_PCIE_DCR(s, PEGPL_REGMSK);
+    PPC440_PCIE_DCR(s, PEGPL_SPECIAL);
+    PPC440_PCIE_DCR(s, PEGPL_CFG);
+}
+
 static void ppc460ex_pcie_realize(DeviceState *dev, Error **errp)
 {
     PPC460EXPCIEState *s = PPC460EX_PCIE_HOST(dev);
     PCIHostState *pci = PCI_HOST_BRIDGE(dev);
-    int i, id;
-    char buf[16];
+    int i;
+    char buf[20];
 
-    switch (s->dcrn_base) {
-    case DCRN_PCIE0_BASE:
-        id = 0;
-        break;
-    case DCRN_PCIE1_BASE:
-        id = 1;
-        break;
-    default:
-        error_setg(errp, "invalid PCIe DCRN base");
+    if (!s->cpu) {
+        error_setg(errp, "cpu link property must be set");
         return;
     }
-    snprintf(buf, sizeof(buf), "pcie%d-io", id);
-    memory_region_init(&s->iomem, OBJECT(s), buf, UINT64_MAX);
+    if (s->num < 0 || s->dcrn_base < 0) {
+        error_setg(errp, "busnum and dcrn-base properties must be set");
+        return;
+    }
+    snprintf(buf, sizeof(buf), "pcie%d-mem", s->num);
+    memory_region_init(&s->busmem, OBJECT(s), buf, UINT64_MAX);
+    snprintf(buf, sizeof(buf), "pcie%d-io", s->num);
+    memory_region_init(&s->iomem, OBJECT(s), buf, 64 * KiB);
     for (i = 0; i < 4; i++) {
         sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq[i]);
     }
-    snprintf(buf, sizeof(buf), "pcie.%d", id);
+    snprintf(buf, sizeof(buf), "pcie.%d", s->num);
     pci->bus = pci_register_root_bus(DEVICE(s), buf, ppc460ex_set_irq,
-                                pci_swizzle_map_irq_fn, s, &s->iomem,
-                                get_system_io(), 0, 4, TYPE_PCIE_BUS);
+                                pci_swizzle_map_irq_fn, s, &s->busmem,
+                                &s->iomem, 0, 4, TYPE_PCIE_BUS);
+    ppc460ex_pcie_register_dcrs(s);
 }
 
 static Property ppc460ex_pcie_props[] = {
+    DEFINE_PROP_INT32("busnum", PPC460EXPCIEState, num, -1),
     DEFINE_PROP_INT32("dcrn-base", PPC460EXPCIEState, dcrn_base, -1),
+    DEFINE_PROP_LINK("cpu", PPC460EXPCIEState, cpu, TYPE_POWERPC_CPU,
+                     PowerPCCPU *),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -1293,7 +1075,7 @@ static void ppc460ex_pcie_class_init(ObjectClass *klass, void *data)
 
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
     dc->realize = ppc460ex_pcie_realize;
-    dc->props = ppc460ex_pcie_props;
+    device_class_set_props(dc, ppc460ex_pcie_props);
     dc->hotpluggable = false;
 }
 
@@ -1310,70 +1092,3 @@ static void ppc460ex_pcie_register(void)
 }
 
 type_init(ppc460ex_pcie_register)
-
-static void ppc460ex_pcie_register_dcrs(PPC460EXPCIEState *s, CPUPPCState *env)
-{
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_CFGBAH, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_CFGBAL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_CFGMSK, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_MSGBAH, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_MSGBAL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_MSGMSK, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR1BAH, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR1BAL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR1MSKH, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR1MSKL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR2BAH, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR2BAL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR2MSKH, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR2MSKL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR3BAH, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR3BAL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR3MSKH, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_OMR3MSKL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_REGBAH, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_REGBAL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_REGMSK, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_SPECIAL, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-    ppc_dcr_register(env, s->dcrn_base + PEGPL_CFG, s,
-                     &dcr_read_pcie, &dcr_write_pcie);
-}
-
-void ppc460ex_pcie_init(CPUPPCState *env)
-{
-    DeviceState *dev;
-
-    dev = qdev_create(NULL, TYPE_PPC460EX_PCIE_HOST);
-    qdev_prop_set_int32(dev, "dcrn-base", DCRN_PCIE0_BASE);
-    qdev_init_nofail(dev);
-    object_property_set_bool(OBJECT(dev), true, "realized", NULL);
-    ppc460ex_pcie_register_dcrs(PPC460EX_PCIE_HOST(dev), env);
-
-    dev = qdev_create(NULL, TYPE_PPC460EX_PCIE_HOST);
-    qdev_prop_set_int32(dev, "dcrn-base", DCRN_PCIE1_BASE);
-    qdev_init_nofail(dev);
-    object_property_set_bool(OBJECT(dev), true, "realized", NULL);
-    ppc460ex_pcie_register_dcrs(PPC460EX_PCIE_HOST(dev), env);
-}

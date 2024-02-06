@@ -41,6 +41,11 @@ typedef struct V9fsSynthOpenState {
     off_t offset;
     V9fsSynthNode *node;
     struct dirent dent;
+    /*
+     * Ensure there is enough space for 'dent' above, some systems have a
+     * d_name size of just 1, which would cause a buffer overrun.
+     */
+    char dent_trailing_space[NAME_MAX];
 } V9fsSynthOpenState;
 
 int qemu_v9fs_synth_mkdir(V9fsSynthNode *parent, int mode,
@@ -54,6 +59,11 @@ int qemu_v9fs_synth_add_file(V9fsSynthNode *parent, int mode,
 #define QTEST_V9FS_SYNTH_WALK_FILE "WALK%d"
 #define QTEST_V9FS_SYNTH_LOPEN_FILE "LOPEN"
 #define QTEST_V9FS_SYNTH_WRITE_FILE "WRITE"
+
+/* for READDIR test */
+#define QTEST_V9FS_SYNTH_READDIR_DIR "ReadDirDir"
+#define QTEST_V9FS_SYNTH_READDIR_FILE "ReadDirFile%d"
+#define QTEST_V9FS_SYNTH_READDIR_NFILES 100
 
 /* Any write to the "FLUSH" file is handled one byte at a time by the
  * backend. If the byte is zero, the backend returns success (ie, 1),

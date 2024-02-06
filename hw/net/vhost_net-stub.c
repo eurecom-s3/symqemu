@@ -33,13 +33,13 @@ struct vhost_net *vhost_net_init(VhostNetOptions *options)
 
 int vhost_net_start(VirtIODevice *dev,
                     NetClientState *ncs,
-                    int total_queues)
+                    int data_queue_pairs, int cvq)
 {
     return -ENOSYS;
 }
 void vhost_net_stop(VirtIODevice *dev,
                     NetClientState *ncs,
-                    int total_queues)
+                    int data_queue_pairs, int cvq)
 {
 }
 
@@ -50,6 +50,17 @@ void vhost_net_cleanup(struct vhost_net *net)
 uint64_t vhost_net_get_features(struct vhost_net *net, uint64_t features)
 {
     return features;
+}
+
+int vhost_net_get_config(struct vhost_net *net,  uint8_t *config,
+                         uint32_t config_len)
+{
+    return 0;
+}
+int vhost_net_set_config(struct vhost_net *net, const uint8_t *data,
+                         uint32_t offset, uint32_t size, uint32_t flags)
+{
+    return 0;
 }
 
 void vhost_net_ack_features(struct vhost_net *net, uint64_t features)
@@ -71,6 +82,15 @@ void vhost_net_virtqueue_mask(VHostNetState *net, VirtIODevice *dev,
 {
 }
 
+bool vhost_net_config_pending(VHostNetState *net)
+{
+    return false;
+}
+
+void vhost_net_config_mask(VHostNetState *net, VirtIODevice *dev, bool mask)
+{
+}
+
 int vhost_net_notify_migration_done(struct vhost_net *net, char* mac_addr)
 {
     return -1;
@@ -89,4 +109,21 @@ int vhost_set_vring_enable(NetClientState *nc, int enable)
 int vhost_net_set_mtu(struct vhost_net *net, uint16_t mtu)
 {
     return 0;
+}
+
+void vhost_net_virtqueue_reset(VirtIODevice *vdev, NetClientState *nc,
+                               int vq_index)
+{
+
+}
+
+int vhost_net_virtqueue_restart(VirtIODevice *vdev, NetClientState *nc,
+                                int vq_index)
+{
+    return 0;
+}
+
+void vhost_net_save_acked_features(NetClientState *nc)
+{
+
 }

@@ -23,11 +23,16 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
 #include "hw/char/escc.h"
 #include "ui/console.h"
+
+#include "qemu/cutils.h"
 #include "trace.h"
 
 /*
@@ -43,14 +48,21 @@
  * mouse and keyboard ports don't implement all functions and they are
  * only asynchronous. There is no DMA.
  *
- * Z85C30 is also used on PowerMacs. There are some small differences
- * between Sparc version (sunzilog) and PowerMac (pmac):
+ * Z85C30 is also used on PowerMacs and m68k Macs.
+ *
+ * There are some small differences between Sparc version (sunzilog)
+ * and PowerMac (pmac):
  *  Offset between control and data registers
  *  There is some kind of lockup bug, but we can ignore it
  *  CTS is inverted
  *  DMA on pmac using DBDMA chip
  *  pmac can do IRDA and faster rates, sunzilog can only do 38400
  *  pmac baud rate generator clock is 3.6864 MHz, sunzilog 4.9152 MHz
+ *
+ * Linux driver for m68k Macs is the same as for PowerMac (pmac_zilog),
+ * but registers are grouped by type and not by channel:
+ * channel is selected by bit 0 of the address (instead of bit 1)
+ * and register is selected by bit 1 of the address (instead of bit 0).
  */
 
 /*
@@ -76,12 +88,15 @@
 #define W_INTR    1
 #define INTR_INTALL    0x01
 #define INTR_TXINT     0x02
+#define INTR_PAR_SPEC  0x04
 #define INTR_RXMODEMSK 0x18
 #define INTR_RXINT1ST  0x08
 #define INTR_RXINTALL  0x10
+#define INTR_WTRQ_TXRX 0x20
 #define W_IVEC    2
 #define W_RXCTRL  3
 #define RXCTRL_RXEN    0x01
+#define RXCTRL_HUNT    0x10
 #define W_TXCTRL1 4
 #define TXCTRL1_PAREN  0x01
 #define TXCTRL1_PAREV  0x02
@@ -95,6 +110,7 @@
 #define TXCTRL1_CLK64X 0xc0
 #define TXCTRL1_CLKMSK 0xc0
 #define W_TXCTRL2 5
+#define TXCTRL2_TXCRC  0x01
 #define TXCTRL2_TXEN   0x08
 #define TXCTRL2_BITMSK 0x60
 #define TXCTRL2_5BITS  0x00
@@ -105,18 +121,27 @@
 #define W_SYNC2   7
 #define W_TXBUF   8
 #define W_MINTR   9
+#define MINTR_VIS      0x01
+#define MINTR_NV       0x02
 #define MINTR_STATUSHI 0x10
+#define MINTR_SOFTIACK 0x20
 #define MINTR_RST_MASK 0xc0
 #define MINTR_RST_B    0x40
 #define MINTR_RST_A    0x80
 #define MINTR_RST_ALL  0xc0
 #define W_MISC1  10
+#define MISC1_ENC_MASK 0x60
 #define W_CLOCK  11
 #define CLOCK_TRXC     0x08
 #define W_BRGLO  12
 #define W_BRGHI  13
 #define W_MISC2  14
-#define MISC2_PLLDIS   0x30
+#define MISC2_BRG_EN   0x01
+#define MISC2_BRG_SRC  0x02
+#define MISC2_LCL_LOOP 0x10
+#define MISC2_PLLCMD0  0x20
+#define MISC2_PLLCMD1  0x40
+#define MISC2_PLLCMD2  0x80
 #define W_EXTINT 15
 #define EXTINT_DCD     0x08
 #define EXTINT_SYNCINT 0x10
@@ -160,15 +185,27 @@
 #define R_RXBUF   8
 #define R_RXCTRL  9
 #define R_MISC   10
+#define MISC_2CLKMISS  0x40
 #define R_MISC1  11
 #define R_BRGLO  12
 #define R_BRGHI  13
 #define R_MISC1I 14
 #define R_EXTINT 15
 
+static uint8_t sunkbd_layout_dip_switch(const char *sunkbd_layout);
 static void handle_kbd_command(ESCCChannelState *s, int val);
 static int serial_can_receive(void *opaque);
 static void serial_receive_byte(ESCCChannelState *s, int ch);
+
+static int reg_shift(ESCCState *s)
+{
+    return s->bit_swap ? s->it_shift + 1 : s->it_shift;
+}
+
+static int chn_shift(ESCCState *s)
+{
+    return s->bit_swap ? s->it_shift : s->it_shift + 1;
+}
 
 static void clear_queue(void *opaque)
 {
@@ -210,20 +247,23 @@ static uint32_t get_queue(void *opaque)
         q->count--;
     }
     trace_escc_get_queue(CHN_C(s), val);
-    if (q->count > 0)
+    if (q->count > 0) {
         serial_receive_byte(s, 0);
+    }
     return val;
 }
 
 static int escc_update_irq_chn(ESCCChannelState *s)
 {
     if ((((s->wregs[W_INTR] & INTR_TXINT) && (s->txint == 1)) ||
-         // tx ints enabled, pending
-         ((((s->wregs[W_INTR] & INTR_RXMODEMSK) == INTR_RXINT1ST) ||
-           ((s->wregs[W_INTR] & INTR_RXMODEMSK) == INTR_RXINTALL)) &&
-          s->rxint == 1) || // rx ints enabled, pending
-         ((s->wregs[W_EXTINT] & EXTINT_BRKINT) &&
-          (s->rregs[R_STATUS] & STATUS_BRK)))) { // break int e&p
+        /* tx ints enabled, pending */
+        ((((s->wregs[W_INTR] & INTR_RXMODEMSK) == INTR_RXINT1ST) ||
+        ((s->wregs[W_INTR] & INTR_RXMODEMSK) == INTR_RXINTALL)) &&
+            s->rxint == 1) ||
+        /* rx ints enabled, pending */
+        ((s->wregs[W_EXTINT] & EXTINT_BRKINT) &&
+            (s->rregs[R_STATUS] & STATUS_BRK)))) {
+        /* break int e&p */
         return 1;
     }
     return 0;
@@ -242,26 +282,7 @@ static void escc_update_irq(ESCCChannelState *s)
 
 static void escc_reset_chn(ESCCChannelState *s)
 {
-    int i;
-
     s->reg = 0;
-    for (i = 0; i < ESCC_SERIAL_REGS; i++) {
-        s->rregs[i] = 0;
-        s->wregs[i] = 0;
-    }
-    s->wregs[W_TXCTRL1] = TXCTRL1_1STOP; // 1X divisor, 1 stop bit, no parity
-    s->wregs[W_MINTR] = MINTR_RST_ALL;
-    s->wregs[W_CLOCK] = CLOCK_TRXC; // Synch mode tx clock = TRxC
-    s->wregs[W_MISC2] = MISC2_PLLDIS; // PLL disabled
-    s->wregs[W_EXTINT] = EXTINT_DCD | EXTINT_SYNCINT | EXTINT_CTSINT |
-        EXTINT_TXUNDRN | EXTINT_BRKINT; // Enable most interrupts
-    if (s->disabled)
-        s->rregs[R_STATUS] = STATUS_TXEMPTY | STATUS_DCD | STATUS_SYNC |
-            STATUS_CTS | STATUS_TXUNDRN;
-    else
-        s->rregs[R_STATUS] = STATUS_TXEMPTY | STATUS_TXUNDRN;
-    s->rregs[R_SPEC] = SPEC_BITS8 | SPEC_ALLSENT;
-
     s->rx = s->tx = 0;
     s->rxint = s->txint = 0;
     s->rxint_under_svc = s->txint_under_svc = 0;
@@ -269,32 +290,110 @@ static void escc_reset_chn(ESCCChannelState *s)
     clear_queue(s);
 }
 
+static void escc_soft_reset_chn(ESCCChannelState *s)
+{
+    escc_reset_chn(s);
+
+    s->wregs[W_CMD] = 0;
+    s->wregs[W_INTR] &= INTR_PAR_SPEC | INTR_WTRQ_TXRX;
+    s->wregs[W_RXCTRL] &= ~RXCTRL_RXEN;
+    /* 1 stop bit */
+    s->wregs[W_TXCTRL1] |= TXCTRL1_1STOP;
+    s->wregs[W_TXCTRL2] &= TXCTRL2_TXCRC | TXCTRL2_8BITS;
+    s->wregs[W_MINTR] &= ~MINTR_SOFTIACK;
+    s->wregs[W_MISC1] &= MISC1_ENC_MASK;
+    /* PLL disabled */
+    s->wregs[W_MISC2] &= MISC2_BRG_EN | MISC2_BRG_SRC |
+                         MISC2_PLLCMD1 | MISC2_PLLCMD2;
+    s->wregs[W_MISC2] |= MISC2_PLLCMD0;
+    /* Enable most interrupts */
+    s->wregs[W_EXTINT] = EXTINT_DCD | EXTINT_SYNCINT | EXTINT_CTSINT |
+                         EXTINT_TXUNDRN | EXTINT_BRKINT;
+
+    s->rregs[R_STATUS] &= STATUS_DCD | STATUS_SYNC | STATUS_CTS | STATUS_BRK;
+    s->rregs[R_STATUS] |= STATUS_TXEMPTY | STATUS_TXUNDRN;
+    if (s->disabled) {
+        s->rregs[R_STATUS] |= STATUS_DCD | STATUS_SYNC | STATUS_CTS;
+    }
+    s->rregs[R_SPEC] &= SPEC_ALLSENT;
+    s->rregs[R_SPEC] |= SPEC_BITS8;
+    s->rregs[R_INTR] = 0;
+    s->rregs[R_MISC] &= MISC_2CLKMISS;
+}
+
+static void escc_hard_reset_chn(ESCCChannelState *s)
+{
+    escc_soft_reset_chn(s);
+
+    /*
+     * Hard reset is almost identical to soft reset above, except that the
+     * values of WR9 (W_MINTR), WR10 (W_MISC1), WR11 (W_CLOCK) and WR14
+     * (W_MISC2) have extra bits forced to 0/1
+     */
+    s->wregs[W_MINTR] &= MINTR_VIS | MINTR_NV;
+    s->wregs[W_MINTR] |= MINTR_RST_B | MINTR_RST_A;
+    s->wregs[W_MISC1] = 0;
+    s->wregs[W_CLOCK] = CLOCK_TRXC;
+    s->wregs[W_MISC2] &= MISC2_PLLCMD1 | MISC2_PLLCMD2;
+    s->wregs[W_MISC2] |= MISC2_LCL_LOOP | MISC2_PLLCMD0;
+}
+
 static void escc_reset(DeviceState *d)
 {
     ESCCState *s = ESCC(d);
+    int i, j;
 
-    escc_reset_chn(&s->chn[0]);
-    escc_reset_chn(&s->chn[1]);
+    for (i = 0; i < 2; i++) {
+        ESCCChannelState *cs = &s->chn[i];
+
+        /*
+         * According to the ESCC datasheet "Miscellaneous Questions" section
+         * on page 384, the values of the ESCC registers are not guaranteed on
+         * power-on until an explicit hardware or software reset has been
+         * issued. For now we zero the registers so that a device reset always
+         * returns the emulated device to a fixed state.
+         */
+        for (j = 0; j < ESCC_SERIAL_REGS; j++) {
+            cs->rregs[j] = 0;
+            cs->wregs[j] = 0;
+        }
+
+        /*
+         * ...but there is an exception. The "Transmit Interrupts and Transmit
+         * Buffer Empty Bit" section on page 50 of the ESCC datasheet says of
+         * the STATUS_TXEMPTY bit in R_STATUS: "After a hardware reset
+         * (including a hardware reset by software), or a channel reset, this
+         * bit is set to 1". The Sun PROM checks this bit early on startup and
+         * gets stuck in an infinite loop if it is not set.
+         */
+        cs->rregs[R_STATUS] |= STATUS_TXEMPTY;
+
+        escc_reset_chn(cs);
+    }
 }
 
 static inline void set_rxint(ESCCChannelState *s)
 {
     s->rxint = 1;
-    /* XXX: missing daisy chainnig: escc_chn_b rx should have a lower priority
-       than chn_a rx/tx/special_condition service*/
+    /*
+     * XXX: missing daisy chaining: escc_chn_b rx should have a lower priority
+     * than chn_a rx/tx/special_condition service
+     */
     s->rxint_under_svc = 1;
     if (s->chn == escc_chn_a) {
         s->rregs[R_INTR] |= INTR_RXINTA;
-        if (s->wregs[W_MINTR] & MINTR_STATUSHI)
+        if (s->wregs[W_MINTR] & MINTR_STATUSHI) {
             s->otherchn->rregs[R_IVEC] = IVEC_HIRXINTA;
-        else
+        } else {
             s->otherchn->rregs[R_IVEC] = IVEC_LORXINTA;
+        }
     } else {
         s->otherchn->rregs[R_INTR] |= INTR_RXINTB;
-        if (s->wregs[W_MINTR] & MINTR_STATUSHI)
+        if (s->wregs[W_MINTR] & MINTR_STATUSHI) {
             s->rregs[R_IVEC] = IVEC_HIRXINTB;
-        else
+        } else {
             s->rregs[R_IVEC] = IVEC_LORXINTB;
+        }
     }
     escc_update_irq(s);
 }
@@ -308,17 +407,18 @@ static inline void set_txint(ESCCChannelState *s)
             if (s->wregs[W_INTR] & INTR_TXINT) {
                 s->rregs[R_INTR] |= INTR_TXINTA;
             }
-            if (s->wregs[W_MINTR] & MINTR_STATUSHI)
+            if (s->wregs[W_MINTR] & MINTR_STATUSHI) {
                 s->otherchn->rregs[R_IVEC] = IVEC_HITXINTA;
-            else
+            } else {
                 s->otherchn->rregs[R_IVEC] = IVEC_LOTXINTA;
+            }
         } else {
             s->rregs[R_IVEC] = IVEC_TXINTB;
             if (s->wregs[W_INTR] & INTR_TXINT) {
                 s->otherchn->rregs[R_INTR] |= INTR_TXINTB;
             }
         }
-    escc_update_irq(s);
+        escc_update_irq(s);
     }
 }
 
@@ -327,20 +427,23 @@ static inline void clr_rxint(ESCCChannelState *s)
     s->rxint = 0;
     s->rxint_under_svc = 0;
     if (s->chn == escc_chn_a) {
-        if (s->wregs[W_MINTR] & MINTR_STATUSHI)
+        if (s->wregs[W_MINTR] & MINTR_STATUSHI) {
             s->otherchn->rregs[R_IVEC] = IVEC_HINOINT;
-        else
+        } else {
             s->otherchn->rregs[R_IVEC] = IVEC_LONOINT;
+        }
         s->rregs[R_INTR] &= ~INTR_RXINTA;
     } else {
-        if (s->wregs[W_MINTR] & MINTR_STATUSHI)
+        if (s->wregs[W_MINTR] & MINTR_STATUSHI) {
             s->rregs[R_IVEC] = IVEC_HINOINT;
-        else
+        } else {
             s->rregs[R_IVEC] = IVEC_LONOINT;
+        }
         s->otherchn->rregs[R_INTR] &= ~INTR_RXINTB;
     }
-    if (s->txint)
+    if (s->txint) {
         set_txint(s);
+    }
     escc_update_irq(s);
 }
 
@@ -349,21 +452,24 @@ static inline void clr_txint(ESCCChannelState *s)
     s->txint = 0;
     s->txint_under_svc = 0;
     if (s->chn == escc_chn_a) {
-        if (s->wregs[W_MINTR] & MINTR_STATUSHI)
+        if (s->wregs[W_MINTR] & MINTR_STATUSHI) {
             s->otherchn->rregs[R_IVEC] = IVEC_HINOINT;
-        else
+        } else {
             s->otherchn->rregs[R_IVEC] = IVEC_LONOINT;
+        }
         s->rregs[R_INTR] &= ~INTR_TXINTA;
     } else {
         s->otherchn->rregs[R_INTR] &= ~INTR_TXINTB;
-        if (s->wregs[W_MINTR] & MINTR_STATUSHI)
+        if (s->wregs[W_MINTR] & MINTR_STATUSHI) {
             s->rregs[R_IVEC] = IVEC_HINOINT;
-        else
+        } else {
             s->rregs[R_IVEC] = IVEC_LONOINT;
+        }
         s->otherchn->rregs[R_INTR] &= ~INTR_TXINTB;
     }
-    if (s->rxint)
+    if (s->rxint) {
         set_rxint(s);
+    }
     escc_update_irq(s);
 }
 
@@ -372,21 +478,24 @@ static void escc_update_parameters(ESCCChannelState *s)
     int speed, parity, data_bits, stop_bits;
     QEMUSerialSetParams ssp;
 
-    if (!qemu_chr_fe_backend_connected(&s->chr) || s->type != escc_serial)
+    if (!qemu_chr_fe_backend_connected(&s->chr) || s->type != escc_serial) {
         return;
+    }
 
     if (s->wregs[W_TXCTRL1] & TXCTRL1_PAREN) {
-        if (s->wregs[W_TXCTRL1] & TXCTRL1_PAREV)
+        if (s->wregs[W_TXCTRL1] & TXCTRL1_PAREV) {
             parity = 'E';
-        else
+        } else {
             parity = 'O';
+        }
     } else {
         parity = 'N';
     }
-    if ((s->wregs[W_TXCTRL1] & TXCTRL1_STPMSK) == TXCTRL1_2STOP)
+    if ((s->wregs[W_TXCTRL1] & TXCTRL1_STPMSK) == TXCTRL1_2STOP) {
         stop_bits = 2;
-    else
+    } else {
         stop_bits = 1;
+    }
     switch (s->wregs[W_TXCTRL2] & TXCTRL2_BITMSK) {
     case TXCTRL2_5BITS:
         data_bits = 5;
@@ -434,8 +543,8 @@ static void escc_mem_write(void *opaque, hwaddr addr,
     int newreg, channel;
 
     val &= 0xff;
-    saddr = (addr >> serial->it_shift) & 1;
-    channel = (addr >> (serial->it_shift + 1)) & 1;
+    saddr = (addr >> reg_shift(serial)) & 1;
+    channel = (addr >> chn_shift(serial)) & 1;
     s = &serial->chn[channel];
     switch (saddr) {
     case SERIAL_CTRL:
@@ -467,13 +576,33 @@ static void escc_mem_write(void *opaque, hwaddr addr,
                 break;
             }
             break;
-        case W_INTR ... W_RXCTRL:
+        case W_RXCTRL:
+            s->wregs[s->reg] = val;
+            if (val & RXCTRL_HUNT) {
+                s->rregs[R_STATUS] |= STATUS_SYNC;
+            }
+            break;
+        case W_INTR ... W_IVEC:
         case W_SYNC1 ... W_TXBUF:
         case W_MISC1 ... W_CLOCK:
         case W_MISC2 ... W_EXTINT:
             s->wregs[s->reg] = val;
             break;
         case W_TXCTRL1:
+            s->wregs[s->reg] = val;
+            /*
+             * The ESCC datasheet states that SPEC_ALLSENT is always set in
+             * sync mode, and set in async mode when all characters have
+             * cleared the transmitter. Since writes to SERIAL_DATA use the
+             * blocking qemu_chr_fe_write_all() function to write each
+             * character, the guest can never see the state when async data
+             * is in the process of being transmitted so we can set this bit
+             * unconditionally regardless of the state of the W_TXCTRL1 mode
+             * bits.
+             */
+            s->rregs[R_SPEC] |= SPEC_ALLSENT;
+            escc_update_parameters(s);
+            break;
         case W_TXCTRL2:
             s->wregs[s->reg] = val;
             escc_update_parameters(s);
@@ -490,23 +619,28 @@ static void escc_mem_write(void *opaque, hwaddr addr,
             default:
                 break;
             case MINTR_RST_B:
-                escc_reset_chn(&serial->chn[0]);
+                trace_escc_soft_reset_chn(CHN_C(&serial->chn[0]));
+                escc_soft_reset_chn(&serial->chn[0]);
                 return;
             case MINTR_RST_A:
-                escc_reset_chn(&serial->chn[1]);
+                trace_escc_soft_reset_chn(CHN_C(&serial->chn[1]));
+                escc_soft_reset_chn(&serial->chn[1]);
                 return;
             case MINTR_RST_ALL:
-                escc_reset(DEVICE(serial));
+                trace_escc_hard_reset();
+                escc_hard_reset_chn(&serial->chn[0]);
+                escc_hard_reset_chn(&serial->chn[1]);
                 return;
             }
             break;
         default:
             break;
         }
-        if (s->reg == 0)
+        if (s->reg == 0) {
             s->reg = newreg;
-        else
+        } else {
             s->reg = 0;
+        }
         break;
     case SERIAL_DATA:
         trace_escc_mem_writeb_data(CHN_C(s), val);
@@ -518,17 +652,21 @@ static void escc_mem_write(void *opaque, hwaddr addr,
         s->txint = 0;
         escc_update_irq(s);
         s->tx = val;
-        if (s->wregs[W_TXCTRL2] & TXCTRL2_TXEN) { // tx enabled
-            if (qemu_chr_fe_backend_connected(&s->chr)) {
-                /* XXX this blocks entire thread. Rewrite to use
-                 * qemu_chr_fe_write and background I/O callbacks */
+        if (s->wregs[W_TXCTRL2] & TXCTRL2_TXEN) { /* tx enabled */
+            if (s->wregs[W_MISC2] & MISC2_LCL_LOOP) {
+                serial_receive_byte(s, s->tx);
+            } else if (qemu_chr_fe_backend_connected(&s->chr)) {
+                /*
+                 * XXX this blocks entire thread. Rewrite to use
+                 * qemu_chr_fe_write and background I/O callbacks
+                 */
                 qemu_chr_fe_write_all(&s->chr, &s->tx, 1);
             } else if (s->type == escc_kbd && !s->disabled) {
                 handle_kbd_command(s, val);
             }
         }
-        s->rregs[R_STATUS] |= STATUS_TXEMPTY; // Tx buffer empty
-        s->rregs[R_SPEC] |= SPEC_ALLSENT; // All sent
+        s->rregs[R_STATUS] |= STATUS_TXEMPTY; /* Tx buffer empty */
+        s->rregs[R_SPEC] |= SPEC_ALLSENT; /* All sent */
         set_txint(s);
         break;
     default:
@@ -545,8 +683,8 @@ static uint64_t escc_mem_read(void *opaque, hwaddr addr,
     uint32_t ret;
     int channel;
 
-    saddr = (addr >> serial->it_shift) & 1;
-    channel = (addr >> (serial->it_shift + 1)) & 1;
+    saddr = (addr >> reg_shift(serial)) & 1;
+    channel = (addr >> chn_shift(serial)) & 1;
     s = &serial->chn[channel];
     switch (saddr) {
     case SERIAL_CTRL:
@@ -586,12 +724,13 @@ static int serial_can_receive(void *opaque)
     ESCCChannelState *s = opaque;
     int ret;
 
-    if (((s->wregs[W_RXCTRL] & RXCTRL_RXEN) == 0) // Rx not enabled
-        || ((s->rregs[R_STATUS] & STATUS_RXAV) == STATUS_RXAV))
-        // char already available
+    if (((s->wregs[W_RXCTRL] & RXCTRL_RXEN) == 0) /* Rx not enabled */
+        || ((s->rregs[R_STATUS] & STATUS_RXAV) == STATUS_RXAV)) {
+        /* char already available */
         ret = 0;
-    else
+    } else {
         ret = 1;
+    }
     return ret;
 }
 
@@ -615,15 +754,16 @@ static void serial_receive1(void *opaque, const uint8_t *buf, int size)
     serial_receive_byte(s, buf[0]);
 }
 
-static void serial_event(void *opaque, int event)
+static void serial_event(void *opaque, QEMUChrEvent event)
 {
     ESCCChannelState *s = opaque;
-    if (event == CHR_EVENT_BREAK)
+    if (event == CHR_EVENT_BREAK) {
         serial_receive_break(s);
+    }
 }
 
 static const VMStateDescription vmstate_escc_chn = {
-    .name ="escc_chn",
+    .name = "escc_chn",
     .version_id = 2,
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
@@ -642,7 +782,7 @@ static const VMStateDescription vmstate_escc_chn = {
 };
 
 static const VMStateDescription vmstate_escc = {
-    .name ="escc",
+    .name = "escc",
     .version_id = 2,
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
@@ -693,7 +833,7 @@ static void sunkbd_handle_event(DeviceState *dev, QemuConsole *src,
         }
     }
 
-    if (qcode > qemu_input_map_qcode_to_sun_len) {
+    if (qcode >= qemu_input_map_qcode_to_sun_len) {
         return;
     }
 
@@ -711,28 +851,101 @@ static QemuInputHandler sunkbd_handler = {
     .event = sunkbd_handle_event,
 };
 
+static uint8_t sunkbd_layout_dip_switch(const char *kbd_layout)
+{
+    /* Return the value of the dip-switches in a SUN Type 5 keyboard */
+    static uint8_t ret = 0xff;
+
+    if ((ret == 0xff) && kbd_layout) {
+        int i;
+        struct layout_values {
+            const char *lang;
+            uint8_t dip;
+        } languages[] =
+            /*
+             * Dip values from table 3-16 Layouts for Type 4, 5 and 5c Keyboards
+             */
+            {
+                {"en-us", 0x21}, /* U.S.A. (US5.kt) */
+                                 /* 0x22 is some other US (US_UNIX5.kt) */
+                {"fr",    0x23}, /* France (France5.kt) */
+                {"da",    0x24}, /* Denmark (Denmark5.kt) */
+                {"de",    0x25}, /* Germany (Germany5.kt) */
+                {"it",    0x26}, /* Italy (Italy5.kt) */
+                {"nl",    0x27}, /* The Netherlands (Netherland5.kt) */
+                {"no",    0x28}, /* Norway (Norway.kt) */
+                {"pt",    0x29}, /* Portugal (Portugal5.kt) */
+                {"es",    0x2a}, /* Spain (Spain5.kt) */
+                {"sv",    0x2b}, /* Sweden (Sweden5.kt) */
+                {"fr-ch", 0x2c}, /* Switzerland/French (Switzer_Fr5.kt) */
+                {"de-ch", 0x2d}, /* Switzerland/German (Switzer_Ge5.kt) */
+                {"en-gb", 0x2e}, /* Great Britain (UK5.kt) */
+                {"ko",    0x2f}, /* Korea (Korea5.kt) */
+                {"tw",    0x30}, /* Taiwan (Taiwan5.kt) */
+                {"ja",    0x31}, /* Japan (Japan5.kt) */
+                {"fr-ca", 0x32}, /* Canada/French (Canada_Fr5.kt) */
+                {"hu",    0x33}, /* Hungary (Hungary5.kt) */
+                {"pl",    0x34}, /* Poland (Poland5.kt) */
+                {"cz",    0x35}, /* Czech (Czech5.kt) */
+                {"ru",    0x36}, /* Russia (Russia5.kt) */
+                {"lv",    0x37}, /* Latvia (Latvia5.kt) */
+                {"tr",    0x38}, /* Turkey-Q5 (TurkeyQ5.kt) */
+                {"gr",    0x39}, /* Greece (Greece5.kt) */
+                {"ar",    0x3a}, /* Arabic (Arabic5.kt) */
+                {"lt",    0x3b}, /* Lithuania (Lithuania5.kt) */
+                {"nl-be", 0x3c}, /* Belgium (Belgian5.kt) */
+                {"be",    0x3c}, /* Belgium (Belgian5.kt) */
+            };
+
+        for (i = 0;
+             i < sizeof(languages) / sizeof(struct layout_values);
+             i++) {
+            if (!strcmp(kbd_layout, languages[i].lang)) {
+                ret = languages[i].dip;
+                return ret;
+            }
+        }
+
+        /* Found no known language code */
+        if ((kbd_layout[0] >= '0') && (kbd_layout[0] <= '9')) {
+            unsigned int tmp;
+
+            /* As a fallback we also accept numeric dip switch value */
+            if (!qemu_strtoui(kbd_layout, NULL, 0, &tmp)) {
+                ret = tmp;
+            }
+        }
+    }
+
+    if (ret == 0xff) {
+        /* Final fallback if keyboard_layout was not set or recognized */
+        ret = 0x21; /* en-us layout */
+    }
+    return ret;
+}
+
 static void handle_kbd_command(ESCCChannelState *s, int val)
 {
     trace_escc_kbd_command(val);
-    if (s->led_mode) { // Ignore led byte
+    if (s->led_mode) { /* Ignore led byte */
         s->led_mode = 0;
         return;
     }
     switch (val) {
-    case 1: // Reset, return type code
+    case 1: /* Reset, return type code */
         clear_queue(s);
         put_queue(s, 0xff);
-        put_queue(s, 4); // Type 4
+        put_queue(s, 4); /* Type 4 */
         put_queue(s, 0x7f);
         break;
-    case 0xe: // Set leds
+    case 0xe: /* Set leds */
         s->led_mode = 1;
         break;
-    case 7: // Query layout
+    case 7: /* Query layout */
     case 0xf:
         clear_queue(s);
         put_queue(s, 0xfe);
-        put_queue(s, 0x21); /*  en-us layout */
+        put_queue(s, sunkbd_layout_dip_switch(s->sunkbd_layout));
         break;
     default:
         break;
@@ -748,34 +961,39 @@ static void sunmouse_event(void *opaque,
     trace_escc_sunmouse_event(dx, dy, buttons_state);
     ch = 0x80 | 0x7; /* protocol start byte, no buttons pressed */
 
-    if (buttons_state & MOUSE_EVENT_LBUTTON)
+    if (buttons_state & MOUSE_EVENT_LBUTTON) {
         ch ^= 0x4;
-    if (buttons_state & MOUSE_EVENT_MBUTTON)
+    }
+    if (buttons_state & MOUSE_EVENT_MBUTTON) {
         ch ^= 0x2;
-    if (buttons_state & MOUSE_EVENT_RBUTTON)
+    }
+    if (buttons_state & MOUSE_EVENT_RBUTTON) {
         ch ^= 0x1;
+    }
 
     put_queue(s, ch);
 
     ch = dx;
 
-    if (ch > 127)
+    if (ch > 127) {
         ch = 127;
-    else if (ch < -127)
+    } else if (ch < -127) {
         ch = -127;
+    }
 
     put_queue(s, ch & 0xff);
 
     ch = -dy;
 
-    if (ch > 127)
+    if (ch > 127) {
         ch = 127;
-    else if (ch < -127)
+    } else if (ch < -127) {
         ch = -127;
+    }
 
     put_queue(s, ch & 0xff);
 
-    // MSC protocol specify two extra motion bytes
+    /* MSC protocol specifies two extra motion bytes */
 
     put_queue(s, 0);
     put_queue(s, 0);
@@ -830,11 +1048,13 @@ static void escc_realize(DeviceState *dev, Error **errp)
 static Property escc_properties[] = {
     DEFINE_PROP_UINT32("frequency", ESCCState, frequency,   0),
     DEFINE_PROP_UINT32("it_shift",  ESCCState, it_shift,    0),
+    DEFINE_PROP_BOOL("bit_swap",    ESCCState, bit_swap,    false),
     DEFINE_PROP_UINT32("disabled",  ESCCState, disabled,    0),
     DEFINE_PROP_UINT32("chnBtype",  ESCCState, chn[0].type, 0),
     DEFINE_PROP_UINT32("chnAtype",  ESCCState, chn[1].type, 0),
     DEFINE_PROP_CHR("chrB", ESCCState, chn[0].chr),
     DEFINE_PROP_CHR("chrA", ESCCState, chn[1].chr),
+    DEFINE_PROP_STRING("chnA-sunkbd-layout", ESCCState, chn[1].sunkbd_layout),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -845,7 +1065,7 @@ static void escc_class_init(ObjectClass *klass, void *data)
     dc->reset = escc_reset;
     dc->realize = escc_realize;
     dc->vmsd = &vmstate_escc;
-    dc->props = escc_properties;
+    device_class_set_props(dc, escc_properties);
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
 }
 

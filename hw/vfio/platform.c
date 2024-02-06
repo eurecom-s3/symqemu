@@ -20,16 +20,20 @@
 #include <linux/vfio.h>
 
 #include "hw/vfio/vfio-platform.h"
+#include "migration/vmstate.h"
 #include "qemu/error-report.h"
+#include "qemu/lockable.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "qemu/range.h"
-#include "sysemu/sysemu.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 #include "qemu/queue.h"
 #include "hw/sysbus.h"
 #include "trace.h"
+#include "hw/irq.h"
 #include "hw/platform-bus.h"
+#include "hw/qdev-properties.h"
 #include "sysemu/kvm.h"
 
 /*
@@ -67,7 +71,7 @@ static VFIOINTp *vfio_init_intp(VFIODevice *vbasedev,
     sysbus_init_irq(sbdev, &intp->qemuirq);
 
     /* Get an eventfd for trigger */
-    intp->interrupt = g_malloc0(sizeof(EventNotifier));
+    intp->interrupt = g_new0(EventNotifier, 1);
     ret = event_notifier_init(intp->interrupt, 0);
     if (ret) {
         g_free(intp->interrupt);
@@ -78,7 +82,7 @@ static VFIOINTp *vfio_init_intp(VFIODevice *vbasedev,
     }
     if (vfio_irq_is_automasked(intp)) {
         /* Get an eventfd for resample/unmask */
-        intp->unmask = g_malloc0(sizeof(EventNotifier));
+        intp->unmask = g_new0(EventNotifier, 1);
         ret = event_notifier_init(intp->unmask, 0);
         if (ret) {
             g_free(intp->interrupt);
@@ -152,7 +156,7 @@ static void vfio_mmap_set_enabled(VFIOPlatformDevice *vdev, bool enabled)
  * if there is no more active IRQ
  * @opaque: actually points to the VFIO platform device
  *
- * Called on mmap timer timout, this function checks whether the
+ * Called on mmap timer timeout, this function checks whether the
  * IRQ is still active and if not, restores the fast path.
  * by construction a single eventfd is handled at a time.
  * if the IRQ is still active, the timer is re-programmed.
@@ -162,7 +166,7 @@ static void vfio_intp_mmap_enable(void *opaque)
     VFIOINTp *tmp;
     VFIOPlatformDevice *vdev = (VFIOPlatformDevice *)opaque;
 
-    qemu_mutex_lock(&vdev->intp_mutex);
+    QEMU_LOCK_GUARD(&vdev->intp_mutex);
     QLIST_FOREACH(tmp, &vdev->intp_list, next) {
         if (tmp->state == VFIO_IRQ_ACTIVE) {
             trace_vfio_platform_intp_mmap_enable(tmp->pin);
@@ -170,12 +174,10 @@ static void vfio_intp_mmap_enable(void *opaque)
             timer_mod(vdev->mmap_timer,
                       qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) +
                           vdev->mmap_timeout);
-            qemu_mutex_unlock(&vdev->intp_mutex);
             return;
         }
     }
     vfio_mmap_set_enabled(vdev, true);
-    qemu_mutex_unlock(&vdev->intp_mutex);
 }
 
 /**
@@ -213,7 +215,7 @@ static void vfio_intp_interrupt(VFIOINTp *intp)
     VFIOPlatformDevice *vdev = intp->vdev;
     bool delay_handling = false;
 
-    qemu_mutex_lock(&vdev->intp_mutex);
+    QEMU_LOCK_GUARD(&vdev->intp_mutex);
     if (intp->state == VFIO_IRQ_INACTIVE) {
         QLIST_FOREACH(tmp, &vdev->intp_list, next) {
             if (tmp->state == VFIO_IRQ_ACTIVE ||
@@ -232,8 +234,7 @@ static void vfio_intp_interrupt(VFIOINTp *intp)
         trace_vfio_intp_interrupt_set_pending(intp->pin);
         QSIMPLEQ_INSERT_TAIL(&vdev->pending_intp_queue,
                              intp, pqnext);
-        ret = event_notifier_test_and_clear(intp->interrupt);
-        qemu_mutex_unlock(&vdev->intp_mutex);
+        event_notifier_test_and_clear(intp->interrupt);
         return;
     }
 
@@ -263,7 +264,6 @@ static void vfio_intp_interrupt(VFIOINTp *intp)
                   qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) +
                       vdev->mmap_timeout);
     }
-    qemu_mutex_unlock(&vdev->intp_mutex);
 }
 
 /**
@@ -287,7 +287,7 @@ static void vfio_platform_eoi(VFIODevice *vbasedev)
     VFIOPlatformDevice *vdev =
         container_of(vbasedev, VFIOPlatformDevice, vbasedev);
 
-    qemu_mutex_lock(&vdev->intp_mutex);
+    QEMU_LOCK_GUARD(&vdev->intp_mutex);
     QLIST_FOREACH(intp, &vdev->intp_list, next) {
         if (intp->state == VFIO_IRQ_ACTIVE) {
             trace_vfio_platform_eoi(intp->pin,
@@ -312,7 +312,6 @@ static void vfio_platform_eoi(VFIODevice *vbasedev)
         vfio_intp_inject_pending_lockheld(intp);
         QSIMPLEQ_REMOVE_HEAD(&vdev->pending_intp_queue, pqnext);
     }
-    qemu_mutex_unlock(&vdev->intp_mutex);
 }
 
 /**
@@ -696,7 +695,7 @@ static void vfio_platform_class_init(ObjectClass *klass, void *data)
     SysBusDeviceClass *sbc = SYS_BUS_DEVICE_CLASS(klass);
 
     dc->realize = vfio_platform_realize;
-    dc->props = vfio_platform_dev_properties;
+    device_class_set_props(dc, vfio_platform_dev_properties);
     dc->vmsd = &vfio_platform_vmstate;
     dc->desc = "VFIO-based platform device assignment";
     sbc->connect_irq_notifier = vfio_start_irqfd_injection;

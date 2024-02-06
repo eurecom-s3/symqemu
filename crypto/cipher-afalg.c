@@ -12,7 +12,6 @@
  */
 #include "qemu/osdep.h"
 #include "qemu/sockets.h"
-#include "qemu-common.h"
 #include "qapi/error.h"
 #include "crypto/cipher.h"
 #include "cipherpriv.h"
@@ -58,7 +57,9 @@ qcrypto_afalg_cipher_format_name(QCryptoCipherAlgorithm alg,
     return name;
 }
 
-QCryptoAFAlg *
+static const struct QCryptoCipherDriver qcrypto_cipher_afalg_driver;
+
+QCryptoCipher *
 qcrypto_afalg_cipher_ctx_new(QCryptoCipherAlgorithm alg,
                              QCryptoCipherMode mode,
                              const uint8_t *key,
@@ -82,8 +83,8 @@ qcrypto_afalg_cipher_ctx_new(QCryptoCipherAlgorithm alg,
     g_free(name);
 
     /* setkey */
-    if (qemu_setsockopt(afalg->tfmfd, SOL_ALG, ALG_SET_KEY, key,
-                        nkey) != 0) {
+    if (setsockopt(afalg->tfmfd, SOL_ALG, ALG_SET_KEY, key,
+                   nkey) != 0) {
         error_setg_errno(errp, errno, "Set key failed");
         qcrypto_afalg_comm_free(afalg);
         return NULL;
@@ -109,7 +110,8 @@ qcrypto_afalg_cipher_ctx_new(QCryptoCipherAlgorithm alg,
     }
     afalg->cmsg = CMSG_FIRSTHDR(afalg->msg);
 
-    return afalg;
+    afalg->base.driver = &qcrypto_cipher_afalg_driver;
+    return &afalg->base;
 }
 
 static int
@@ -117,9 +119,9 @@ qcrypto_afalg_cipher_setiv(QCryptoCipher *cipher,
                            const uint8_t *iv,
                            size_t niv, Error **errp)
 {
+    QCryptoAFAlg *afalg = container_of(cipher, QCryptoAFAlg, base);
     struct af_alg_iv *alg_iv;
     size_t expect_niv;
-    QCryptoAFAlg *afalg = cipher->opaque;
 
     expect_niv = qcrypto_cipher_get_iv_len(cipher->alg, cipher->mode);
     if (niv != expect_niv) {
@@ -200,8 +202,9 @@ qcrypto_afalg_cipher_encrypt(QCryptoCipher *cipher,
                              const void *in, void *out,
                              size_t len, Error **errp)
 {
-    return qcrypto_afalg_cipher_op(cipher->opaque, in, out,
-                                   len, true, errp);
+    QCryptoAFAlg *afalg = container_of(cipher, QCryptoAFAlg, base);
+
+    return qcrypto_afalg_cipher_op(afalg, in, out, len, true, errp);
 }
 
 static int
@@ -209,16 +212,19 @@ qcrypto_afalg_cipher_decrypt(QCryptoCipher *cipher,
                              const void *in, void *out,
                              size_t len, Error **errp)
 {
-    return qcrypto_afalg_cipher_op(cipher->opaque, in, out,
-                                   len, false, errp);
+    QCryptoAFAlg *afalg = container_of(cipher, QCryptoAFAlg, base);
+
+    return qcrypto_afalg_cipher_op(afalg, in, out, len, false, errp);
 }
 
 static void qcrypto_afalg_comm_ctx_free(QCryptoCipher *cipher)
 {
-    qcrypto_afalg_comm_free(cipher->opaque);
+    QCryptoAFAlg *afalg = container_of(cipher, QCryptoAFAlg, base);
+
+    qcrypto_afalg_comm_free(afalg);
 }
 
-struct QCryptoCipherDriver qcrypto_cipher_afalg_driver = {
+static const struct QCryptoCipherDriver qcrypto_cipher_afalg_driver = {
     .cipher_encrypt = qcrypto_afalg_cipher_encrypt,
     .cipher_decrypt = qcrypto_afalg_cipher_decrypt,
     .cipher_setiv = qcrypto_afalg_cipher_setiv,

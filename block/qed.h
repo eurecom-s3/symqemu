@@ -140,7 +140,6 @@ typedef struct QEDAIOCB {
 
     /* Current cluster scatter-gather list */
     QEMUIOVector cur_qiov;
-    QEMUIOVector *backing_qiov;
     uint64_t cur_pos;               /* position on block device, in bytes */
     uint64_t cur_cluster;           /* cluster offset in image file */
     unsigned int cur_nclusters;     /* number of clusters being accessed */
@@ -201,33 +200,40 @@ void qed_commit_l2_cache_entry(L2TableCache *l2_cache, CachedL2Table *l2_table);
 /**
  * Table I/O functions
  */
-int coroutine_fn qed_read_l1_table_sync(BDRVQEDState *s);
-int coroutine_fn qed_write_l1_table(BDRVQEDState *s, unsigned int index,
-                                    unsigned int n);
-int coroutine_fn qed_write_l1_table_sync(BDRVQEDState *s, unsigned int index,
-                                         unsigned int n);
-int coroutine_fn qed_read_l2_table_sync(BDRVQEDState *s, QEDRequest *request,
-                                        uint64_t offset);
-int coroutine_fn qed_read_l2_table(BDRVQEDState *s, QEDRequest *request,
-                                   uint64_t offset);
-int coroutine_fn qed_write_l2_table(BDRVQEDState *s, QEDRequest *request,
-                                    unsigned int index, unsigned int n,
-                                    bool flush);
-int coroutine_fn qed_write_l2_table_sync(BDRVQEDState *s, QEDRequest *request,
-                                         unsigned int index, unsigned int n,
-                                         bool flush);
+int coroutine_fn GRAPH_RDLOCK qed_read_l1_table_sync(BDRVQEDState *s);
+
+int coroutine_fn GRAPH_RDLOCK
+qed_write_l1_table(BDRVQEDState *s, unsigned int index, unsigned int n);
+
+int coroutine_fn GRAPH_RDLOCK
+qed_write_l1_table_sync(BDRVQEDState *s, unsigned int index, unsigned int n);
+
+int coroutine_fn GRAPH_RDLOCK
+qed_read_l2_table_sync(BDRVQEDState *s, QEDRequest *request, uint64_t offset);
+
+int coroutine_fn GRAPH_RDLOCK
+qed_read_l2_table(BDRVQEDState *s, QEDRequest *request, uint64_t offset);
+
+int coroutine_fn GRAPH_RDLOCK
+qed_write_l2_table(BDRVQEDState *s, QEDRequest *request, unsigned int index,
+                   unsigned int n, bool flush);
+
+int coroutine_fn GRAPH_RDLOCK
+qed_write_l2_table_sync(BDRVQEDState *s, QEDRequest *request,
+                        unsigned int index, unsigned int n, bool flush);
 
 /**
  * Cluster functions
  */
-int coroutine_fn qed_find_cluster(BDRVQEDState *s, QEDRequest *request,
-                                  uint64_t pos, size_t *len,
-                                  uint64_t *img_offset);
+int coroutine_fn GRAPH_RDLOCK
+qed_find_cluster(BDRVQEDState *s, QEDRequest *request, uint64_t pos,
+                 size_t *len, uint64_t *img_offset);
 
 /**
  * Consistency check
  */
-int coroutine_fn qed_check(BDRVQEDState *s, BdrvCheckResult *result, bool fix);
+int coroutine_fn GRAPH_RDLOCK
+qed_check(BDRVQEDState *s, BdrvCheckResult *result, bool fix);
 
 QEDTable *qed_alloc_table(BDRVQEDState *s);
 

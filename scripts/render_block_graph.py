@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Render Qemu Block Graph
 #
@@ -25,14 +25,14 @@ import json
 from graphviz import Digraph
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'python'))
-from qemu.machine import MonitorResponseError
+from qemu.qmp import QMPError
+from qemu.qmp.legacy import QEMUMonitorProtocol
 
 
 def perm(arr):
     s = 'w' if 'write' in arr else '_'
     s += 'r' if 'consistent-read' in arr else '_'
     s += 'u' if 'write-unchanged' in arr else '_'
-    s += 'g' if 'graph-mod' in arr else '_'
     s += 's' if 'resize' in arr else '_'
     return s
 
@@ -102,7 +102,7 @@ class LibvirtGuest():
         reply = json.loads(subprocess.check_output(ar))
 
         if 'error' in reply:
-            raise MonitorResponseError(reply)
+            raise QMPError(reply)
 
         return reply['return']
 

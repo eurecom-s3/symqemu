@@ -1,4 +1,4 @@
-module None
+module ./builtin
 object q_empty
 enum QType
     prefix QTYPE
@@ -9,3 +9,4 @@ enum QType
     member qdict
     member qlist
     member qbool
+module empty.json

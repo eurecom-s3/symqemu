@@ -7,5 +7,12 @@ config MEM_DEVICE
 
 config NVDIMM
     bool
-    default y
-    depends on PC
+    select MEM_DEVICE
+
+config SPARSE_MEM
+    bool
+
+config CXL_MEM_DEVICE
+    bool
+    default y if CXL
+    select MEM_DEVICE

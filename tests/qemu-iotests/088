@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw quick
 #
 # vpc (VHD) format input validation tests
 #
@@ -28,7 +29,7 @@ status=1	# failure is the default!
 
 _cleanup()
 {
-    rm -f $TEST_IMG.snap
+    _rm_test_img "$TEST_IMG.snap"
     _cleanup_test_img
 }
 trap "_cleanup; exit \$status" 0 1 2 3 15

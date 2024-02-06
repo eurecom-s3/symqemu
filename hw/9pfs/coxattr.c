@@ -11,10 +11,15 @@
  *
  */
 
+/*
+ * Not so fast! You might want to read the 9p developer docs first:
+ * https://wiki.qemu.org/Documentation/9p
+ */
+
 #include "qemu/osdep.h"
 #include "fsdev/qemu-fsdev.h"
 #include "qemu/thread.h"
-#include "qemu/coroutine.h"
+#include "qemu/main-loop.h"
 #include "coth.h"
 
 int coroutine_fn v9fs_co_llistxattr(V9fsPDU *pdu, V9fsPath *path, void *value,

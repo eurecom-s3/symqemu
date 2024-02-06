@@ -22,6 +22,7 @@
 #define M68K_CPU_H
 
 #include "exec/cpu-defs.h"
+#include "qemu/cpu-float.h"
 #include "cpu-qom.h"
 
 #define OS_BYTE     0
@@ -32,8 +33,6 @@
 #define OS_EXTENDED 5
 #define OS_PACKED   6
 #define OS_UNSIZED  7
-
-#define MAX_QREGS 32
 
 #define EXCP_ACCESS         2   /* Access (MMU) error.  */
 #define EXCP_ADDRESS        3   /* Address error.  */
@@ -81,13 +80,19 @@
 
 typedef CPU_LDoubleU FPReg;
 
-typedef struct CPUM68KState {
+typedef struct CPUArchState {
     uint32_t dregs[8];
     uint32_t aregs[8];
     uint32_t pc;
     uint32_t sr;
 
-    /* SSP and USP.  The current_sp is stored in aregs[7], the other here.  */
+    /*
+     * The 68020/30/40 support two supervisor stacks, ISP and MSP.
+     * The 68000/10, Coldfire, and CPU32 only have USP/SSP.
+     *
+     * The current_sp is stored in aregs[7], the other here.
+     * The USP, SSP, and if used the additional ISP for 68020/30/40.
+     */
     int current_sp;
     uint32_t sp[3];
 
@@ -117,6 +122,12 @@ typedef struct CPUM68KState {
 
     /* MMU status.  */
     struct {
+        /*
+         * Holds the "address" value in between raising an exception
+         * and creation of the exception stack frame.
+         * Used for both Format 7 exceptions (Access, i.e. mmu)
+         * and Format 2 exceptions (chk, div0, trapcc, etc).
+         */
         uint32_t ar;
         uint32_t ssw;
         /* 68040 */
@@ -139,13 +150,11 @@ typedef struct CPUM68KState {
     int pending_vector;
     int pending_level;
 
-    uint32_t qregs[MAX_QREGS];
-
     /* Fields up to this point are cleared by a CPU reset */
     struct {} end_reset_fields;
 
     /* Fields from here on are preserved across CPU reset. */
-    uint32_t features;
+    uint64_t features;
 } CPUM68KState;
 
 /*
@@ -154,7 +163,7 @@ typedef struct CPUM68KState {
  *
  * A Motorola 68k CPU.
  */
-struct M68kCPU {
+struct ArchCPU {
     /*< private >*/
     CPUState parent_obj;
     /*< public >*/
@@ -164,25 +173,21 @@ struct M68kCPU {
 };
 
 
+#ifndef CONFIG_USER_ONLY
 void m68k_cpu_do_interrupt(CPUState *cpu);
 bool m68k_cpu_exec_interrupt(CPUState *cpu, int int_req);
-void m68k_cpu_dump_state(CPUState *cpu, FILE *f, int flags);
 hwaddr m68k_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
-int m68k_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
+#endif /* !CONFIG_USER_ONLY */
+void m68k_cpu_dump_state(CPUState *cpu, FILE *f, int flags);
+int m68k_cpu_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg);
 int m68k_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
 
 void m68k_tcg_init(void);
 void m68k_cpu_init_gdb(M68kCPU *cpu);
-/*
- * you can call this signal handler from your SIGBUS and SIGSEGV
- * signal handlers to inform the virtual CPU of exceptions. non zero
- * is returned if the signal was handled by the virtual CPU.
- */
-int cpu_m68k_signal_handler(int host_signum, void *pinfo,
-                           void *puc);
 uint32_t cpu_m68k_get_ccr(CPUM68KState *env);
 void cpu_m68k_set_ccr(CPUM68KState *env, uint32_t);
 void cpu_m68k_set_sr(CPUM68KState *env, uint32_t);
+void cpu_m68k_restore_fp_status(CPUM68KState *env);
 void cpu_m68k_set_fpcr(CPUM68KState *env, uint32_t val);
 
 
@@ -226,6 +231,9 @@ typedef enum {
 #define SR_S  0x2000
 #define SR_T_SHIFT 14
 #define SR_T  0xc000
+
+#define M68K_SR_TRACE(sr) ((sr & SR_T) >> SR_T_SHIFT)
+#define M68K_SR_TRACE_ANY_INS 0x2
 
 #define M68K_SSP    0
 #define M68K_USP    1
@@ -396,6 +404,10 @@ typedef enum {
 #define M68K_CR_DACR0    0x006
 #define M68K_CR_DACR1    0x007
 
+/* MC68060 */
+#define M68K_CR_BUSCR    0x008
+#define M68K_CR_PCR      0x808
+
 #define M68K_FPIAR_SHIFT  0
 #define M68K_FPIAR        (1 << M68K_FPIAR_SHIFT)
 #define M68K_FPSR_SHIFT   1
@@ -453,41 +465,85 @@ void m68k_switch_sp(CPUM68KState *env);
 void do_m68k_semihosting(CPUM68KState *env, int nr);
 
 /*
+ * The 68000 family is defined in six main CPU classes, the 680[012346]0.
+ * Generally each successive CPU adds enhanced data/stack/instructions.
+ * However, some features are only common to one, or a few classes.
+ * The features covers those subsets of instructons.
+ *
+ * CPU32/32+ are basically 680010 compatible with some 68020 class instructons,
+ * and some additional CPU32 instructions. Mostly Supervisor state differences.
+ *
+ * The ColdFire core ISA is a RISC-style reduction of the 68000 series cpu.
  * There are 4 ColdFire core ISA revisions: A, A+, B and C.
  * Each feature covers the subset of instructions common to the
  * ISA revisions mentioned.
  */
 
 enum m68k_features {
-    M68K_FEATURE_M68000,
+    /* Base Motorola CPU set (not set for Coldfire CPUs) */
+    M68K_FEATURE_M68K,
+    /* Motorola CPU feature sets */
+    M68K_FEATURE_M68010,
+    M68K_FEATURE_M68020,
+    M68K_FEATURE_M68030,
+    M68K_FEATURE_M68040,
+    M68K_FEATURE_M68060,
+    /* Base Coldfire set Rev A. */
     M68K_FEATURE_CF_ISA_A,
-    M68K_FEATURE_CF_ISA_B, /* (ISA B or C).  */
-    M68K_FEATURE_CF_ISA_APLUSC, /* BIT/BITREV, FF1, STRLDSR (ISA A+ or C).  */
-    M68K_FEATURE_BRAL, /* Long unconditional branch.  (ISA A+ or B).  */
+    /* (ISA B or C). */
+    M68K_FEATURE_CF_ISA_B,
+    /* BIT/BITREV, FF1, STRLDSR (ISA A+ or C). */
+    M68K_FEATURE_CF_ISA_APLUSC,
+    /* BRA with Long branch. (680[2346]0, ISA A+ or B). */
+    M68K_FEATURE_BRAL,
     M68K_FEATURE_CF_FPU,
     M68K_FEATURE_CF_MAC,
     M68K_FEATURE_CF_EMAC,
-    M68K_FEATURE_CF_EMAC_B, /* Revision B EMAC (dual accumulate).  */
-    M68K_FEATURE_USP, /* User Stack Pointer.  (ISA A+, B or C).  */
-    M68K_FEATURE_EXT_FULL, /* 68020+ full extension word.  */
-    M68K_FEATURE_WORD_INDEX, /* word sized address index registers.  */
-    M68K_FEATURE_SCALED_INDEX, /* scaled address index registers.  */
-    M68K_FEATURE_LONG_MULDIV, /* 32 bit multiply/divide. */
-    M68K_FEATURE_QUAD_MULDIV, /* 64 bit multiply/divide. */
-    M68K_FEATURE_BCCL, /* Long conditional branches.  */
-    M68K_FEATURE_BITFIELD, /* Bit field insns.  */
+    /* Revision B EMAC (dual accumulate). */
+    M68K_FEATURE_CF_EMAC_B,
+    /* User Stack Pointer. (680[012346]0, ISA A+, B or C). */
+    M68K_FEATURE_USP,
+    /* Master Stack Pointer. (680[234]0) */
+    M68K_FEATURE_MSP,
+    /* 68020+ full extension word. */
+    M68K_FEATURE_EXT_FULL,
+    /* word sized address index registers. */
+    M68K_FEATURE_WORD_INDEX,
+    /* scaled address index registers. */
+    M68K_FEATURE_SCALED_INDEX,
+    /* 32 bit mul/div. (680[2346]0, and CPU32) */
+    M68K_FEATURE_LONG_MULDIV,
+    /* 64 bit mul/div. (680[2346]0, and CPU32) */
+    M68K_FEATURE_QUAD_MULDIV,
+    /* Bcc with Long branches. (680[2346]0, and CPU32) */
+    M68K_FEATURE_BCCL,
+    /* BFxxx Bit field insns. (680[2346]0) */
+    M68K_FEATURE_BITFIELD,
+    /* fpu insn. (680[46]0) */
     M68K_FEATURE_FPU,
+    /* CAS/CAS2[WL] insns. (680[2346]0) */
     M68K_FEATURE_CAS,
+    /* BKPT insn. (680[12346]0, and CPU32) */
     M68K_FEATURE_BKPT,
+    /* RTD insn. (680[12346]0, and CPU32) */
     M68K_FEATURE_RTD,
+    /* CHK2 insn. (680[2346]0, and CPU32) */
     M68K_FEATURE_CHK2,
-    M68K_FEATURE_M68040, /* instructions specific to MC68040 */
+    /* MOVEP insn. (680[01234]0, and CPU32) */
     M68K_FEATURE_MOVEP,
+    /* MOVEC insn. (from 68010) */
+    M68K_FEATURE_MOVEC,
+    /* Unaligned data accesses (680[2346]0) */
+    M68K_FEATURE_UNALIGNED_DATA,
+    /* TRAPcc insn. (680[2346]0, and CPU32) */
+    M68K_FEATURE_TRAPCC,
+    /* MOVE from SR privileged (from 68010) */
+    M68K_FEATURE_MOVEFROMSR_PRIV,
 };
 
-static inline int m68k_feature(CPUM68KState *env, int feature)
+static inline bool m68k_feature(CPUM68KState *env, int feature)
 {
-    return (env->features & (1u << feature)) != 0;
+    return (env->features & BIT_ULL(feature)) != 0;
 }
 
 void m68k_cpu_list(void);
@@ -512,12 +568,9 @@ enum {
 #define M68K_CPU_TYPE_NAME(model) model M68K_CPU_TYPE_SUFFIX
 #define CPU_RESOLVING_TYPE TYPE_M68K_CPU
 
-#define cpu_signal_handler cpu_m68k_signal_handler
 #define cpu_list m68k_cpu_list
 
 /* MMU modes definitions */
-#define MMU_MODE0_SUFFIX _kernel
-#define MMU_MODE1_SUFFIX _user
 #define MMU_KERNEL_IDX 0
 #define MMU_USER_IDX 1
 static inline int cpu_mmu_index (CPUM68KState *env, bool ifetch)
@@ -528,13 +581,12 @@ static inline int cpu_mmu_index (CPUM68KState *env, bool ifetch)
 bool m68k_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
                        MMUAccessType access_type, int mmu_idx,
                        bool probe, uintptr_t retaddr);
+#ifndef CONFIG_USER_ONLY
 void m68k_cpu_transaction_failed(CPUState *cs, hwaddr physaddr, vaddr addr,
                                  unsigned size, MMUAccessType access_type,
                                  int mmu_idx, MemTxAttrs attrs,
                                  MemTxResult response, uintptr_t retaddr);
-
-typedef CPUM68KState CPUArchState;
-typedef M68kCPU ArchCPU;
+#endif
 
 #include "exec/cpu-all.h"
 
@@ -546,9 +598,11 @@ typedef M68kCPU ArchCPU;
 #define TB_FLAGS_SFC_S          (1 << TB_FLAGS_SFC_S_BIT)
 #define TB_FLAGS_DFC_S_BIT      15
 #define TB_FLAGS_DFC_S          (1 << TB_FLAGS_DFC_S_BIT)
+#define TB_FLAGS_TRACE          16
+#define TB_FLAGS_TRACE_BIT      (1 << TB_FLAGS_TRACE)
 
-static inline void cpu_get_tb_cpu_state(CPUM68KState *env, target_ulong *pc,
-                                        target_ulong *cs_base, uint32_t *flags)
+static inline void cpu_get_tb_cpu_state(CPUM68KState *env, vaddr *pc,
+                                        uint64_t *cs_base, uint32_t *flags)
 {
     *pc = env->pc;
     *cs_base = 0;
@@ -557,6 +611,9 @@ static inline void cpu_get_tb_cpu_state(CPUM68KState *env, target_ulong *pc,
         *flags |= TB_FLAGS_MSR_S;
         *flags |= (env->sfc << (TB_FLAGS_SFC_S_BIT - 2)) & TB_FLAGS_SFC_S;
         *flags |= (env->dfc << (TB_FLAGS_DFC_S_BIT - 2)) & TB_FLAGS_DFC_S;
+    }
+    if (M68K_SR_TRACE(env->sr) == M68K_SR_TRACE_ANY_INS) {
+        *flags |= TB_FLAGS_TRACE;
     }
 }
 

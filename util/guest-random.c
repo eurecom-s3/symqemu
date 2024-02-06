@@ -14,6 +14,7 @@
 #include "qapi/error.h"
 #include "qemu/guest-random.h"
 #include "crypto/random.h"
+#include "exec/replay-core.h"
 
 
 static __thread GRand *thread_rand;
@@ -37,20 +38,28 @@ static int glib_random_bytes(void *buf, size_t len)
     }
     if (i < len) {
         x = g_rand_int(rand);
-        __builtin_memcpy(buf + i, &x, i - len);
+        __builtin_memcpy(buf + i, &x, len - i);
     }
     return 0;
 }
 
 int qemu_guest_getrandom(void *buf, size_t len, Error **errp)
 {
+    int ret;
+    if (replay_mode == REPLAY_MODE_PLAY) {
+        return replay_read_random(buf, len);
+    }
     if (unlikely(deterministic)) {
         /* Deterministic implementation using Glib's Mersenne Twister.  */
-        return glib_random_bytes(buf, len);
+        ret = glib_random_bytes(buf, len);
     } else {
         /* Non-deterministic implementation using crypto routines.  */
-        return qcrypto_random_bytes(buf, len, errp);
+        ret = qcrypto_random_bytes(buf, len, errp);
     }
+    if (replay_mode == REPLAY_MODE_RECORD) {
+        replay_save_random(ret, buf, len);
+    }
+    return ret;
 }
 
 void qemu_guest_getrandom_nofail(void *buf, size_t len)
@@ -80,8 +89,8 @@ void qemu_guest_random_seed_thread_part2(uint64_t seed)
 
 int qemu_guest_random_seed_main(const char *optarg, Error **errp)
 {
-    unsigned long long seed;
-    if (parse_uint_full(optarg, &seed, 0)) {
+    uint64_t seed;
+    if (parse_uint_full(optarg, 0, &seed)) {
         error_setg(errp, "Invalid seed number: %s", optarg);
         return -1;
     } else {

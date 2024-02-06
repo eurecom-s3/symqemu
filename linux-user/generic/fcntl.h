@@ -99,6 +99,10 @@
 #define TARGET_F_SETLKW64      14
 #endif
 
+#define TARGET_F_OFD_GETLK     36
+#define TARGET_F_OFD_SETLK     37
+#define TARGET_F_OFD_SETLKW    38
+
 #ifndef TARGET_F_SETOWN_EX
 #define TARGET_F_SETOWN_EX     15
 #define TARGET_F_GETOWN_EX     16
@@ -113,11 +117,6 @@ struct target_f_owner_ex {
 #define TARGET_F_RDLCK         0
 #define TARGET_F_WRLCK         1
 #define TARGET_F_UNLCK         2
-#endif
-
-#ifndef TARGET_F_EXLCK
-#define TARGET_F_EXLCK         4
-#define TARGET_F_SHLCK         8
 #endif
 
 #ifndef TARGET_HAVE_ARCH_STRUCT_FLOCK

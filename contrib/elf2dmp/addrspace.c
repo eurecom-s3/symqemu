@@ -11,6 +11,7 @@
 static struct pa_block *pa_space_find_block(struct pa_space *ps, uint64_t pa)
 {
     size_t i;
+
     for (i = 0; i < ps->block_nr; i++) {
         if (ps->block[i].paddr <= pa &&
                 pa <= ps->block[i].paddr + ps->block[i].size) {
@@ -207,8 +208,8 @@ int va_space_rw(struct va_space *vs, uint64_t addr,
         void *buf, size_t size, int is_write)
 {
     while (size) {
-        uint64_t page = addr & PFN_MASK;
-        size_t s = (page + PAGE_SIZE) - addr;
+        uint64_t page = addr & ELF2DMP_PFN_MASK;
+        size_t s = (page + ELF2DMP_PAGE_SIZE) - addr;
         void *ptr;
 
         s = (s > size) ? size : s;

@@ -26,8 +26,8 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "qapi/error.h"
-#include "hw/hw.h"
 #include "ui/console.h"
 #include "hw/arm/omap.h"
 #include "hw/boards.h"
@@ -36,6 +36,9 @@
 #include "sysemu/qtest.h"
 #include "exec/address-spaces.h"
 #include "cpu.h"
+#include "qemu/cutils.h"
+#include "qemu/error-report.h"
+
 
 /*****************************************************************************/
 /* Siemens SX1 Cellphone V1 */
@@ -65,7 +68,7 @@
 static uint64_t static_read(void *opaque, hwaddr offset,
                             unsigned size)
 {
-    uint32_t *val = (uint32_t *) opaque;
+    uint32_t *val = opaque;
     uint32_t mask = (4 / size) - 1;
 
     return *val >> ((offset & mask) << 3);
@@ -86,23 +89,22 @@ static const MemoryRegionOps static_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-#define sdram_size	0x02000000
-#define sector_size	(128 * 1024)
-#define flash0_size	(16 * 1024 * 1024)
-#define flash1_size	( 8 * 1024 * 1024)
-#define flash2_size	(32 * 1024 * 1024)
-#define total_ram_v1	(sdram_size + flash0_size + flash1_size + OMAP15XX_SRAM_SIZE)
-#define total_ram_v2	(sdram_size + flash2_size + OMAP15XX_SRAM_SIZE)
+#define SDRAM_SIZE      (32 * MiB)
+#define SECTOR_SIZE     (128 * KiB)
+#define FLASH0_SIZE     (16 * MiB)
+#define FLASH1_SIZE     (8 * MiB)
+#define FLASH2_SIZE     (32 * MiB)
 
 static struct arm_boot_info sx1_binfo = {
     .loader_start = OMAP_EMIFF_BASE,
-    .ram_size = sdram_size,
+    .ram_size = SDRAM_SIZE,
     .board_id = 0x265,
 };
 
 static void sx1_init(MachineState *machine, const int version)
 {
     struct omap_mpu_state_s *mpu;
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
     MemoryRegion *address_space = get_system_memory();
     MemoryRegion *flash = g_new(MemoryRegion, 1);
     MemoryRegion *cs = g_new(MemoryRegion, 4);
@@ -112,20 +114,26 @@ static void sx1_init(MachineState *machine, const int version)
     static uint32_t cs3val = 0x00001139;
     DriveInfo *dinfo;
     int fl_idx;
-    uint32_t flash_size = flash0_size;
-    int be;
+    uint32_t flash_size = FLASH0_SIZE;
 
-    if (version == 2) {
-        flash_size = flash2_size;
+    if (machine->ram_size != mc->default_ram_size) {
+        char *sz = size_to_str(mc->default_ram_size);
+        error_report("Invalid RAM size, should be %s", sz);
+        g_free(sz);
+        exit(EXIT_FAILURE);
     }
 
-    mpu = omap310_mpu_init(address_space, sx1_binfo.ram_size,
-                           machine->cpu_type);
+    if (version == 2) {
+        flash_size = FLASH2_SIZE;
+    }
+
+    memory_region_add_subregion(address_space, OMAP_EMIFF_BASE, machine->ram);
+
+    mpu = omap310_mpu_init(machine->ram, machine->cpu_type);
 
     /* External Flash (EMIFS) */
-    memory_region_init_ram(flash, NULL, "omap_sx1.flash0-0", flash_size,
+    memory_region_init_rom(flash, NULL, "omap_sx1.flash0-0", flash_size,
                            &error_fatal);
-    memory_region_set_readonly(flash, true);
     memory_region_add_subregion(address_space, OMAP_CS0_BASE, flash);
 
     memory_region_init_io(&cs[0], NULL, &static_ops, &cs0val,
@@ -145,43 +153,30 @@ static void sx1_init(MachineState *machine, const int version)
                                 OMAP_CS2_BASE, &cs[3]);
 
     fl_idx = 0;
-#ifdef TARGET_WORDS_BIGENDIAN
-    be = 1;
-#else
-    be = 0;
-#endif
-
     if ((dinfo = drive_get(IF_PFLASH, 0, fl_idx)) != NULL) {
-        if (!pflash_cfi01_register(OMAP_CS0_BASE,
-                                   "omap_sx1.flash0-1", flash_size,
-                                   blk_by_legacy_dinfo(dinfo),
-                                   sector_size, 4, 0, 0, 0, 0, be)) {
-            fprintf(stderr, "qemu: Error registering flash memory %d.\n",
-                           fl_idx);
-        }
+        pflash_cfi01_register(OMAP_CS0_BASE,
+                              "omap_sx1.flash0-1", flash_size,
+                              blk_by_legacy_dinfo(dinfo),
+                              SECTOR_SIZE, 4, 0, 0, 0, 0, 0);
         fl_idx++;
     }
 
     if ((version == 1) &&
             (dinfo = drive_get(IF_PFLASH, 0, fl_idx)) != NULL) {
         MemoryRegion *flash_1 = g_new(MemoryRegion, 1);
-        memory_region_init_ram(flash_1, NULL, "omap_sx1.flash1-0",
-                               flash1_size, &error_fatal);
-        memory_region_set_readonly(flash_1, true);
+        memory_region_init_rom(flash_1, NULL, "omap_sx1.flash1-0",
+                               FLASH1_SIZE, &error_fatal);
         memory_region_add_subregion(address_space, OMAP_CS1_BASE, flash_1);
 
         memory_region_init_io(&cs[1], NULL, &static_ops, &cs1val,
-                              "sx1.cs1", OMAP_CS1_SIZE - flash1_size);
+                              "sx1.cs1", OMAP_CS1_SIZE - FLASH1_SIZE);
         memory_region_add_subregion(address_space,
-                                OMAP_CS1_BASE + flash1_size, &cs[1]);
+                                OMAP_CS1_BASE + FLASH1_SIZE, &cs[1]);
 
-        if (!pflash_cfi01_register(OMAP_CS1_BASE,
-                                   "omap_sx1.flash1-1", flash1_size,
-                                   blk_by_legacy_dinfo(dinfo),
-                                   sector_size, 4, 0, 0, 0, 0, be)) {
-            fprintf(stderr, "qemu: Error registering flash memory %d.\n",
-                           fl_idx);
-        }
+        pflash_cfi01_register(OMAP_CS1_BASE,
+                              "omap_sx1.flash1-1", FLASH1_SIZE,
+                              blk_by_legacy_dinfo(dinfo),
+                              SECTOR_SIZE, 4, 0, 0, 0, 0, 0);
         fl_idx++;
     } else {
         memory_region_init_io(&cs[1], NULL, &static_ops, &cs1val,
@@ -196,10 +191,7 @@ static void sx1_init(MachineState *machine, const int version)
     }
 
     /* Load the kernel.  */
-    sx1_binfo.kernel_filename = machine->kernel_filename;
-    sx1_binfo.kernel_cmdline = machine->kernel_cmdline;
-    sx1_binfo.initrd_filename = machine->initrd_filename;
-    arm_load_kernel(mpu->cpu, &sx1_binfo);
+    arm_load_kernel(mpu->cpu, machine, &sx1_binfo);
 
     /* TODO: fix next line */
     //~ qemu_console_resize(ds, 640, 480);
@@ -223,6 +215,8 @@ static void sx1_machine_v2_class_init(ObjectClass *oc, void *data)
     mc->init = sx1_init_v2;
     mc->ignore_memory_transaction_failures = true;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("ti925t");
+    mc->default_ram_size = SDRAM_SIZE;
+    mc->default_ram_id = "omap1.dram";
 }
 
 static const TypeInfo sx1_machine_v2_type = {
@@ -239,6 +233,8 @@ static void sx1_machine_v1_class_init(ObjectClass *oc, void *data)
     mc->init = sx1_init_v1;
     mc->ignore_memory_transaction_failures = true;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("ti925t");
+    mc->default_ram_size = SDRAM_SIZE;
+    mc->default_ram_id = "omap1.dram";
 }
 
 static const TypeInfo sx1_machine_v1_type = {

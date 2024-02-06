@@ -5,7 +5,7 @@
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,20 +20,15 @@
 #include "cpu.h"
 #include "x86_descr.h"
 
-int hvf_process_events(CPUState *);
-int hvf_put_registers(CPUState *);
-int hvf_get_registers(CPUState *);
-bool hvf_inject_interrupts(CPUState *);
-void hvf_set_segment(struct CPUState *cpu, struct vmx_segment *vmx_seg,
+int hvf_process_events(CPUState *cs);
+bool hvf_inject_interrupts(CPUState *cs);
+void hvf_set_segment(CPUState *cs, struct vmx_segment *vmx_seg,
                      SegmentCache *qseg, bool is_tr);
 void hvf_get_segment(SegmentCache *qseg, struct vmx_segment *vmx_seg);
-void hvf_put_xsave(CPUState *cpu_state);
-void hvf_put_segments(CPUState *cpu_state);
-void hvf_put_msrs(CPUState *cpu_state);
-void hvf_get_xsave(CPUState *cpu_state);
-void hvf_get_msrs(CPUState *cpu_state);
-void vmx_clear_int_window_exiting(CPUState *cpu);
-void hvf_get_segments(CPUState *cpu_state);
-void vmx_update_tpr(CPUState *cpu);
-void hvf_cpu_synchronize_state(CPUState *cpu_state);
+void hvf_put_xsave(CPUState *cs);
+void hvf_put_msrs(CPUState *cs);
+void hvf_get_xsave(CPUState *cs);
+void hvf_get_msrs(CPUState *cs);
+void vmx_clear_int_window_exiting(CPUState *cs);
+void vmx_update_tpr(CPUState *cs);
 #endif

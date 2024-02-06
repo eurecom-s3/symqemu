@@ -21,9 +21,10 @@
 #include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
-#include "exec/address-spaces.h"
 #include "hw/arm/nrf51.h"
 #include "hw/nvram/nrf51_nvm.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 
 /*
  * FICR Registers Assignments
@@ -271,6 +272,15 @@ static const MemoryRegionOps io_ops = {
         .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
+static uint64_t flash_read(void *opaque, hwaddr offset, unsigned size)
+{
+    /*
+     * This is a rom_device MemoryRegion which is always in
+     * romd_mode (we never put it in MMIO mode), so reads always
+     * go directly to RAM and never come here.
+     */
+    g_assert_not_reached();
+}
 
 static void flash_write(void *opaque, hwaddr offset, uint64_t value,
         unsigned int size)
@@ -298,6 +308,7 @@ static void flash_write(void *opaque, hwaddr offset, uint64_t value,
 
 
 static const MemoryRegionOps flash_ops = {
+    .read = flash_read,
     .write = flash_write,
     .valid.min_access_size = 4,
     .valid.max_access_size = 4,
@@ -367,7 +378,7 @@ static void nrf51_nvm_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->props = nrf51_nvm_properties;
+    device_class_set_props(dc, nrf51_nvm_properties);
     dc->vmsd = &vmstate_nvm;
     dc->realize = nrf51_nvm_realize;
     dc->reset = nrf51_nvm_reset;

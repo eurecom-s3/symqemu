@@ -12,6 +12,7 @@
 #include "qemu/guest-random.h"
 #include "qemu/module.h"
 #include "hw/misc/bcm2835_rng.h"
+#include "migration/vmstate.h"
 
 static uint32_t get_random_bytes(void)
 {
@@ -130,7 +131,7 @@ static void bcm2835_rng_class_init(ObjectClass *klass, void *data)
     dc->vmsd = &vmstate_bcm2835_rng;
 }
 
-static TypeInfo bcm2835_rng_info = {
+static const TypeInfo bcm2835_rng_info = {
     .name          = TYPE_BCM2835_RNG,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(BCM2835RngState),

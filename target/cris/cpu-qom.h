@@ -20,36 +20,31 @@
 #ifndef QEMU_CRIS_CPU_QOM_H
 #define QEMU_CRIS_CPU_QOM_H
 
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
+#include "qom/object.h"
 
 #define TYPE_CRIS_CPU "cris-cpu"
 
-#define CRIS_CPU_CLASS(klass) \
-    OBJECT_CLASS_CHECK(CRISCPUClass, (klass), TYPE_CRIS_CPU)
-#define CRIS_CPU(obj) \
-    OBJECT_CHECK(CRISCPU, (obj), TYPE_CRIS_CPU)
-#define CRIS_CPU_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(CRISCPUClass, (obj), TYPE_CRIS_CPU)
+OBJECT_DECLARE_CPU_TYPE(CRISCPU, CRISCPUClass, CRIS_CPU)
 
 /**
  * CRISCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  * @vr: Version Register value.
  *
  * A CRIS CPU model.
  */
-typedef struct CRISCPUClass {
+struct CRISCPUClass {
     /*< private >*/
     CPUClass parent_class;
     /*< public >*/
 
     DeviceRealize parent_realize;
-    void (*parent_reset)(CPUState *cpu);
+    ResettablePhases parent_phases;
 
     uint32_t vr;
-} CRISCPUClass;
+};
 
-typedef struct CRISCPU CRISCPU;
 
 #endif

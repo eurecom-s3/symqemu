@@ -31,8 +31,7 @@ struct JSONToken {
     char str[];
 };
 
-typedef struct JSONParserContext
-{
+typedef struct JSONParserContext {
     Error *err;
     JSONToken *current;
     GQueue *buf;
@@ -55,7 +54,7 @@ static QObject *parse_value(JSONParserContext *ctxt);
 /**
  * Error handler
  */
-static void GCC_FMT_ATTR(3, 4) parse_error(JSONParserContext *ctxt,
+static void G_GNUC_PRINTF(3, 4) parse_error(JSONParserContext *ctxt,
                                            JSONToken *token, const char *msg, ...)
 {
     va_list ap;
@@ -130,7 +129,7 @@ static int cvt4hex(const char *s)
 static QString *parse_string(JSONParserContext *ctxt, JSONToken *token)
 {
     const char *ptr = token->str;
-    QString *str;
+    GString *str;
     char quote;
     const char *beg;
     int cp, trailing;
@@ -140,7 +139,7 @@ static QString *parse_string(JSONParserContext *ctxt, JSONToken *token)
 
     assert(*ptr == '"' || *ptr == '\'');
     quote = *ptr++;
-    str = qstring_new();
+    str = g_string_new(NULL);
 
     while (*ptr != quote) {
         assert(*ptr);
@@ -149,31 +148,31 @@ static QString *parse_string(JSONParserContext *ctxt, JSONToken *token)
             beg = ptr++;
             switch (*ptr++) {
             case '"':
-                qstring_append_chr(str, '"');
+                g_string_append_c(str, '"');
                 break;
             case '\'':
-                qstring_append_chr(str, '\'');
+                g_string_append_c(str, '\'');
                 break;
             case '\\':
-                qstring_append_chr(str, '\\');
+                g_string_append_c(str, '\\');
                 break;
             case '/':
-                qstring_append_chr(str, '/');
+                g_string_append_c(str, '/');
                 break;
             case 'b':
-                qstring_append_chr(str, '\b');
+                g_string_append_c(str, '\b');
                 break;
             case 'f':
-                qstring_append_chr(str, '\f');
+                g_string_append_c(str, '\f');
                 break;
             case 'n':
-                qstring_append_chr(str, '\n');
+                g_string_append_c(str, '\n');
                 break;
             case 'r':
-                qstring_append_chr(str, '\r');
+                g_string_append_c(str, '\r');
                 break;
             case 't':
-                qstring_append_chr(str, '\t');
+                g_string_append_c(str, '\t');
                 break;
             case 'u':
                 cp = cvt4hex(ptr);
@@ -200,7 +199,7 @@ static QString *parse_string(JSONParserContext *ctxt, JSONToken *token)
                                 (int)(ptr - beg), beg);
                     goto out;
                 }
-                qstring_append(str, utf8_buf);
+                g_string_append(str, utf8_buf);
                 break;
             default:
                 parse_error(ctxt, token, "invalid escape sequence in string");
@@ -225,14 +224,14 @@ static QString *parse_string(JSONParserContext *ctxt, JSONToken *token)
             ptr = end;
             len = mod_utf8_encode(utf8_buf, sizeof(utf8_buf), cp);
             assert(len >= 0);
-            qstring_append(str, utf8_buf);
+            g_string_append(str, utf8_buf);
         }
     }
 
-    return str;
+    return qstring_from_gstring(str);
 
 out:
-    qobject_unref(str);
+    g_string_free(str, true);
     return NULL;
 }
 
@@ -257,8 +256,9 @@ static JSONToken *parser_context_peek_token(JSONParserContext *ctxt)
  */
 static int parse_pair(JSONParserContext *ctxt, QDict *dict)
 {
+    QObject *key_obj = NULL;
+    QString *key;
     QObject *value;
-    QString *key = NULL;
     JSONToken *peek, *token;
 
     peek = parser_context_peek_token(ctxt);
@@ -267,7 +267,8 @@ static int parse_pair(JSONParserContext *ctxt, QDict *dict)
         goto out;
     }
 
-    key = qobject_to(QString, parse_value(ctxt));
+    key_obj = parse_value(ctxt);
+    key = qobject_to(QString, key_obj);
     if (!key) {
         parse_error(ctxt, peek, "key is not a string in object");
         goto out;
@@ -297,13 +298,11 @@ static int parse_pair(JSONParserContext *ctxt, QDict *dict)
 
     qdict_put_obj(dict, qstring_get_str(key), value);
 
-    qobject_unref(key);
-
+    qobject_unref(key_obj);
     return 0;
 
 out:
-    qobject_unref(key);
-
+    qobject_unref(key_obj);
     return -1;
 }
 
@@ -519,8 +518,8 @@ static QObject *parse_literal(JSONParserContext *ctxt)
             }
             assert(ret == -ERANGE);
         }
-        /* fall through to JSON_FLOAT */
     }
+    /* fall through to JSON_FLOAT */
     case JSON_FLOAT:
         /* FIXME dependent on locale; a pervasive issue in QEMU */
         /* FIXME our lexer matches RFC 8259 in forbidding Inf or NaN,

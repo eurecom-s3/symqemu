@@ -16,6 +16,7 @@
 #include "qapi/qmp/qbool.h"
 #include "qapi/qmp/qnull.h"
 #include "qapi/qmp/qstring.h"
+#include "qobject-internal.h"
 
 /**
  * qdict_new(): Create a new QDict
@@ -33,17 +34,18 @@ QDict *qdict_new(void)
 }
 
 /**
- * tdb_hash(): based on the hash agorithm from gdbm, via tdb
+ * tdb_hash(): based on the hash algorithm from gdbm, via tdb
  * (from module-init-tools)
  */
 static unsigned int tdb_hash(const char *name)
 {
-    unsigned value;	/* Used to compute the hash value.  */
-    unsigned   i;	/* Used to cycle through random values. */
+    unsigned value;    /* Used to compute the hash value.  */
+    unsigned   i;      /* Used to cycle through random values. */
 
     /* Set the initial value from the key size. */
-    for (value = 0x238F13AF * strlen(name), i=0; name[i]; i++)
-        value = (value + (((const unsigned char *)name)[i] << (i*5 % 24)));
+    for (value = 0x238F13AF * strlen(name), i = 0; name[i]; i++) {
+        value = (value + (((const unsigned char *)name)[i] << (i * 5 % 24)));
+    }
 
     return (1103515243 * value + 12345);
 }
@@ -92,8 +94,9 @@ static QDictEntry *qdict_find(const QDict *qdict,
     QDictEntry *entry;
 
     QLIST_FOREACH(entry, &qdict->table[bucket], next)
-        if (!strcmp(entry->key, key))
+        if (!strcmp(entry->key, key)) {
             return entry;
+        }
 
     return NULL;
 }
@@ -298,25 +301,6 @@ const char *qdict_get_try_str(const QDict *qdict, const char *key)
     return qstr ? qstring_get_str(qstr) : NULL;
 }
 
-/**
- * qdict_iter(): Iterate over all the dictionary's stored values.
- *
- * This function allows the user to provide an iterator, which will be
- * called for each stored value in the dictionary.
- */
-void qdict_iter(const QDict *qdict,
-                void (*iter)(const char *key, QObject *obj, void *opaque),
-                void *opaque)
-{
-    int i;
-    QDictEntry *entry;
-
-    for (i = 0; i < QDICT_BUCKET_MAX; i++) {
-        QLIST_FOREACH(entry, &qdict->table[i], next)
-            iter(entry->key, entry->value, opaque);
-    }
-}
-
 static QDictEntry *qdict_next_entry(const QDict *qdict, int first_bucket)
 {
     int i;
@@ -457,4 +441,9 @@ void qdict_destroy_obj(QObject *obj)
     }
 
     g_free(qdict);
+}
+
+void qdict_unref(QDict *q)
+{
+    qobject_unref(q);
 }

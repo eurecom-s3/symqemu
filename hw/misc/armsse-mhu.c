@@ -12,7 +12,7 @@
 /*
  * This is a model of the Message Handling Unit (MHU) which is part of the
  * Arm SSE-200 and documented in
- * http://infocenter.arm.com/help/topic/com.arm.doc.101104_0100_00_en/corelink_sse200_subsystem_for_embedded_technical_reference_manual_101104_0100_00_en.pdf
+ * https://developer.arm.com/documentation/101104/latest/
  */
 
 #include "qemu/osdep.h"
@@ -20,9 +20,10 @@
 #include "qemu/module.h"
 #include "trace.h"
 #include "qapi/error.h"
-#include "sysemu/sysemu.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/registerfields.h"
+#include "hw/irq.h"
 #include "hw/misc/armsse-mhu.h"
 
 REG32(CPU0INTR_STAT, 0x0)

@@ -18,7 +18,6 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/arm/omap.h"
 
 /* SDRAM Controller Subsystem */
@@ -32,10 +31,9 @@ void omap_sdrc_reset(struct omap_sdrc_s *s)
     s->config = 0x10;
 }
 
-static uint64_t omap_sdrc_read(void *opaque, hwaddr addr,
-                               unsigned size)
+static uint64_t omap_sdrc_read(void *opaque, hwaddr addr, unsigned size)
 {
-    struct omap_sdrc_s *s = (struct omap_sdrc_s *) opaque;
+    struct omap_sdrc_s *s = opaque;
 
     if (size != 4) {
         return omap_badwidth_read32(opaque, addr);
@@ -90,7 +88,7 @@ static uint64_t omap_sdrc_read(void *opaque, hwaddr addr,
 static void omap_sdrc_write(void *opaque, hwaddr addr,
                             uint64_t value, unsigned size)
 {
-    struct omap_sdrc_s *s = (struct omap_sdrc_s *) opaque;
+    struct omap_sdrc_s *s = opaque;
 
     if (size != 4) {
         omap_badwidth_write32(opaque, addr, value);

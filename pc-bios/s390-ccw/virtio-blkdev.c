@@ -13,7 +13,10 @@
 #include "virtio.h"
 #include "virtio-scsi.h"
 
-static int virtio_blk_read_many(VDev *vdev, ulong sector, void *load_addr,
+#define VIRTIO_BLK_F_GEOMETRY   (1 << 4)
+#define VIRTIO_BLK_F_BLK_SIZE   (1 << 6)
+
+static int virtio_blk_read_many(VDev *vdev, unsigned long sector, void *load_addr,
                                 int sec_num)
 {
     VirtioBlkOuthdr out_hdr;
@@ -46,7 +49,7 @@ static int virtio_blk_read_many(VDev *vdev, ulong sector, void *load_addr,
     return status;
 }
 
-int virtio_read_many(ulong sector, void *load_addr, int sec_num)
+int virtio_read_many(unsigned long sector, void *load_addr, int sec_num)
 {
     VDev *vdev = virtio_get_device();
 
@@ -60,14 +63,14 @@ int virtio_read_many(ulong sector, void *load_addr, int sec_num)
     return -1;
 }
 
-unsigned long virtio_load_direct(ulong rec_list1, ulong rec_list2,
-                                 ulong subchan_id, void *load_addr)
+unsigned long virtio_load_direct(unsigned long rec_list1, unsigned long rec_list2,
+                                 unsigned long subchan_id, void *load_addr)
 {
     u8 status;
     int sec = rec_list1;
     int sec_num = ((rec_list2 >> 32) & 0xffff) + 1;
     int sec_len = rec_list2 >> 48;
-    ulong addr = (ulong)load_addr;
+    unsigned long addr = (unsigned long)load_addr;
 
     if (sec_len != virtio_get_block_size()) {
         return -1;
@@ -83,7 +86,7 @@ unsigned long virtio_load_direct(ulong rec_list1, ulong rec_list2,
     return addr;
 }
 
-int virtio_read(ulong sector, void *load_addr)
+int virtio_read(unsigned long sector, void *load_addr)
 {
     return virtio_read_many(sector, load_addr, 1);
 }
@@ -112,23 +115,6 @@ VirtioGDN virtio_guessed_disk_nature(void)
     return virtio_get_device()->guessed_disk_nature;
 }
 
-void virtio_assume_scsi(void)
-{
-    VDev *vdev = virtio_get_device();
-
-    switch (vdev->senseid.cu_model) {
-    case VIRTIO_ID_BLOCK:
-        vdev->guessed_disk_nature = VIRTIO_GDN_SCSI;
-        vdev->config.blk.blk_size = VIRTIO_SCSI_BLOCK_SIZE;
-        vdev->config.blk.physical_block_exp = 0;
-        vdev->blk_factor = 1;
-        break;
-    case VIRTIO_ID_SCSI:
-        vdev->scsi_block_size = VIRTIO_SCSI_BLOCK_SIZE;
-        break;
-    }
-}
-
 void virtio_assume_iso9660(void)
 {
     VDev *vdev = virtio_get_device();
@@ -155,7 +141,7 @@ void virtio_assume_eckd(void)
     vdev->config.blk.physical_block_exp = 0;
     switch (vdev->senseid.cu_model) {
     case VIRTIO_ID_BLOCK:
-        vdev->config.blk.blk_size = 4096;
+        vdev->config.blk.blk_size = VIRTIO_DASD_DEFAULT_BLOCK_SIZE;
         break;
     case VIRTIO_ID_SCSI:
         vdev->config.blk.blk_size = vdev->scsi_block_size;
@@ -166,46 +152,19 @@ void virtio_assume_eckd(void)
         virtio_eckd_sectors_for_block_size(vdev->config.blk.blk_size);
 }
 
-bool virtio_disk_is_scsi(void)
-{
-    VDev *vdev = virtio_get_device();
-
-    if (vdev->guessed_disk_nature == VIRTIO_GDN_SCSI) {
-        return true;
-    }
-    switch (vdev->senseid.cu_model) {
-    case VIRTIO_ID_BLOCK:
-        return (vdev->config.blk.geometry.heads == 255)
-            && (vdev->config.blk.geometry.sectors == 63)
-            && (virtio_get_block_size()  == VIRTIO_SCSI_BLOCK_SIZE);
-    case VIRTIO_ID_SCSI:
-        return true;
-    }
-    return false;
-}
-
-bool virtio_disk_is_eckd(void)
-{
-    VDev *vdev = virtio_get_device();
-    const int block_size = virtio_get_block_size();
-
-    if (vdev->guessed_disk_nature == VIRTIO_GDN_DASD) {
-        return true;
-    }
-    switch (vdev->senseid.cu_model) {
-    case VIRTIO_ID_BLOCK:
-        return (vdev->config.blk.geometry.heads == 15)
-            && (vdev->config.blk.geometry.sectors ==
-                virtio_eckd_sectors_for_block_size(block_size));
-    case VIRTIO_ID_SCSI:
-        return false;
-    }
-    return false;
-}
-
 bool virtio_ipl_disk_is_valid(void)
 {
-    return virtio_disk_is_scsi() || virtio_disk_is_eckd();
+    int blksize = virtio_get_block_size();
+    VDev *vdev = virtio_get_device();
+
+    if (vdev->guessed_disk_nature == VIRTIO_GDN_SCSI ||
+        vdev->guessed_disk_nature == VIRTIO_GDN_DASD) {
+        return true;
+    }
+
+    return (vdev->senseid.cu_model == VIRTIO_ID_BLOCK ||
+            vdev->senseid.cu_model == VIRTIO_ID_SCSI) &&
+           blksize >= 512 && blksize <= 4096;
 }
 
 int virtio_get_block_size(void)
@@ -214,7 +173,7 @@ int virtio_get_block_size(void)
 
     switch (vdev->senseid.cu_model) {
     case VIRTIO_ID_BLOCK:
-        return vdev->config.blk.blk_size << vdev->config.blk.physical_block_exp;
+        return vdev->config.blk.blk_size;
     case VIRTIO_ID_SCSI:
         return vdev->scsi_block_size;
     }
@@ -263,34 +222,15 @@ uint64_t virtio_get_blocks(void)
     return 0;
 }
 
-void virtio_blk_setup_device(SubChannelId schid)
+int virtio_blk_setup_device(SubChannelId schid)
 {
     VDev *vdev = virtio_get_device();
 
+    vdev->guest_features[0] = VIRTIO_BLK_F_GEOMETRY | VIRTIO_BLK_F_BLK_SIZE;
     vdev->schid = schid;
     virtio_setup_ccw(vdev);
 
-    switch (vdev->senseid.cu_model) {
-    case VIRTIO_ID_BLOCK:
-        sclp_print("Using virtio-blk.\n");
-        if (!virtio_ipl_disk_is_valid()) {
-            /* make sure all getters but blocksize return 0 for
-             * invalid IPL disk
-             */
-            memset(&vdev->config.blk, 0, sizeof(vdev->config.blk));
-            virtio_assume_scsi();
-        }
-        break;
-    case VIRTIO_ID_SCSI:
-        IPL_assert(vdev->config.scsi.sense_size == VIRTIO_SCSI_SENSE_SIZE,
-            "Config: sense size mismatch");
-        IPL_assert(vdev->config.scsi.cdb_size == VIRTIO_SCSI_CDB_SIZE,
-            "Config: CDB size mismatch");
+    sclp_print("Using virtio-blk.\n");
 
-        sclp_print("Using virtio-scsi.\n");
-        virtio_scsi_setup(vdev);
-        break;
-    default:
-        panic("\n! No IPL device available !\n");
-    }
+    return 0;
 }

@@ -19,9 +19,9 @@
  */
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "exec/gdbstub.h"
+#include "gdbstub/helpers.h"
 
-int m68k_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
+int m68k_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
 {
     M68kCPU *cpu = M68K_CPU(cs);
     CPUM68KState *env = &cpu->env;
