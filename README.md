@@ -3,8 +3,7 @@
 This is SymQEMU, a binary-only symbolic executor based on QEMU and SymCC. It
 currently extends QEMU 8.1 and works with the most recent version of SymCC.
 (See README.orig for QEMU's original README file.)
-A separate branch is available for the [old version of SymQEMU based on QEMU 4.1.1]
-(https://github.com/eurecom-s3/symqemu/tree/4.1.1) we don't expect much 
+A separate branch is available for the [old version of SymQEMU based on QEMU 4.1.1](https://github.com/eurecom-s3/symqemu/tree/4.1.1) we don't expect much 
 changes to happen there, but PR may be accepted.
 
 ## How to build
