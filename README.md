@@ -99,7 +99,7 @@ are tests for the symbolic run-time support in `tests/check-sym-runtime.c`.
 
 More information about the port to QEMU 8 and internals of (Sym)QEMU
 can be found in the QEMU 8 merge commit message
-[commit/23e570bf42531bcac66a54283eafd4c9c233891a](23e570bf42) which
+[23e570bf42](https://github.com/eurecom-s3/symqemu/commit/23e570bf42531bcac66a54283eafd4c9c233891a) which
 gives some information about the adaptations performed. There are also
 some detailed explanations about potential problems in section 5.1 of
 Damien Maier's [bachelor
