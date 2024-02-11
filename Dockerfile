@@ -1,3 +1,5 @@
+FROM symcc AS symcc
+
 FROM ubuntu:22.04
 
 RUN apt update
