@@ -358,6 +358,13 @@ static void *element_address(
 }
 
 /*
+TODO:
+    Currently, `helper_sym_cmp_vec` pushes path constraints and concretizes its result.
+    Returning an expression that represents the result of the comparison, instead of pushing path constraints,
+    may give better results.
+/*
+
+/*
  * Symbolic equivalent of an SIMD comparison operation, where true is represented by -1 and false by 0.
  *
  * This function performs the symbolic equivalent of computing an output vector of the form :
@@ -428,6 +435,13 @@ void *HELPER(sym_cmp_vec)(
     /* Concretize the result, as path constraints for its value have been pushed. */
     return NULL;
 }
+
+/*
+TODO:
+    Currently, `helper_sym_ternary_vec` pushes path constraints and concretizes its result.
+    Returning an expression that represents the result of the comparison, instead of pushing path constraints,
+    may give better results.
+/*
 
 /*
  * Symbolic equivalent of an SIMD ternary operation.
