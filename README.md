@@ -91,13 +91,15 @@ fuzzing helper will automatically pick up the setting and use QEMU mode too.)
 
 ## Documentation
 
-The [paper](http://www.s3.eurecom.fr/tools/symbolic_execution/symqemu.html)
-contains details on how SymQEMU works. A large part of the implementation is the
-run-time support in `accel/tcg/tcg-runtime-sym.{c,h}` (which delegates any
-actual symbolic computation to SymCC's symbolic backend), and we have modified
-most code-generating functions in `tcg/tcg-op.c` to emit calls to the runtime.
-For development, configure with `--enable-debug` for run-time assertions; there
-are tests for the symbolic run-time support in `tests/check-sym-runtime.c`.
+The [paper](http://www.s3.eurecom.fr/tools/symbolic_execution/symqemu.html) contains
+details on how SymQEMU works. A large part of the implementation is the run-time support
+in `accel/tcg/tcg-runtime-sym.{c,h}` and `accel/tcg/tcg-runtime-sym-vec.{c,h}`  (which
+delegates any actual symbolic computation to SymCC's symbolic backend), and we have
+modified most code-generating functions in `tcg/tcg-op.c`, `tcg/tcg-op-vec.c` and
+`include/tcg/tcg-op-common.h` to emit calls to the runtime. 
+
+For development, configure with `--enable-debug` for run-time assertions; there are tests
+for the symbolic run-time support in `tests/check-sym-runtime.c`.
 
 More information about the port to QEMU 8 and internals of (Sym)QEMU
 can be found in the QEMU 8 merge commit message
