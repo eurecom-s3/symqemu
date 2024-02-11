@@ -23,6 +23,7 @@ RUN ./configure                                                       \
           --disable-virglrenderer                                     \
           --disable-werror                                            \
           --target-list=x86_64-linux-user                             \
+          --enable-debug                                              \
           --symcc-source=/symcc                                       \
           --symcc-build=/symcc/build
 
