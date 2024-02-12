@@ -18,7 +18,7 @@ RUN mv /symqemu_source/symcc /symcc
 
 # The only symcc artifact needed by symqemu is libSymRuntime.so
 # Instead of compiling symcc in this image, we rely on the existing symcc docker image and
-# we just copy libSymbolize.so at the location where symqemu expects it
+# we just copy libSymRuntime.so at the location where symqemu expects it
 COPY --from=symcc /symcc_build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so /symcc/build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so
 
 RUN ./configure                                                       \
