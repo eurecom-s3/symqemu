@@ -35,7 +35,7 @@ Fedora 33:
 
 $ ../configure                                                    \
       --audio-drv-list=                                           \
-      --disable-sdl                                               \
+s      --disable-sdl                                               \
       --disable-gtk                                               \
       --disable-vte                                               \
       --disable-opengl                                            \
