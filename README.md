@@ -94,8 +94,7 @@ First, make sure to have an up-to-date Docker image of SymCC. If you
 don't have one, either in the submodule, run:
 
 ``` shell
-git submodule init
-git submodule update
+git submodule update --init --recursive symcc
 cd symcc
 docker build -t symcc .
 cd ..
