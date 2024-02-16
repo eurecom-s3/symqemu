@@ -4,20 +4,22 @@ import subprocess
 SYMQEMU_EXECUTABLE = pathlib.Path(__file__).parent.parent.parent / "build" / "x86_64-linux-user" / "qemu-x86_64"
 BINARIES_DIR = pathlib.Path(__file__).parent / "binaries"
 
+
 class SymqemuRunFailed(Exception):
     pass
+
 
 def run_symqemu(
         binary: pathlib.Path,
         binary_arguments: list[str],
         generated_test_cases_output_dir: pathlib.Path,
         symbolized_input_file: pathlib.Path,
-):
+) -> None:
     command = str(SYMQEMU_EXECUTABLE), str(binary), *binary_arguments
 
     environment_variables = {
-            'SYMCC_OUTPUT_DIR': str(generated_test_cases_output_dir),
-            'SYMCC_INPUT_FILE' : str(symbolized_input_file)
+        'SYMCC_OUTPUT_DIR': str(generated_test_cases_output_dir),
+        'SYMCC_INPUT_FILE': str(symbolized_input_file)
     }
 
     print(f'about to run command: {" ".join(command)}')
@@ -35,11 +37,11 @@ def run_symqemu(
             f'command {e.cmd} failed with exit code {e.returncode} and output: {e.stderr.decode()}'
         )
 
+
 def run_symqemu_on_test_binary(
         binary_name: str,
-        generated_test_cases_output_dir: pathlib.Path 
+        generated_test_cases_output_dir: pathlib.Path
 ) -> None:
-
     binary_dir = BINARIES_DIR / binary_name
 
     with open(binary_dir / 'args', 'r') as f:
