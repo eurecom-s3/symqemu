@@ -11,13 +11,14 @@ def run_symqemu(
         binary: pathlib.Path,
         binary_arguments: list[str],
         generated_test_cases_output_dir: pathlib.Path,
-        symbolized_input_file: pathlib.Path = None,
+        symbolized_input_file: pathlib.Path,
 ):
     command = str(SYMQEMU_EXECUTABLE), str(binary), *binary_arguments
 
-    environment_variables = {'SYMCC_OUTPUT_DIR': str(generated_test_cases_output_dir)}
-    if symbolized_input_file is not None:
-        environment_variables['SYMCC_INPUT_FILE'] = str(symbolized_input_file)
+    environment_variables = {
+            'SYMCC_OUTPUT_DIR': str(generated_test_cases_output_dir),
+            'SYMCC_INPUT_FILE' : str(symbolized_input_file)
+    }
 
     print(f'about to run command: {" ".join(command)}')
     print(f'with environment variables: {environment_variables}')
@@ -36,11 +37,8 @@ def run_symqemu(
 
 def run_symqemu_on_test_binary(
         binary_name: str,
-        generated_test_cases_output_dir: pathlib.Path = None
+        generated_test_cases_output_dir: pathlib.Path 
 ) -> None:
-    if generated_test_cases_output_dir is None:
-        generated_test_cases_output_dir = pathlib.Path('/tmp/symqemu_output')
-        generated_test_cases_output_dir.mkdir(exist_ok=True)
 
     binary_dir = BINARIES_DIR / binary_name
 
