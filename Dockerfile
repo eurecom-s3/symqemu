@@ -7,6 +7,7 @@ RUN apt install -y \
     ninja-build \
     libglib2.0-dev \
     llvm \
+    git \
     python3 \
     python3-pip
 
