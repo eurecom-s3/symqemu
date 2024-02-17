@@ -1518,7 +1518,6 @@ static TCGTemp *tcg_temp_alloc(TCGContext *s)
         }
     }
 
-
     int n = s->nb_temps++;
 
     if (n >= TCG_MAX_TEMPS) {
