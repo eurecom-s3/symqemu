@@ -35,7 +35,7 @@ Fedora 33:
 
 $ ../configure                                                    \
       --audio-drv-list=                                           \
-s      --disable-sdl                                               \
+      --disable-sdl                                               \
       --disable-gtk                                               \
       --disable-vte                                               \
       --disable-opengl                                            \
@@ -117,7 +117,7 @@ details on how SymQEMU works. A large part of the implementation is the run-time
 in `accel/tcg/tcg-runtime-sym.{c,h}` and `accel/tcg/tcg-runtime-sym-vec.{c,h}`  (which
 delegates any actual symbolic computation to SymCC's symbolic backend), and we have
 modified most code-generating functions in `tcg/tcg-op.c`, `tcg/tcg-op-vec.c` and
-`include/tcg/tcg-op-common.h` to emit calls to the runtime. 
+`include/tcg/tcg-op-common.h` to emit calls to the runtime.
 
 For development, configure with `--enable-debug` for run-time assertions; there are tests
 for the symbolic run-time support in `tests/check-sym-runtime.c`.
