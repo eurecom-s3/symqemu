@@ -89,6 +89,27 @@ prefix the target command with `x86_64-linux-user/symqemu-x86_64`. (Note that
 you'll have to run AFL in QEMU mode by adding `-Q` to its command line; the
 fuzzing helper will automatically pick up the setting and use QEMU mode too.)
 
+## Build with Docker
+First, make sure to have an up-to-date Docker image of SymCC. If you
+don't have one, either in the submodule, run:
+
+``` shell
+git submodule update --init --recursive symcc
+cd symcc
+docker build -t symcc .
+cd ..
+```
+
+Then build the SymQEMU image with (this will also run the tests):
+```shell
+docker build -t symqemu  .
+```
+
+You can use the docker with:
+```shell
+docker run -it --rm symqemu
+```
+
 ## Documentation
 
 The [paper](http://www.s3.eurecom.fr/tools/symbolic_execution/symqemu.html)

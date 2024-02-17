@@ -1,0 +1,13 @@
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+    
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - run: git submodule update --init --recursive symcc
+    - run: docker build -t symcc symcc
+    - run: docker build -t symqemu .

@@ -43,3 +43,6 @@
 [submodule "tests/lcitool/libvirt-ci"]
 	path = tests/lcitool/libvirt-ci
 	url = https://gitlab.com/libvirt/libvirt-ci.git
+[submodule "symcc"]
+	path = symcc
+	url = https://github.com/eurecom-s3/symcc.git
