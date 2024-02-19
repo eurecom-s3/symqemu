@@ -32,7 +32,8 @@ and binaries. The following invocation is known to work on Debian 10, Arch and
 Fedora 33:
 
 ``` shell
-
+$ mkdir build
+$ cd build
 $ ../configure                                                    \
       --audio-drv-list=                                           \
       --disable-sdl                                               \
@@ -42,15 +43,14 @@ $ ../configure                                                    \
       --disable-virglrenderer                                     \
       --disable-werror                                            \
       --target-list=x86_64-linux-user                             \
-      --symcc-source=</path/to/symcc>/sources                     \
-      --symcc-build=</path/to/symcc>/build
-
-$ make
+      --symcc-source=../symcc                                     \
+      --symcc-build=../symcc/build
+$ make -j
 ```
 
 This will build a relatively stripped-down emulator targeting 64-bit x86
 binaries. We also have experimental support for AARCH64. Working with 32-bit
-target architectures are possible in principle but will require a bit of work
+target architectures is possible in principle but will require a bit of work
 because the current implementation assumes that we can pass around host pointers
 in guest registers.
 

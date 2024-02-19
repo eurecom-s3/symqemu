@@ -35,5 +35,8 @@ RUN ./configure                                                       \
 
 RUN make -j
 
+# Run QEMU base checks
+RUN make check
+
 WORKDIR /symqemu_source/tests/symqemu
 RUN python3 -m unittest test.py
