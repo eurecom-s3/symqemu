@@ -50,6 +50,7 @@ tests = {
   'test-qapi-util': [],
   'test-interval-tree': [],
   'test-xs-node': [qom],
+  'check-sym-runtime' : [qemuutil, qom, hwcore],
 }
 
 if have_system or have_tools
@@ -184,52 +185,51 @@ foreach test_name, extra: tests
     src += test_ss.all_sources()
     deps += test_ss.all_dependencies()
   endif
-  exe = executable(test_name, src, genh, dependencies: deps)
 
-  test(test_name, exe,
-       depends: test_deps.get(test_name, []),
-       env: test_env,
-       args: ['--tap', '-k'],
-       protocol: 'tap',
-       timeout: slow_tests.get(test_name, 30),
-       priority: slow_tests.get(test_name, 30),
-       suite: ['unit'])
+  # SymQEMU unit tests
+  if test_name == 'check-sym-runtime'
+    lwith = [lib]
+
+    exe = executable('check-sym-runtime.c',
+		     src,
+		     genh,
+		     c_args : ['-I../target/i386/',
+		  	       '-I../../symcc/runtime/',
+			       '-DCONFIG_TARGET="x86_64-linux-user-config-target.h"',
+			       '-DNEED_CPU_H',
+			       '-Ix86_64-linux-user'],
+		     dependencies: deps,
+		     build_rpath: config_host['SYMCC_BUILD'],
+                     objects: [symcc_libs],
+		     link_with: lwith
+                    )
+
+    symcc_output=meson.current_build_dir() / 'symcc-tests-output'
+    test_env.append('SYMCC_OUTPUT_DIR', symcc_output)
+    r = run_command('mkdir', symcc_output, check : false)
+
+    test(test_name, exe,
+	 depends: test_deps.get(test_name, []),
+	 env: test_env,
+	 args: ['--tap', '-k'],
+	 protocol: 'tap',
+	 timeout: slow_tests.get(test_name, 30),
+	 priority: slow_tests.get(test_name, 30),
+	 suite: ['unit'])
+
+  else
+
+    exe = executable(test_name, src, genh, dependencies: deps)
+
+    test(test_name, exe,
+         depends: test_deps.get(test_name, []),
+         env: test_env,
+         args: ['--tap', '-k'],
+         protocol: 'tap',
+         timeout: slow_tests.get(test_name, 30),
+         priority: slow_tests.get(test_name, 30),
+         suite: ['unit'])
+    endif
 endforeach
 
 
-test_name='check-sym-runtime'
-src = [test_name + '.c']
-
-# SymCC build
-deps = [qom, hwcore]
-test_ss = ss.source_set()
-src += test_ss.all_sources()
-deps += test_ss.all_dependencies()
-lwith = [libqemuutil, lib]
-
-exe = executable('check-sym-runtime.c',
-		src,
-		genh,
-		c_args : ['-I../target/i386/',
-		  	  '-I../../symcc/runtime/',
-			  '-DCONFIG_TARGET="x86_64-linux-user-config-target.h"',
-			  '-DNEED_CPU_H',
-			  '-Ix86_64-linux-user'],
-		dependencies: deps,
-		build_rpath: config_host['SYMCC_BUILD'],
-                objects: [symcc_libs],
-		link_with: lwith)
-
-symcc_output=meson.current_build_dir() / 'symcc-tests-output'
-test_env.append('SYMCC_OUTPUT_DIR', symcc_output)
-r = run_command('mkdir',symcc_output )
-
-
-test(test_name, exe,
-	       depends: test_deps.get(test_name, []),
-	       env: test_env,
-	       args: ['--tap', '-k'],
-	       protocol: 'tap',
-	       timeout: slow_tests.get(test_name, 30),
-	       priority: slow_tests.get(test_name, 30),
-	       suite: ['unit'])
