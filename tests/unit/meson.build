@@ -196,18 +196,15 @@ foreach test_name, extra: tests
        suite: ['unit'])
 endforeach
 
-# SymCC build
-deps = []
-deps += [qom]
-deps += [hwcore]
 
-test_ss = ss.source_set()
 test_name='check-sym-runtime'
 src = [test_name + '.c']
-test_ss= ss.source_set()
+
+# SymCC build
+deps = [qom, hwcore]
+test_ss = ss.source_set()
 src += test_ss.all_sources()
 deps += test_ss.all_dependencies()
-
 lwith = [libqemuutil, lib]
 
 exe = executable('check-sym-runtime.c',
@@ -218,16 +215,15 @@ exe = executable('check-sym-runtime.c',
 			  '-DCONFIG_TARGET="x86_64-linux-user-config-target.h"',
 			  '-DNEED_CPU_H',
 			  '-Ix86_64-linux-user'],
-                #include_directories : incdir,
-                #objects: [lib.extract_all_objects(recursive: true), symcc_libs],
-		link_args : ['../../../symcc/build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so',
-                            ],
 		dependencies: deps,
 		build_rpath: config_host['SYMCC_BUILD'],
-                #objects: [lib.extract_all_objects(recursive: true), symcc_libs],
+                objects: [symcc_libs],
 		link_with: lwith)
 
-test_env.append('LD_LIBRARY_PATH', '/home/aurel/work/Projects/SymQEMU/8.1/symqemu/symcc/build/SymRuntime-prefix/src/SymRuntime-build/')
+symcc_output=meson.current_build_dir() / 'symcc-tests-output'
+test_env.append('SYMCC_OUTPUT_DIR', symcc_output)
+r = run_command('mkdir',symcc_output )
+
 
 test(test_name, exe,
 	       depends: test_deps.get(test_name, []),
