@@ -195,3 +195,45 @@ foreach test_name, extra: tests
        priority: slow_tests.get(test_name, 30),
        suite: ['unit'])
 endforeach
+
+# SymCC build
+deps = []
+deps += [qom]
+deps += [hwcore]
+
+test_ss = ss.source_set()
+test_name='check-sym-runtime'
+src = [test_name + '.c']
+test_ss= ss.source_set()
+src += test_ss.all_sources()
+deps += test_ss.all_dependencies()
+
+lwith = [libqemuutil, lib]
+
+exe = executable('check-sym-runtime.c',
+		src,
+		genh,
+		c_args : ['-I../target/i386/',
+		  	  '-I../../symcc/runtime/',
+			  '-DCONFIG_TARGET="x86_64-linux-user-config-target.h"',
+			  '-DNEED_CPU_H',
+			  '-Ix86_64-linux-user'],
+                #include_directories : incdir,
+                #objects: [lib.extract_all_objects(recursive: true), symcc_libs],
+		link_args : ['../../../symcc/build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so',
+                            ],
+		dependencies: deps,
+		build_rpath: config_host['SYMCC_BUILD'],
+                #objects: [lib.extract_all_objects(recursive: true), symcc_libs],
+		link_with: lwith)
+
+test_env.append('LD_LIBRARY_PATH', '/home/aurel/work/Projects/SymQEMU/8.1/symqemu/symcc/build/SymRuntime-prefix/src/SymRuntime-build/')
+
+test(test_name, exe,
+	       depends: test_deps.get(test_name, []),
+	       env: test_env,
+	       args: ['--tap', '-k'],
+	       protocol: 'tap',
+	       timeout: slow_tests.get(test_name, 30),
+	       priority: slow_tests.get(test_name, 30),
+	       suite: ['unit'])
