@@ -30,3 +30,6 @@ class SymQemuTests(unittest.TestCase):
 
     def test_simple(self):
         self.run_symqemu_and_assert_correct_result('simple')
+
+    def test_printf(self):
+        self.run_symqemu_and_assert_correct_result('printf')

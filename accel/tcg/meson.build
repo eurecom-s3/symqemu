@@ -7,6 +7,8 @@ tcg_ss.add(files(
   'tcg-runtime-gvec.c',
   'tcg-runtime.c',
   'tcg-runtime-sym.c',
+  'tcg-runtime-sym-vec.c',
+  'tcg-runtime-sym-common.c',
   'translate-all.c',
   'translator.c',
 ))

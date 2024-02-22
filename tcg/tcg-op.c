@@ -122,8 +122,8 @@ void tcg_gen_ldst_op_i32(TCGOpcode opc, TCGv_i32 val,
     case INDEX_op_st8_i32:
     case INDEX_op_st16_i32:
     case INDEX_op_st_i32:
-        gen_helper_sym_store_host_i32(
-            val, tcgv_i32_expr(val),
+        gen_helper_sym_store_host(
+            tcgv_i32_expr(val),
             base, tcg_constant_i64(offset),
             tcg_constant_i64(data_size) );
         break;
@@ -180,8 +180,8 @@ void tcg_gen_ldst_op_i64(TCGOpcode opc, TCGv_i64 val,
     case INDEX_op_st16_i64:
     case INDEX_op_st32_i64:
     case INDEX_op_st_i64:
-        gen_helper_sym_store_host_i64(
-            val, tcgv_i64_expr(val),
+        gen_helper_sym_store_host(
+            tcgv_i64_expr(val),
             base, tcg_constant_i64(offset),
             tcg_constant_i64(data_size) );
         break;

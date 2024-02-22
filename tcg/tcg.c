@@ -1509,6 +1509,15 @@ void tcg_func_start(TCGContext *s)
 
 static TCGTemp *tcg_temp_alloc(TCGContext *s)
 {
+    int last_temp_idx = s->nb_temps - 1;
+    if (last_temp_idx > 0) {
+        if (last_temp_idx % 2 == 0) {
+            g_assert(!(s->temps[last_temp_idx].symbolic_expression));
+        } else {
+            g_assert((s->temps[last_temp_idx].symbolic_expression));
+        }
+    }
+
     int n = s->nb_temps++;
 
     if (n >= TCG_MAX_TEMPS) {
@@ -1843,14 +1852,15 @@ TCGTemp *tcg_constant_internal(TCGType type, int64_t val)
             val_ptr = &ts->val;
         }
         g_hash_table_insert(h, val_ptr, ts);
+
+        ts_expr = tcg_temp_alloc(s);
+        ts_expr->base_type = TCG_TYPE_PTR;
+        ts_expr->type = TCG_TYPE_PTR;
+        ts_expr->kind = TEMP_CONST;
+        ts_expr->temp_allocated = 1;
+        ts_expr->symbolic_expression = 1;
+        ts_expr->val = 0;
     }
-    ts_expr = tcg_temp_alloc(s);
-    ts_expr->base_type = TCG_TYPE_PTR;
-    ts_expr->type = TCG_TYPE_PTR;
-    ts_expr->kind = TEMP_CONST;
-    ts_expr->temp_allocated = 1;
-    ts_expr->symbolic_expression = 1;
-    ts_expr->val = 0;
 
     return ts;
 }
@@ -2342,6 +2352,22 @@ void tcg_gen_call7(TCGHelperInfo *info, TCGTemp *ret, TCGTemp *t1,
                    TCGTemp *t5, TCGTemp *t6, TCGTemp *t7)
 {
     TCGTemp *args[7] = { t1, t2, t3, t4, t5, t6, t7 };
+    tcg_gen_callN(info, ret, args);
+}
+
+void tcg_gen_call8(TCGHelperInfo *info, TCGTemp *ret, TCGTemp *t1, TCGTemp *t2,
+                   TCGTemp *t3, TCGTemp *t4, TCGTemp *t5, TCGTemp *t6,
+                   TCGTemp *t7, TCGTemp *t8)
+{
+    TCGTemp *args[8] = { t1, t2, t3, t4, t5, t6, t7, t8 };
+    tcg_gen_callN(info, ret, args);
+}
+
+void tcg_gen_call9(TCGHelperInfo *info, TCGTemp *ret, TCGTemp *t1, TCGTemp *t2,
+                   TCGTemp *t3, TCGTemp *t4, TCGTemp *t5, TCGTemp *t6,
+                   TCGTemp *t7, TCGTemp *t8, TCGTemp *t9)
+{
+    TCGTemp *args[9] = { t1, t2, t3, t4, t5, t6, t7, t8, t9 };
     tcg_gen_callN(info, ret, args);
 }
 

@@ -729,6 +729,11 @@ static inline TCGv_ptr tcgv_i64_expr(TCGv_i64 v)
     return temp_tcgv_ptr(temp_expr(tcgv_i64_temp(v)));
 }
 
+static inline TCGv_ptr tcgv_vec_expr(TCGv_vec v)
+{
+    return temp_tcgv_ptr(temp_expr(tcgv_vec_temp(v)));
+}
+
 /* Expression pointers as (64-bit) numbers for code simplification. This assumes
  * that we're running on a 64-bit architecture! */
 
@@ -740,6 +745,11 @@ static inline TCGv_i64 tcgv_i32_expr_num(TCGv_i32 v)
 static inline TCGv_i64 tcgv_i64_expr_num(TCGv_i64 v)
 {
     return temp_tcgv_i64(temp_expr(tcgv_i64_temp(v)));
+}
+
+static inline TCGv_i64 tcgv_vec_expr_num(TCGv_vec v)
+{
+    return temp_tcgv_i64(temp_expr(tcgv_vec_temp(v)));
 }
 
 
@@ -953,6 +963,10 @@ void tcg_gen_call6(TCGHelperInfo *, TCGTemp *ret, TCGTemp *, TCGTemp *,
                    TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *);
 void tcg_gen_call7(TCGHelperInfo *, TCGTemp *ret, TCGTemp *, TCGTemp *,
                    TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *);
+void tcg_gen_call8(TCGHelperInfo *, TCGTemp *ret, TCGTemp *, TCGTemp *,
+                   TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *);
+void tcg_gen_call9(TCGHelperInfo *, TCGTemp *ret, TCGTemp *, TCGTemp *,
+                   TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *, TCGTemp *);
 
 TCGOp *tcg_emit_op(TCGOpcode opc, unsigned nargs);
 void tcg_op_remove(TCGContext *s, TCGOp *op);
