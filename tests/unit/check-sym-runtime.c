@@ -15,7 +15,9 @@
  */
 
 #include "qemu/osdep.h"
-#include "tcg.h"
+#include "tcg/tcg.h"
+#include "hw/i386/topology.h"
+#include "target/i386/cpu.h"
 #include "exec/helper-proto.h"
 
 #define SymExpr void*
