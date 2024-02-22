@@ -133,16 +133,16 @@ will facilitate correcting the issue.
 
 Current SymQEMU tests are run by the CI from the Docker container, the following
 test suites are currently in place:
-- [Unit tests][tests/unit/check-sym-runtime.c]: Those tests are made to validate
+- [Unit tests](tests/unit/check-sym-runtime.c): Those tests are made to validate
   specific instrumentation.
-- [Integration tests][tests/symqemu/]: Those tests are running SymQEMU on a set
+- [Integration tests](tests/symqemu/): Those tests are running SymQEMU on a set
   of binaries and compare the results to expected results. Note that those test
   cases can legitimately fail if some changes are made to SymQEMU (because for
   example, an improvement leads to generating new test cases). In that case,
   update the relevant files in `expected_outputs` folders. It would be nice to
   also validate those changes with a new test case.
 
-Also, refer to [QEMU's own tests suite documentation][https://www.qemu.org/docs/master/devel/testing.html].
+Also, refer to [QEMU's own tests suite documentation](https://www.qemu.org/docs/master/devel/testing.html).
 
 ## Documentation
 
