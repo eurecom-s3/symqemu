@@ -328,12 +328,12 @@ static void load_store_host_test(void)
 
     /* Store some symbolic data in the middle of the buffer. */
     *((uint32_t*)&memory[16]) = 0x11223344;
-    helper_sym_store_host_i64(0x11223344, _sym_build_integer(0x11223344, 64),
-                              memory, 16, 4);
+    helper_sym_store_host(_sym_build_integer(0x11223344, 64),
+                          memory, 16, 4);
 
     *((uint16_t*)&memory[20]) = 0x5566;
-    helper_sym_store_host_i32(0x5566, _sym_build_integer(0x5566, 32),
-                              memory, 20, 2);
+    helper_sym_store_host(_sym_build_integer(0x5566, 32),
+                          memory, 20, 2);
 
     /* Buffer: [AA...AA 44 33 22 11 66 55 BB...BB] */
 
