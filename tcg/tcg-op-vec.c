@@ -24,6 +24,113 @@
 #include "tcg/tcg-mo.h"
 #include "tcg-internal.h"
 
+static int vec_size(TCGv_vec vector){
+    switch(tcgv_vec_temp(vector)->base_type) {
+        case TCG_TYPE_V64:
+            return 64;
+        case TCG_TYPE_V128:
+            return 128;
+        case TCG_TYPE_V256:
+            return 256;
+        default:
+            g_assert_not_reached();
+    }
+}
+
+/* Adds TCG ops for storing a vector TCG variable in a heap buffer.
+ *
+ * The caller must add TCG ops for freeing the buffer.
+ *
+ * Returns
+ *      A TCG variable that will contain the buffer address at run time.
+ */
+static TCGv_ptr store_vector_in_memory(TCGv_vec vector){
+    TCGv_ptr buffer_address = tcg_temp_new_ptr();
+    gen_helper_malloc(buffer_address, tcg_constant_i64(vec_size(vector) / 8));
+
+    /* store vector at buffer_address */
+    vec_gen_3(
+            INDEX_op_st_vec,
+            tcgv_vec_temp(vector)->base_type,
+            0,
+            tcgv_vec_arg(vector),
+            tcgv_ptr_arg(buffer_address),
+            0
+    );
+
+    return buffer_address;
+}
+
+/* Adds instrumentation TCG ops for an instruction of the form vec = vec <op> vec.
+ *
+ * Args
+ *      vece: element size in bits = 8 * 2^vece
+ *      r: output operand
+ *      a: first input operand
+ *      b: second input operand
+ *      sym_helper: function for calling the symbolic helper
+ */
+static void vec_vec_op_instrumentation(
+        unsigned vece,
+        TCGv_vec r, TCGv_vec a, TCGv_vec b,
+        void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i64, TCGv_i64)
+) {
+    TCGv_ptr buffer_address_a = store_vector_in_memory(a);
+    TCGv_ptr buffer_address_b = store_vector_in_memory(b);
+    int size_a = vec_size(a);
+    int size_b = vec_size(b);
+    int size_r = vec_size(r);
+
+    g_assert(size_a == size_b && size_b == size_r);
+
+    sym_helper(
+            tcgv_vec_expr(r),
+            buffer_address_a,
+            tcgv_vec_expr(a),
+            buffer_address_b,
+            tcgv_vec_expr(b),
+            tcg_constant_i64(size_a),
+            tcg_constant_i64(vece)
+    );
+
+    gen_helper_free(buffer_address_a);
+    gen_helper_free(buffer_address_b);
+}
+
+/*
+ * Adds instrumentation TCG ops for an instruction of the form vec = vec <op> i32.
+ *
+ * Args
+ *      vece: element size in bits = 8 * 2^vece
+ *      r: output operand
+ *      a: first input operand
+ *      b: second input operand
+ *      sym_helper: function for calling the symbolic helper
+ */
+static void vec_int32_op_instrumentation(
+        unsigned vece,
+        TCGv_vec r, TCGv_vec a, TCGv_i32 b,
+        void (*sym_helper)(TCGv_ptr, TCGv_ptr, TCGv_ptr, TCGv_i32, TCGv_ptr, TCGv_i64, TCGv_i64)
+) {
+    TCGv_ptr buffer_address_a = store_vector_in_memory(a);
+    int size_a = vec_size(a);
+    int size_r = vec_size(r);
+
+    g_assert(size_a == size_r);
+
+    sym_helper(
+            tcgv_vec_expr(r),
+            buffer_address_a,
+            tcgv_vec_expr(a),
+            b,
+            tcgv_i32_expr(b),
+            tcg_constant_i64(size_a),
+            tcg_constant_i64(vece)
+    );
+
+    gen_helper_free(buffer_address_a);
+}
+
 /*
  * Vector optional opcode tracking.
  * Except for the basic logical operations (and, or, xor), and
@@ -214,6 +321,7 @@ static void vec_gen_op3(TCGOpcode opc, unsigned vece,
 void tcg_gen_mov_vec(TCGv_vec r, TCGv_vec a)
 {
     if (r != a) {
+        tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcgv_vec_expr_num(a));
         vec_gen_op2(INDEX_op_mov_vec, 0, r, a);
     }
 }
@@ -226,6 +334,8 @@ void tcg_gen_dupi_vec(unsigned vece, TCGv_vec r, uint64_t a)
 
 void tcg_gen_dup_i64_vec(unsigned vece, TCGv_vec r, TCGv_i64 a)
 {
+    gen_helper_sym_duplicate_value_into_vec(tcgv_vec_expr(r), tcgv_i64_expr(a), tcg_constant_i64(vece), tcg_constant_i64(vec_size(r)));
+
     TCGArg ri = tcgv_vec_arg(r);
     TCGTemp *rt = arg_temp(ri);
     TCGType type = rt->base_type;
@@ -245,6 +355,8 @@ void tcg_gen_dup_i64_vec(unsigned vece, TCGv_vec r, TCGv_i64 a)
 
 void tcg_gen_dup_i32_vec(unsigned vece, TCGv_vec r, TCGv_i32 a)
 {
+    gen_helper_sym_duplicate_value_into_vec(tcgv_vec_expr(r), tcgv_i32_expr(a), tcg_constant_i64(vece), tcg_constant_i64(vec_size(r)));
+
     TCGArg ri = tcgv_vec_arg(r);
     TCGArg ai = tcgv_i32_arg(a);
     TCGTemp *rt = arg_temp(ri);
@@ -256,6 +368,14 @@ void tcg_gen_dup_i32_vec(unsigned vece, TCGv_vec r, TCGv_i32 a)
 void tcg_gen_dup_mem_vec(unsigned vece, TCGv_vec r, TCGv_ptr b,
                          tcg_target_long ofs)
 {
+    gen_helper_sym_load_and_duplicate_into_vec(
+            tcgv_vec_expr(r),
+            b,
+            tcg_constant_i64(ofs),
+            tcg_constant_i64(vec_size(r)),
+            tcg_constant_i64(vece)
+    );
+
     TCGArg ri = tcgv_vec_arg(r);
     TCGArg bi = tcgv_ptr_arg(b);
     TCGTemp *rt = arg_temp(ri);
@@ -276,11 +396,26 @@ static void vec_gen_ldst(TCGOpcode opc, TCGv_vec r, TCGv_ptr b, TCGArg o)
 
 void tcg_gen_ld_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
 {
+
+    gen_helper_sym_load_host_vec(
+                tcgv_vec_expr(r),
+                b,
+                tcg_constant_i64(o),
+                tcg_constant_i64(vec_size(r) / 8)
+            );
+
     vec_gen_ldst(INDEX_op_ld_vec, r, b, o);
 }
 
 void tcg_gen_st_vec(TCGv_vec r, TCGv_ptr b, TCGArg o)
 {
+    gen_helper_sym_store_host(
+                tcgv_vec_expr(r),
+                b,
+                tcg_constant_i64(o),
+                tcg_constant_i64(vec_size(r) / 8)
+            );
+
     vec_gen_ldst(INDEX_op_st_vec, r, b, o);
 }
 
@@ -293,76 +428,138 @@ void tcg_gen_stl_vec(TCGv_vec r, TCGv_ptr b, TCGArg o, TCGType low_type)
 
     tcg_debug_assert(low_type >= TCG_TYPE_V64);
     tcg_debug_assert(low_type <= type);
+
+    uint64_t length;
+
+    switch (low_type) {
+        case TCG_TYPE_V64:
+            length = 8;
+            break;
+        case TCG_TYPE_V128:
+            length = 16;
+            break;
+        case TCG_TYPE_V256:
+            length = 32;
+            break;
+        default:
+            g_assert_not_reached();
+    }
+
+    gen_helper_sym_store_host(tcgv_vec_expr(r), b, tcg_constant_i64(o), tcg_constant_i64(length));
+
     vec_gen_3(INDEX_op_st_vec, low_type, 0, ri, bi, o);
 }
 
 void tcg_gen_and_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_and_vec);
     vec_gen_op3(INDEX_op_and_vec, 0, r, a, b);
 }
 
 void tcg_gen_or_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_or_vec);
     vec_gen_op3(INDEX_op_or_vec, 0, r, a, b);
 }
 
 void tcg_gen_xor_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_xor_vec);
     vec_gen_op3(INDEX_op_xor_vec, 0, r, a, b);
 }
 
 void tcg_gen_andc_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_andc_vec) {
+
+   /*
+   TODO (SymQEMU):
+   This instruction is not instrumented yet.
+   For now, we make sure that alternative instructions below, which are instrumented, are always used.
+   Directly instrumenting this instruction would improve performance of SymQEMU.
+   */
+
+   /* if (TCG_TARGET_HAS_andc_vec) {
         vec_gen_op3(INDEX_op_andc_vec, 0, r, a, b);
-    } else {
+    } else { */
         TCGv_vec t = tcg_temp_new_vec_matching(r);
         tcg_gen_not_vec(0, t, b);
         tcg_gen_and_vec(0, r, a, t);
         tcg_temp_free_vec(t);
-    }
+   /* } */
 }
 
 void tcg_gen_orc_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_orc_vec) {
+
+    /*
+    TODO (SymQEMU):
+    This instruction is not instrumented yet.
+    For now, we make sure that alternative instructions below, which are instrumented, are always used.
+    Directly instrumenting this instruction would improve performance of SymQEMU.
+    */
+
+    /* if (TCG_TARGET_HAS_orc_vec) {
         vec_gen_op3(INDEX_op_orc_vec, 0, r, a, b);
-    } else {
+    } else { */
         TCGv_vec t = tcg_temp_new_vec_matching(r);
         tcg_gen_not_vec(0, t, b);
         tcg_gen_or_vec(0, r, a, t);
         tcg_temp_free_vec(t);
-    }
+    /* } */
 }
 
 void tcg_gen_nand_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_nand_vec) {
+
+    /*
+    TODO (SymQEMU):
+    This instruction is not instrumented yet.
+    For now, we make sure that alternative instructions below, which are instrumented, are always used.
+    Directly instrumenting this instruction would improve performance of SymQEMU.
+    */
+
+    /* if (TCG_TARGET_HAS_nand_vec) {
         vec_gen_op3(INDEX_op_nand_vec, 0, r, a, b);
-    } else {
+    } else { */
         tcg_gen_and_vec(0, r, a, b);
         tcg_gen_not_vec(0, r, r);
-    }
+    /* } */
 }
 
 void tcg_gen_nor_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_nor_vec) {
+
+    /*
+    TODO (SymQEMU):
+    This instruction is not instrumented yet.
+    For now, we make sure that alternative instructions below, which are instrumented, are always used.
+    Directly instrumenting this instruction would improve performance of SymQEMU.
+    */
+
+    /* if (TCG_TARGET_HAS_nor_vec) {
         vec_gen_op3(INDEX_op_nor_vec, 0, r, a, b);
-    } else {
+    } else { */
         tcg_gen_or_vec(0, r, a, b);
         tcg_gen_not_vec(0, r, r);
-    }
+    /* } */
 }
 
 void tcg_gen_eqv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
-    if (TCG_TARGET_HAS_eqv_vec) {
+
+    /*
+    TODO (SymQEMU):
+    This instruction is not instrumented yet.
+    For now, we make sure that alternative instructions below, which are instrumented, are always used.
+    Directly instrumenting this instruction would improve performance of SymQEMU.
+    */
+
+    /* if (TCG_TARGET_HAS_eqv_vec) {
         vec_gen_op3(INDEX_op_eqv_vec, 0, r, a, b);
-    } else {
+    } else { */
         tcg_gen_xor_vec(0, r, a, b);
         tcg_gen_not_vec(0, r, r);
-    }
+    /* } */
 }
 
 static bool do_op2(unsigned vece, TCGv_vec r, TCGv_vec a, TCGOpcode opc)
@@ -393,9 +590,9 @@ void tcg_gen_not_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
 {
     const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
 
-    if (!TCG_TARGET_HAS_not_vec || !do_op2(vece, r, a, INDEX_op_not_vec)) {
+    /*if (!TCG_TARGET_HAS_not_vec || !do_op2(vece, r, a, INDEX_op_not_vec)) {*/
         tcg_gen_xor_vec(0, r, a, tcg_constant_vec_matching(r, 0, -1));
-    }
+    /*}*/
     tcg_swap_vecop_list(hold_list);
 }
 
@@ -406,9 +603,16 @@ void tcg_gen_neg_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
     tcg_assert_listed_vecop(INDEX_op_neg_vec);
     hold_list = tcg_swap_vecop_list(NULL);
 
-    if (!TCG_TARGET_HAS_neg_vec || !do_op2(vece, r, a, INDEX_op_neg_vec)) {
+    /*
+    TODO (SymQEMU):
+    This instruction is not instrumented yet.
+    For now, we make sure that alternative instructions below, which are instrumented, are always used.
+    Directly instrumenting this instruction would improve performance of SymQEMU.
+    */
+
+    /*if (!TCG_TARGET_HAS_neg_vec || !do_op2(vece, r, a, INDEX_op_neg_vec)) {*/
         tcg_gen_sub_vec(vece, r, tcg_constant_vec_matching(r, vece, 0), a);
-    }
+    /*}*/
     tcg_swap_vecop_list(hold_list);
 }
 
@@ -419,7 +623,14 @@ void tcg_gen_abs_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
     tcg_assert_listed_vecop(INDEX_op_abs_vec);
     hold_list = tcg_swap_vecop_list(NULL);
 
-    if (!do_op2(vece, r, a, INDEX_op_abs_vec)) {
+    /*
+    TODO (SymQEMU):
+    This instruction is not instrumented yet.
+    For now, we make sure that alternative instructions below, which are instrumented, are always used.
+    Directly instrumenting this instruction would improve performance of SymQEMU.
+    */
+
+    /*if (!do_op2(vece, r, a, INDEX_op_abs_vec)) {*/
         TCGType type = tcgv_vec_temp(r)->base_type;
         TCGv_vec t = tcg_temp_new_vec(type);
 
@@ -439,7 +650,7 @@ void tcg_gen_abs_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
         }
 
         tcg_temp_free_vec(t);
-    }
+    /*}*/
     tcg_swap_vecop_list(hold_list);
 }
 
@@ -478,21 +689,25 @@ static void do_shifti(TCGOpcode opc, unsigned vece,
 
 void tcg_gen_shli_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_shift_left_vec_int32);
     do_shifti(INDEX_op_shli_vec, vece, r, a, i);
 }
 
 void tcg_gen_shri_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_logical_shift_right_vec_int32);
     do_shifti(INDEX_op_shri_vec, vece, r, a, i);
 }
 
 void tcg_gen_sari_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_arithmetic_shift_right_vec_int32);
     do_shifti(INDEX_op_sari_vec, vece, r, a, i);
 }
 
 void tcg_gen_rotli_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_rotate_left_vec_int32);
     do_shifti(INDEX_op_rotli_vec, vece, r, a, i);
 }
 
@@ -500,6 +715,7 @@ void tcg_gen_rotri_vec(unsigned vece, TCGv_vec r, TCGv_vec a, int64_t i)
 {
     int bits = 8 << vece;
     tcg_debug_assert(i >= 0 && i < bits);
+    vec_int32_op_instrumentation(vece, r, a, tcg_constant_i32(i), gen_helper_sym_rotate_right_vec_int32);
     do_shifti(INDEX_op_rotli_vec, vece, r, a, -i & (bits - 1));
 }
 
@@ -515,6 +731,14 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
     TCGType type = rt->base_type;
     int can;
 
+    /* gen_helper_sym_cmp_vec below needs the concrete value of a and b.
+     * However, if r designates the same TCGTemp as a or b, the execution of the concrete cmp operation
+     * will overwrite the value of a or b. Therefore, we need to store the values of a and b
+     * *before* the concrete cmp operation is executed.
+     */
+    TCGv_ptr buffer_address_a = store_vector_in_memory(a);
+    TCGv_ptr buffer_address_b = store_vector_in_memory(b);
+
     tcg_debug_assert(at->base_type >= type);
     tcg_debug_assert(bt->base_type >= type);
     tcg_assert_listed_vecop(INDEX_op_cmp_vec);
@@ -527,6 +751,31 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
         tcg_expand_vec_op(INDEX_op_cmp_vec, type, vece, ri, ai, bi, cond);
         tcg_swap_vecop_list(hold_list);
     }
+
+    TCGv_ptr buffer_address_r = store_vector_in_memory(r);
+    int size_a = vec_size(a);
+    int size_b = vec_size(b);
+    int size_r = vec_size(r);
+
+    g_assert(size_a == size_b && size_b == size_r);
+
+    gen_helper_sym_cmp_vec(
+            tcgv_vec_expr(r),
+            cpu_env,
+            buffer_address_a,
+            tcgv_vec_expr(a),
+            buffer_address_b,
+            tcgv_vec_expr(b),
+            tcg_constant_i32(cond),
+            buffer_address_r,
+            tcg_constant_i64(size_a),
+            tcg_constant_i64(vece)
+    );
+
+    gen_helper_free(buffer_address_a);
+    gen_helper_free(buffer_address_b);
+    gen_helper_free(buffer_address_r);
+
 }
 
 static bool do_op3(unsigned vece, TCGv_vec r, TCGv_vec a,
@@ -566,26 +815,32 @@ static void do_op3_nofail(unsigned vece, TCGv_vec r, TCGv_vec a,
 
 void tcg_gen_add_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_add_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_add_vec);
 }
 
 void tcg_gen_sub_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_sub_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_sub_vec);
 }
 
 void tcg_gen_mul_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_mul_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_mul_vec);
 }
 
 void tcg_gen_ssadd_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_signed_saturating_add_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_ssadd_vec);
 }
 
 void tcg_gen_usadd_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_unsigned_saturating_add_vec);
+
     if (!do_op3(vece, r, a, b, INDEX_op_usadd_vec)) {
         const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
         TCGv_vec t = tcg_temp_new_vec_matching(r);
@@ -602,11 +857,14 @@ void tcg_gen_usadd_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 
 void tcg_gen_sssub_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_signed_saturating_sub_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_sssub_vec);
 }
 
 void tcg_gen_ussub_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_unsigned_saturating_sub_vec);
+
     if (!do_op3(vece, r, a, b, INDEX_op_ussub_vec)) {
         const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
         TCGv_vec t = tcg_temp_new_vec_matching(r);
@@ -623,11 +881,50 @@ void tcg_gen_ussub_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 static void do_minmax(unsigned vece, TCGv_vec r, TCGv_vec a,
                       TCGv_vec b, TCGOpcode opc, TCGCond cond)
 {
+    /*
+     * gen_helper_sym_ternary_vec below needs the concrete values of a and b.
+     * However, if r designates the same TCGTemp as a or b, the execution of the concrete min/max operation
+     * will overwrite the value of a or b. Therefore, we need to store the values of a and b
+     * *before* the concrete cmp operation is executed.
+     */
+    TCGv_ptr buffer_address_a = store_vector_in_memory(a);
+    TCGv_ptr buffer_address_b = store_vector_in_memory(b);
+
+    /* Note that, if the if below is entered, an infinite recursion occurs.
+     * This is due to the fact that tcg_expand_vec_op, which is called by several functions in the present file,
+     * internally leads to calls to min / max functions.
+     * For this reason, here we have to provide an explicit instrumentation of the min / max functions instead
+     * of forcing the instruction to be generated with other instrumented functions, as done in several other cases.
+     */
     if (!do_op3(vece, r, a, b, opc)) {
         const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
         tcg_gen_cmpsel_vec(cond, vece, r, a, b, a, b);
         tcg_swap_vecop_list(hold_list);
     }
+
+    TCGv_ptr buffer_address_r = store_vector_in_memory(r);
+    int size_a = vec_size(a);
+    int size_b = vec_size(b);
+    int size_r = vec_size(r);
+
+    g_assert(size_a == size_b && size_b == size_r);
+
+    gen_helper_sym_ternary_vec(
+            tcgv_vec_expr(r),
+            cpu_env,
+            buffer_address_a,
+            tcgv_vec_expr(a),
+            buffer_address_b,
+            tcgv_vec_expr(b),
+            tcg_constant_i32(cond),
+            buffer_address_r,
+            tcg_constant_i64(size_a),
+            tcg_constant_i64(vece)
+    );
+
+    gen_helper_free(buffer_address_a);
+    gen_helper_free(buffer_address_b);
+    gen_helper_free(buffer_address_r);
 }
 
 void tcg_gen_smin_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
@@ -652,26 +949,31 @@ void tcg_gen_umax_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 
 void tcg_gen_shlv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_shift_left_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_shlv_vec);
 }
 
 void tcg_gen_shrv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_logical_shift_right_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_shrv_vec);
 }
 
 void tcg_gen_sarv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_arithmetic_shift_right_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_sarv_vec);
 }
 
 void tcg_gen_rotlv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_rotate_left_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_rotlv_vec);
 }
 
 void tcg_gen_rotrv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
+    vec_vec_op_instrumentation(vece, r, a, b, gen_helper_sym_rotate_right_vec);
     do_op3_nofail(vece, r, a, b, INDEX_op_rotrv_vec);
 }
 
@@ -703,21 +1005,25 @@ static void do_shifts(unsigned vece, TCGv_vec r, TCGv_vec a,
 
 void tcg_gen_shls_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 b)
 {
+    vec_int32_op_instrumentation(vece, r, a, b, gen_helper_sym_shift_left_vec_int32);
     do_shifts(vece, r, a, b, INDEX_op_shls_vec);
 }
 
 void tcg_gen_shrs_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 b)
 {
+    vec_int32_op_instrumentation(vece, r, a, b, gen_helper_sym_logical_shift_right_vec_int32);
     do_shifts(vece, r, a, b, INDEX_op_shrs_vec);
 }
 
 void tcg_gen_sars_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 b)
 {
+    vec_int32_op_instrumentation(vece, r, a, b, gen_helper_sym_arithmetic_shift_right_vec_int32);
     do_shifts(vece, r, a, b, INDEX_op_sars_vec);
 }
 
 void tcg_gen_rotls_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 s)
 {
+    vec_int32_op_instrumentation(vece, r, a, s, gen_helper_sym_rotate_left_vec_int32);
     do_shifts(vece, r, a, s, INDEX_op_rotls_vec);
 }
 
@@ -734,16 +1040,23 @@ void tcg_gen_bitsel_vec(unsigned vece, TCGv_vec r, TCGv_vec a,
     tcg_debug_assert(bt->base_type >= type);
     tcg_debug_assert(ct->base_type >= type);
 
-    if (TCG_TARGET_HAS_bitsel_vec) {
+    /*
+    TODO (SymQEMU):
+    This instruction is not instrumented yet.
+    For now, we make sure that alternative instructions below, which are instrumented, are always used.
+    Directly instrumenting this instruction would improve performance of SymQEMU.
+    */
+
+    /* if (TCG_TARGET_HAS_bitsel_vec) {
         vec_gen_4(INDEX_op_bitsel_vec, type, MO_8,
                   temp_arg(rt), temp_arg(at), temp_arg(bt), temp_arg(ct));
-    } else {
+    } else { */
         TCGv_vec t = tcg_temp_new_vec(type);
         tcg_gen_and_vec(MO_8, t, a, b);
         tcg_gen_andc_vec(MO_8, r, c, a);
         tcg_gen_or_vec(MO_8, r, r, t);
         tcg_temp_free_vec(t);
-    }
+    /* } */
 }
 
 void tcg_gen_cmpsel_vec(TCGCond cond, unsigned vece, TCGv_vec r,
@@ -772,16 +1085,23 @@ void tcg_gen_cmpsel_vec(TCGCond cond, unsigned vece, TCGv_vec r,
     hold_list = tcg_swap_vecop_list(NULL);
     can = tcg_can_emit_vec_op(INDEX_op_cmpsel_vec, type, vece);
 
-    if (can > 0) {
+    /*
+    TODO (SymQEMU):
+    This instruction is not instrumented yet.
+    For now, we make sure that alternative instructions below, which are instrumented, are always used.
+    Directly instrumenting this instruction would improve performance of SymQEMU.
+    */
+
+    /* if (can > 0) {
         vec_gen_6(INDEX_op_cmpsel_vec, type, vece, ri, ai, bi, ci, di, cond);
     } else if (can < 0) {
         tcg_expand_vec_op(INDEX_op_cmpsel_vec, type, vece,
                           ri, ai, bi, ci, di, cond);
-    } else {
+    } else { */
         TCGv_vec t = tcg_temp_new_vec(type);
         tcg_gen_cmp_vec(cond, vece, t, a, b);
         tcg_gen_bitsel_vec(vece, r, t, c, d);
         tcg_temp_free_vec(t);
-    }
+    /* } */
     tcg_swap_vecop_list(hold_list);
 }
