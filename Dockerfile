@@ -1,4 +1,5 @@
-FROM ubuntu:22.04
+# prepare machine
+FROM ubuntu:22.04 as builder
 
 RUN apt update
 RUN apt install -y \
@@ -8,6 +9,9 @@ RUN apt install -y \
     git \
     python3 \
     python3-pip
+
+#
+FROM builder as symqemu
 
 COPY . /symqemu_source
 WORKDIR /symqemu_source
@@ -34,6 +38,8 @@ RUN ./configure                                                       \
           --symcc-build=/symcc/build
 
 RUN make -j
+
+RUN make check
 
 WORKDIR /symqemu_source/tests/symqemu
 RUN python3 -m unittest test.py

@@ -50,6 +50,7 @@ tests = {
   'test-qapi-util': [],
   'test-interval-tree': [],
   'test-xs-node': [qom],
+  'check-sym-runtime' : [qemuutil, qom, hwcore],
 }
 
 if have_system or have_tools
@@ -184,7 +185,32 @@ foreach test_name, extra: tests
     src += test_ss.all_sources()
     deps += test_ss.all_dependencies()
   endif
-  exe = executable(test_name, src, genh, dependencies: deps)
+  args =  []
+  lwith = []
+
+  # SymQEMU unit tests executable construction is a bit more complicated
+  if test_name == 'check-sym-runtime'
+    # lookup the libSymRuntime.so and add it as a dependence
+    libdir = meson.current_build_dir() / '../../' / config_host['SYMCC_BUILD']
+    symcc_runtime = cc.find_library('SymRuntime', dirs : libdir)
+    deps += [symcc_runtime]
+
+    # embeds most of qemu objects, including SymQEMU
+    lwith += [lib]
+    args +=  ['-I../target/i386/',
+	      '-I../../symcc/runtime/',
+	      '-DCONFIG_TARGET="x86_64-linux-user-config-target.h"',
+	      '-DNEED_CPU_H',
+	      '-Ix86_64-linux-user']
+
+    # Create the output file for symcc results
+    symcc_output=meson.current_build_dir() / 'symcc-tests-output'
+    test_env.append('SYMCC_OUTPUT_DIR', symcc_output)
+    r = run_command('mkdir', symcc_output, check : false)
+  endif
+
+  exe = executable(test_name, src, genh, dependencies: deps,
+                   c_args : args, link_with: lwith)
 
   test(test_name, exe,
        depends: test_deps.get(test_name, []),
