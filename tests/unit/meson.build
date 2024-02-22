@@ -188,6 +188,13 @@ foreach test_name, extra: tests
 
   # SymQEMU unit tests
   if test_name == 'check-sym-runtime'
+
+    # lookup the libSymRuntime.so and add it as a dependence
+    libdir = meson.current_build_dir() / '../../' / config_host['SYMCC_BUILD']
+    symcc_runtime = cc.find_library('SymRuntime', dirs : libdir)
+    deps += [symcc_runtime]
+
+    # embeds most of qemu objects, including SymQEMU
     lwith = [lib]
 
     exe = executable('check-sym-runtime.c',
@@ -200,10 +207,10 @@ foreach test_name, extra: tests
 			       '-Ix86_64-linux-user'],
 		     dependencies: deps,
 		     build_rpath: config_host['SYMCC_BUILD'],
-                     objects: [symcc_libs],
 		     link_with: lwith
                     )
 
+    # Create the output file for symcc results
     symcc_output=meson.current_build_dir() / 'symcc-tests-output'
     test_env.append('SYMCC_OUTPUT_DIR', symcc_output)
     r = run_command('mkdir', symcc_output, check : false)
