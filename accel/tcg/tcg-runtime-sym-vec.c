@@ -362,7 +362,7 @@ TODO:
     Currently, `helper_sym_cmp_vec` pushes path constraints and concretizes its result.
     Returning an expression that represents the result of the comparison, instead of pushing path constraints,
     may give better results.
-/*
+*/
 
 /*
  * Symbolic equivalent of an SIMD comparison operation, where true is represented by -1 and false by 0.
@@ -441,7 +441,7 @@ TODO:
     Currently, `helper_sym_ternary_vec` pushes path constraints and concretizes its result.
     Returning an expression that represents the result of the comparison, instead of pushing path constraints,
     may give better results.
-/*
+*/
 
 /*
  * Symbolic equivalent of an SIMD ternary operation.
