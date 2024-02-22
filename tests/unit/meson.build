@@ -220,5 +220,4 @@ foreach test_name, extra: tests
        timeout: slow_tests.get(test_name, 30),
        priority: slow_tests.get(test_name, 30),
        suite: ['unit'])
-
 endforeach
