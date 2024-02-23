@@ -377,6 +377,7 @@ TODO:
  *   arg1_concrete, arg2_concrete : pointers to buffers that store the concrete values of the input vector operands
  *   arg1_symbolic, arg2_symbolic : symbolic expressions of the input vector operands
  *   comparison_operator : enum value that represents a comparison operator like <, >, ==, etc.
+ *                         Type is actually uint32_t (cast before use + helper definition).
  *   result_concrete : pointer to a buffer that stores the concrete value of the result vector, as computed by the
  *       concrete execution of the SIMD operation
  *   vector_size : size of the vectors in bits
@@ -387,7 +388,7 @@ void *HELPER(sym_cmp_vec)(
         CPUArchState *env,
         void *arg1_concrete, void *arg1_symbolic,
         void *arg2_concrete, void *arg2_symbolic,
-        TCGCond comparison_operator, void *result_concrete,
+        uint32_t /* TCGCond */  comparison_operator, void *result_concrete,
         uint64_t vector_size, uint64_t vece
 ) {
     g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
@@ -457,6 +458,7 @@ TODO:
  *      arg1_concrete, arg2_concrete : pointers to buffers that store the concrete values of the input vector operands
  *      arg1_symbolic, arg2_symbolic : symbolic expressions of the input vector operands
  *      comparison_operator : enum value that represents a comparison operator like <, >, ==, etc.
+ *                            Type is actually uint32_t (cast before use + helper definition).
  *      concrete_result : pointer to a buffer that stores the concrete value of the result vector, as computed by the
  *          concrete execution of the SIMD operation
  *      vector_size : size of the vectors in bits
@@ -468,7 +470,7 @@ void *HELPER(sym_ternary_vec)(
         CPUArchState *env,
         void *arg1_concrete, void *arg1_symbolic,
         void *arg2_concrete, void *arg2_symbolic,
-        TCGCond comparison_operator, void *concrete_result,
+        uint32_t /* TCGCond */ comparison_operator, void *concrete_result,
         uint64_t vector_size, uint64_t vece
 ) {
     g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);

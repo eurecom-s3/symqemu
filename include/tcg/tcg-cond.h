@@ -33,7 +33,7 @@
  *    bit 2 is unsigned,
  *    bit 3 is used with bit 0 for swapping signed/unsigned.
  */
-typedef enum {
+typedef enum uint32_t {
     /* non-signed */
     TCG_COND_NEVER  = 0 | 0 | 0 | 0,
     TCG_COND_ALWAYS = 0 | 0 | 0 | 1,
