@@ -617,12 +617,12 @@ static const char mxuregnames[NUMBER_OF_MXU_REGISTERS][4] = {
 void mxu_translate_init(void)
 {
     for (unsigned i = 0; i < NUMBER_OF_MXU_REGISTERS - 1; i++) {
-        mxu_gpr[i] = tcg_global_mem_new(cpu_env,
+        mxu_gpr[i] = tcg_global_mem_new(tcg_env,
                                         offsetof(CPUMIPSState, active_tc.mxu_gpr[i]),
                                         mxuregnames[i]);
     }
 
-    mxu_CR = tcg_global_mem_new(cpu_env,
+    mxu_CR = tcg_global_mem_new(tcg_env,
                                 offsetof(CPUMIPSState, active_tc.mxu_cr),
                                 mxuregnames[NUMBER_OF_MXU_REGISTERS - 1]);
 }
@@ -2977,14 +2977,14 @@ static void gen_mxu_Q8ADD(DisasContext *ctx)
  *    to another one in XRc, with zero extending
  *    to 16-bit and put results as packed 16-bit data
  *    into XRa and XRd.
- *    aptn2 manages action add or subract of pairs of data.
+ *    aptn2 manages action add or subtract of pairs of data.
  *
  *  Q8ACCE XRa, XRb, XRc, XRd, aptn2
  *    Add/subtract quadruple of 8-bit packed in XRb
  *    to another one in XRc, with zero extending
  *    to 16-bit and accumulate results as packed 16-bit data
  *    into XRa and XRd.
- *    aptn2 manages action add or subract of pairs of data.
+ *    aptn2 manages action add or subtract of pairs of data.
  */
 static void gen_mxu_q8adde(DisasContext *ctx, bool accumulate)
 {
@@ -4056,7 +4056,7 @@ static void gen_mxu_s32sfl(DisasContext *ctx)
 
 /*
  *  Q8SAD XRa, XRd, XRb, XRc
- *    Typical SAD opration for motion estimation.
+ *    Typical SAD operation for motion estimation.
  */
 static void gen_mxu_q8sad(DisasContext *ctx)
 {

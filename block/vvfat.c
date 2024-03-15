@@ -777,7 +777,6 @@ static int read_directory(BDRVVVFATState* s, int mapping_index)
     while((entry=readdir(dir))) {
         unsigned int length=strlen(dirname)+2+strlen(entry->d_name);
         char* buffer;
-        direntry_t* direntry;
         struct stat st;
         int is_dot=!strcmp(entry->d_name,".");
         int is_dotdot=!strcmp(entry->d_name,"..");
@@ -857,7 +856,7 @@ static int read_directory(BDRVVVFATState* s, int mapping_index)
 
     /* fill with zeroes up to the end of the cluster */
     while(s->directory.next%(0x10*s->sectors_per_cluster)) {
-        direntry_t* direntry=array_get_next(&(s->directory));
+        direntry = array_get_next(&(s->directory));
         memset(direntry,0,sizeof(direntry_t));
     }
 
@@ -1145,6 +1144,8 @@ static int vvfat_open(BlockDriverState *bs, QDict *options, int flags,
     QemuOpts *opts;
     int ret;
 
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
+
 #ifdef DEBUG
     vvv = s;
 #endif
@@ -1267,9 +1268,8 @@ static int vvfat_open(BlockDriverState *bs, QDict *options, int flags,
                    "The vvfat (rw) format used by node '%s' "
                    "does not support live migration",
                    bdrv_get_device_or_node_name(bs));
-        ret = migrate_add_blocker(s->migration_blocker, errp);
+        ret = migrate_add_blocker_normal(&s->migration_blocker, errp);
         if (ret < 0) {
-            error_free(s->migration_blocker);
             goto fail;
         }
     }
@@ -1481,8 +1481,8 @@ vvfat_read(BlockDriverState *bs, int64_t sector_num, uint8_t *buf, int nb_sector
         if (s->qcow) {
             int64_t n;
             int ret;
-            ret = bdrv_is_allocated(s->qcow->bs, sector_num * BDRV_SECTOR_SIZE,
-                                    (nb_sectors - i) * BDRV_SECTOR_SIZE, &n);
+            ret = bdrv_co_is_allocated(s->qcow->bs, sector_num * BDRV_SECTOR_SIZE,
+                                       (nb_sectors - i) * BDRV_SECTOR_SIZE, &n);
             if (ret < 0) {
                 return ret;
             }
@@ -1807,10 +1807,10 @@ cluster_was_modified(BDRVVVFATState *s, uint32_t cluster_num)
     }
 
     for (i = 0; !was_modified && i < s->sectors_per_cluster; i++) {
-        was_modified = bdrv_is_allocated(s->qcow->bs,
-                                         (cluster2sector(s, cluster_num) +
-                                          i) * BDRV_SECTOR_SIZE,
-                                         BDRV_SECTOR_SIZE, NULL);
+        was_modified = bdrv_co_is_allocated(s->qcow->bs,
+                                            (cluster2sector(s, cluster_num) +
+                                             i) * BDRV_SECTOR_SIZE,
+                                            BDRV_SECTOR_SIZE, NULL);
     }
 
     /*
@@ -1962,24 +1962,24 @@ get_cluster_count_for_direntry(BDRVVVFATState* s, direntry_t* direntry, const ch
                  * This is horribly inefficient, but that is okay, since
                  * it is rarely executed, if at all.
                  */
-                int64_t offset = cluster2sector(s, cluster_num);
+                int64_t offs = cluster2sector(s, cluster_num);
 
                 vvfat_close_current_file(s);
                 for (i = 0; i < s->sectors_per_cluster; i++) {
                     int res;
 
-                    res = bdrv_is_allocated(s->qcow->bs,
-                                            (offset + i) * BDRV_SECTOR_SIZE,
-                                            BDRV_SECTOR_SIZE, NULL);
+                    res = bdrv_co_is_allocated(s->qcow->bs,
+                                               (offs + i) * BDRV_SECTOR_SIZE,
+                                               BDRV_SECTOR_SIZE, NULL);
                     if (res < 0) {
                         return -1;
                     }
                     if (!res) {
-                        res = vvfat_read(s->bs, offset, s->cluster_buffer, 1);
+                        res = vvfat_read(s->bs, offs, s->cluster_buffer, 1);
                         if (res) {
                             return -1;
                         }
-                        res = bdrv_co_pwrite(s->qcow, offset * BDRV_SECTOR_SIZE,
+                        res = bdrv_co_pwrite(s->qcow, offs * BDRV_SECTOR_SIZE,
                                              BDRV_SECTOR_SIZE, s->cluster_buffer,
                                              0);
                         if (res < 0) {
@@ -2467,8 +2467,9 @@ commit_direntries(BDRVVVFATState* s, int dir_index, int parent_mapping_index)
 
     for (c = first_cluster; !fat_eof(s, c); c = modified_fat_get(s, c)) {
         direntry_t *first_direntry;
-        void* direntry = array_get(&(s->directory), current_dir_index);
-        int ret = vvfat_read(s->bs, cluster2sector(s, c), direntry,
+
+        direntry = array_get(&(s->directory), current_dir_index);
+        ret = vvfat_read(s->bs, cluster2sector(s, c), (uint8_t *)direntry,
                 s->sectors_per_cluster);
         if (ret)
             return ret;
@@ -2690,12 +2691,12 @@ static int handle_renames_and_mkdirs(BDRVVVFATState* s)
                 direntry_t* direntry = array_get(&(s->directory),
                         mapping->info.dir.first_dir_index);
                 uint32_t c = mapping->begin;
-                int i = 0;
+                int j = 0;
 
                 /* recurse */
                 while (!fat_eof(s, c)) {
                     do {
-                        direntry_t* d = direntry + i;
+                        direntry_t *d = direntry + j;
 
                         if (is_file(d) || (is_directory(d) && !is_dot(d))) {
                             int l;
@@ -2716,8 +2717,8 @@ static int handle_renames_and_mkdirs(BDRVVVFATState* s)
 
                             schedule_rename(s, m->begin, new_path);
                         }
-                        i++;
-                    } while((i % (0x10 * s->sectors_per_cluster)) != 0);
+                        j++;
+                    } while (j % (0x10 * s->sectors_per_cluster) != 0);
                     c = fat_get(s, c);
                 }
             }
@@ -2804,16 +2805,16 @@ static int coroutine_fn GRAPH_RDLOCK handle_commits(BDRVVVFATState* s)
             int begin = commit->param.new_file.first_cluster;
             mapping_t* mapping = find_mapping_for_cluster(s, begin);
             direntry_t* entry;
-            int i;
+            int j;
 
             /* find direntry */
-            for (i = 0; i < s->directory.next; i++) {
-                entry = array_get(&(s->directory), i);
+            for (j = 0; j < s->directory.next; j++) {
+                entry = array_get(&(s->directory), j);
                 if (is_file(entry) && begin_of_direntry(entry) == begin)
                     break;
             }
 
-            if (i >= s->directory.next) {
+            if (j >= s->directory.next) {
                 fail = -6;
                 continue;
             }
@@ -2833,8 +2834,9 @@ static int coroutine_fn GRAPH_RDLOCK handle_commits(BDRVVVFATState* s)
             mapping->mode = MODE_NORMAL;
             mapping->info.file.offset = 0;
 
-            if (commit_one_file(s, i, 0))
+            if (commit_one_file(s, j, 0)) {
                 fail = -7;
+            }
 
             break;
         }
@@ -3236,8 +3238,7 @@ static void vvfat_close(BlockDriverState *bs)
     g_free(s->cluster_buffer);
 
     if (s->qcow) {
-        migrate_del_blocker(s->migration_blocker);
-        error_free(s->migration_blocker);
+        migrate_del_blocker(&s->migration_blocker);
     }
 }
 

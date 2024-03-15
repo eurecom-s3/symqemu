@@ -23,6 +23,7 @@
 #include "qemu/memfd.h"
 #include "qemu/queue.h"
 #include "qemu/plugin.h"
+#include "tcg/startup.h"
 #include "target_mman.h"
 #include <elf.h>
 #include <endian.h>
@@ -141,7 +142,6 @@
 #include "special-errno.h"
 #include "qapi/error.h"
 #include "fd-trans.h"
-#include "tcg/tcg.h"
 #include "cpu_loop-common.h"
 
 #ifndef CLONE_IO
@@ -838,7 +838,7 @@ abi_long do_brk(abi_ulong brk_val)
         return target_brk;
     }
 
-    /* Release heap if necesary */
+    /* Release heap if necessary */
     if (new_brk < old_brk) {
         target_munmap(new_brk, old_brk - new_brk);
 
@@ -1816,7 +1816,7 @@ static inline abi_long target_to_host_cmsg(struct msghdr *msgh,
             uint32_t *dst = (uint32_t *)data;
 
             memcpy(dst, target_data, len);
-            /* fix endianess of first 32-bit word */
+            /* fix endianness of first 32-bit word */
             if (len >= sizeof(uint32_t)) {
                 *dst = tswap32(*dst);
             }
@@ -2927,7 +2927,7 @@ get_timeout:
                 unlock_user(results, optval_addr, 0);
                 return ret;
             }
-            /* swap host endianess to target endianess. */
+            /* swap host endianness to target endianness. */
             for (i = 0; i < (len / sizeof(uint32_t)); i++) {
                 results[i] = tswap32(results[i]);
             }
@@ -3732,14 +3732,6 @@ static abi_long do_socketcall(int num, abi_ulong vptr)
 }
 #endif
 
-#define N_SHM_REGIONS	32
-
-static struct shm_region {
-    abi_ulong start;
-    abi_ulong size;
-    bool in_use;
-} shm_regions[N_SHM_REGIONS];
-
 #ifndef TARGET_SEMID64_DS
 /* asm-generic version of this struct */
 struct target_semid64_ds
@@ -4489,133 +4481,6 @@ static inline abi_long do_shmctl(int shmid, int cmd, abi_long buf)
     return ret;
 }
 
-#ifndef TARGET_FORCE_SHMLBA
-/* For most architectures, SHMLBA is the same as the page size;
- * some architectures have larger values, in which case they should
- * define TARGET_FORCE_SHMLBA and provide a target_shmlba() function.
- * This corresponds to the kernel arch code defining __ARCH_FORCE_SHMLBA
- * and defining its own value for SHMLBA.
- *
- * The kernel also permits SHMLBA to be set by the architecture to a
- * value larger than the page size without setting __ARCH_FORCE_SHMLBA;
- * this means that addresses are rounded to the large size if
- * SHM_RND is set but addresses not aligned to that size are not rejected
- * as long as they are at least page-aligned. Since the only architecture
- * which uses this is ia64 this code doesn't provide for that oddity.
- */
-static inline abi_ulong target_shmlba(CPUArchState *cpu_env)
-{
-    return TARGET_PAGE_SIZE;
-}
-#endif
-
-static abi_ulong do_shmat(CPUArchState *cpu_env, int shmid,
-                          abi_ulong shmaddr, int shmflg)
-{
-    CPUState *cpu = env_cpu(cpu_env);
-    abi_ulong raddr;
-    void *host_raddr;
-    struct shmid_ds shm_info;
-    int i, ret;
-    abi_ulong shmlba;
-
-    /* shmat pointers are always untagged */
-
-    /* find out the length of the shared memory segment */
-    ret = get_errno(shmctl(shmid, IPC_STAT, &shm_info));
-    if (is_error(ret)) {
-        /* can't get length, bail out */
-        return ret;
-    }
-
-    shmlba = target_shmlba(cpu_env);
-
-    if (shmaddr & (shmlba - 1)) {
-        if (shmflg & SHM_RND) {
-            shmaddr &= ~(shmlba - 1);
-        } else {
-            return -TARGET_EINVAL;
-        }
-    }
-    if (!guest_range_valid_untagged(shmaddr, shm_info.shm_segsz)) {
-        return -TARGET_EINVAL;
-    }
-
-    mmap_lock();
-
-    /*
-     * We're mapping shared memory, so ensure we generate code for parallel
-     * execution and flush old translations.  This will work up to the level
-     * supported by the host -- anything that requires EXCP_ATOMIC will not
-     * be atomic with respect to an external process.
-     */
-    if (!(cpu->tcg_cflags & CF_PARALLEL)) {
-        cpu->tcg_cflags |= CF_PARALLEL;
-        tb_flush(cpu);
-    }
-
-    if (shmaddr)
-        host_raddr = shmat(shmid, (void *)g2h_untagged(shmaddr), shmflg);
-    else {
-        abi_ulong mmap_start;
-
-        /* In order to use the host shmat, we need to honor host SHMLBA.  */
-        mmap_start = mmap_find_vma(0, shm_info.shm_segsz, MAX(SHMLBA, shmlba));
-
-        if (mmap_start == -1) {
-            errno = ENOMEM;
-            host_raddr = (void *)-1;
-        } else
-            host_raddr = shmat(shmid, g2h_untagged(mmap_start),
-                               shmflg | SHM_REMAP);
-    }
-
-    if (host_raddr == (void *)-1) {
-        mmap_unlock();
-        return get_errno((intptr_t)host_raddr);
-    }
-    raddr = h2g((uintptr_t)host_raddr);
-
-    page_set_flags(raddr, raddr + shm_info.shm_segsz - 1,
-                   PAGE_VALID | PAGE_RESET | PAGE_READ |
-                   (shmflg & SHM_RDONLY ? 0 : PAGE_WRITE));
-
-    for (i = 0; i < N_SHM_REGIONS; i++) {
-        if (!shm_regions[i].in_use) {
-            shm_regions[i].in_use = true;
-            shm_regions[i].start = raddr;
-            shm_regions[i].size = shm_info.shm_segsz;
-            break;
-        }
-    }
-
-    mmap_unlock();
-    return raddr;
-}
-
-static inline abi_long do_shmdt(abi_ulong shmaddr)
-{
-    int i;
-    abi_long rv;
-
-    /* shmdt pointers are always untagged */
-
-    mmap_lock();
-
-    for (i = 0; i < N_SHM_REGIONS; ++i) {
-        if (shm_regions[i].in_use && shm_regions[i].start == shmaddr) {
-            shm_regions[i].in_use = false;
-            page_set_flags(shmaddr, shmaddr + shm_regions[i].size - 1, 0);
-            break;
-        }
-    }
-    rv = get_errno(shmdt(g2h_untagged(shmaddr)));
-
-    mmap_unlock();
-
-    return rv;
-}
-
 #ifdef TARGET_NR_ipc
 /* ??? This only works with linear mappings.  */
 /* do_ipc() must return target values and target errnos. */
@@ -4702,7 +4567,7 @@ static abi_long do_ipc(CPUArchState *cpu_env,
         default:
         {
             abi_ulong raddr;
-            raddr = do_shmat(cpu_env, first, ptr, second);
+            raddr = target_shmat(cpu_env, first, ptr, second);
             if (is_error(raddr))
                 return get_errno(raddr);
             if (put_user_ual(raddr, third))
@@ -4715,7 +4580,7 @@ static abi_long do_ipc(CPUArchState *cpu_env,
         }
 	break;
     case IPCOP_shmdt:
-        ret = do_shmdt(ptr);
+        ret = target_shmdt(ptr);
 	break;
 
     case IPCOP_shmget:
@@ -5192,8 +5057,8 @@ static abi_long do_ioctl_dm(const IOCTLEntry *ie, uint8_t *buf_temp, int fd,
     {
         void *gspec = argptr;
         void *cur_data = host_data;
-        const argtype arg_type[] = { MK_STRUCT(STRUCT_dm_target_spec) };
-        int spec_size = thunk_type_size(arg_type, 0);
+        const argtype dm_arg_type[] = { MK_STRUCT(STRUCT_dm_target_spec) };
+        int spec_size = thunk_type_size(dm_arg_type, 0);
         int i;
 
         for (i = 0; i < host_dm->target_count; i++) {
@@ -5201,7 +5066,7 @@ static abi_long do_ioctl_dm(const IOCTLEntry *ie, uint8_t *buf_temp, int fd,
             uint32_t next;
             int slen;
 
-            thunk_convert(spec, gspec, arg_type, THUNK_HOST);
+            thunk_convert(spec, gspec, dm_arg_type, THUNK_HOST);
             slen = strlen((char*)gspec + spec_size) + 1;
             next = spec->next;
             spec->next = sizeof(*spec) + slen;
@@ -5241,7 +5106,7 @@ static abi_long do_ioctl_dm(const IOCTLEntry *ie, uint8_t *buf_temp, int fd,
             struct dm_name_list *nl = (void*)host_dm + host_dm->data_start;
             uint32_t remaining_data = guest_data_size;
             void *cur_data = argptr;
-            const argtype arg_type[] = { MK_STRUCT(STRUCT_dm_name_list) };
+            const argtype dm_arg_type[] = { MK_STRUCT(STRUCT_dm_name_list) };
             int nl_size = 12; /* can't use thunk_size due to alignment */
 
             while (1) {
@@ -5253,7 +5118,7 @@ static abi_long do_ioctl_dm(const IOCTLEntry *ie, uint8_t *buf_temp, int fd,
                     host_dm->flags |= DM_BUFFER_FULL_FLAG;
                     break;
                 }
-                thunk_convert(cur_data, nl, arg_type, THUNK_TARGET);
+                thunk_convert(cur_data, nl, dm_arg_type, THUNK_TARGET);
                 strcpy(cur_data + nl_size, nl->name);
                 cur_data += nl->next;
                 remaining_data -= nl->next;
@@ -5269,8 +5134,8 @@ static abi_long do_ioctl_dm(const IOCTLEntry *ie, uint8_t *buf_temp, int fd,
         {
             struct dm_target_spec *spec = (void*)host_dm + host_dm->data_start;
             void *cur_data = argptr;
-            const argtype arg_type[] = { MK_STRUCT(STRUCT_dm_target_spec) };
-            int spec_size = thunk_type_size(arg_type, 0);
+            const argtype dm_arg_type[] = { MK_STRUCT(STRUCT_dm_target_spec) };
+            int spec_size = thunk_type_size(dm_arg_type, 0);
             int i;
 
             for (i = 0; i < host_dm->target_count; i++) {
@@ -5281,7 +5146,7 @@ static abi_long do_ioctl_dm(const IOCTLEntry *ie, uint8_t *buf_temp, int fd,
                     host_dm->flags |= DM_BUFFER_FULL_FLAG;
                     break;
                 }
-                thunk_convert(cur_data, spec, arg_type, THUNK_TARGET);
+                thunk_convert(cur_data, spec, dm_arg_type, THUNK_TARGET);
                 strcpy(cur_data + spec_size, (char*)&spec[1]);
                 cur_data = argptr + spec->next;
                 spec = (void*)host_dm + host_dm->data_start + next;
@@ -5309,8 +5174,8 @@ static abi_long do_ioctl_dm(const IOCTLEntry *ie, uint8_t *buf_temp, int fd,
             struct dm_target_versions *vers = (void*)host_dm + host_dm->data_start;
             uint32_t remaining_data = guest_data_size;
             void *cur_data = argptr;
-            const argtype arg_type[] = { MK_STRUCT(STRUCT_dm_target_versions) };
-            int vers_size = thunk_type_size(arg_type, 0);
+            const argtype dm_arg_type[] = { MK_STRUCT(STRUCT_dm_target_versions) };
+            int vers_size = thunk_type_size(dm_arg_type, 0);
 
             while (1) {
                 uint32_t next = vers->next;
@@ -5321,7 +5186,7 @@ static abi_long do_ioctl_dm(const IOCTLEntry *ie, uint8_t *buf_temp, int fd,
                     host_dm->flags |= DM_BUFFER_FULL_FLAG;
                     break;
                 }
-                thunk_convert(cur_data, vers, arg_type, THUNK_TARGET);
+                thunk_convert(cur_data, vers, dm_arg_type, THUNK_TARGET);
                 strcpy(cur_data + vers_size, vers->name);
                 cur_data += vers->next;
                 remaining_data -= vers->next;
@@ -8102,12 +7967,70 @@ static int open_self_cmdline(CPUArchState *cpu_env, int fd)
     return 0;
 }
 
-static void show_smaps(int fd, unsigned long size)
-{
-    unsigned long page_size_kb = TARGET_PAGE_SIZE >> 10;
-    unsigned long size_kb = size >> 10;
+struct open_self_maps_data {
+    TaskState *ts;
+    IntervalTreeRoot *host_maps;
+    int fd;
+    bool smaps;
+};
 
-    dprintf(fd, "Size:                  %lu kB\n"
+/*
+ * Subroutine to output one line of /proc/self/maps,
+ * or one region of /proc/self/smaps.
+ */
+
+#ifdef TARGET_HPPA
+# define test_stack(S, E, L)  (E == L)
+#else
+# define test_stack(S, E, L)  (S == L)
+#endif
+
+static void open_self_maps_4(const struct open_self_maps_data *d,
+                             const MapInfo *mi, abi_ptr start,
+                             abi_ptr end, unsigned flags)
+{
+    const struct image_info *info = d->ts->info;
+    const char *path = mi->path;
+    uint64_t offset;
+    int fd = d->fd;
+    int count;
+
+    if (test_stack(start, end, info->stack_limit)) {
+        path = "[stack]";
+    } else if (start == info->brk) {
+        path = "[heap]";
+    } else if (start == info->vdso) {
+        path = "[vdso]";
+    }
+
+    /* Except null device (MAP_ANON), adjust offset for this fragment. */
+    offset = mi->offset;
+    if (mi->dev) {
+        uintptr_t hstart = (uintptr_t)g2h_untagged(start);
+        offset += hstart - mi->itree.start;
+    }
+
+    count = dprintf(fd, TARGET_ABI_FMT_ptr "-" TARGET_ABI_FMT_ptr
+                    " %c%c%c%c %08" PRIx64 " %02x:%02x %"PRId64,
+                    start, end,
+                    (flags & PAGE_READ) ? 'r' : '-',
+                    (flags & PAGE_WRITE_ORG) ? 'w' : '-',
+                    (flags & PAGE_EXEC) ? 'x' : '-',
+                    mi->is_priv ? 'p' : 's',
+                    offset, major(mi->dev), minor(mi->dev),
+                    (uint64_t)mi->inode);
+    if (path) {
+        dprintf(fd, "%*s%s\n", 73 - count, "", path);
+    } else {
+        dprintf(fd, "\n");
+    }
+
+    if (d->smaps) {
+        unsigned long size = end - start;
+        unsigned long page_size_kb = TARGET_PAGE_SIZE >> 10;
+        unsigned long size_kb = size >> 10;
+
+        dprintf(fd, "Size:                  %lu kB\n"
                 "KernelPageSize:        %lu kB\n"
                 "MMUPageSize:           %lu kB\n"
                 "Rss:                   0 kB\n"
@@ -8118,7 +8041,7 @@ static void show_smaps(int fd, unsigned long size)
                 "Private_Clean:         0 kB\n"
                 "Private_Dirty:         0 kB\n"
                 "Referenced:            0 kB\n"
-                "Anonymous:             0 kB\n"
+                "Anonymous:             %lu kB\n"
                 "LazyFree:              0 kB\n"
                 "AnonHugePages:         0 kB\n"
                 "ShmemPmdMapped:        0 kB\n"
@@ -8128,89 +8051,76 @@ static void show_smaps(int fd, unsigned long size)
                 "Swap:                  0 kB\n"
                 "SwapPss:               0 kB\n"
                 "Locked:                0 kB\n"
-                "THPeligible:    0\n", size_kb, page_size_kb, page_size_kb);
+                "THPeligible:    0\n"
+                "VmFlags:%s%s%s%s%s%s%s%s\n",
+                size_kb, page_size_kb, page_size_kb,
+                (flags & PAGE_ANON ? size_kb : 0),
+                (flags & PAGE_READ) ? " rd" : "",
+                (flags & PAGE_WRITE_ORG) ? " wr" : "",
+                (flags & PAGE_EXEC) ? " ex" : "",
+                mi->is_priv ? "" : " sh",
+                (flags & PAGE_READ) ? " mr" : "",
+                (flags & PAGE_WRITE_ORG) ? " mw" : "",
+                (flags & PAGE_EXEC) ? " me" : "",
+                mi->is_priv ? "" : " ms");
+    }
 }
 
-static int open_self_maps_1(CPUArchState *cpu_env, int fd, bool smaps)
+/*
+ * Callback for walk_memory_regions, when read_self_maps() fails.
+ * Proceed without the benefit of host /proc/self/maps cross-check.
+ */
+static int open_self_maps_3(void *opaque, target_ulong guest_start,
+                            target_ulong guest_end, unsigned long flags)
 {
-    CPUState *cpu = env_cpu(cpu_env);
-    TaskState *ts = cpu->opaque;
-    IntervalTreeRoot *map_info = read_self_maps();
-    IntervalTreeNode *s;
-    int count;
+    static const MapInfo mi = { .is_priv = true };
 
-    for (s = interval_tree_iter_first(map_info, 0, -1); s;
-         s = interval_tree_iter_next(s, 0, -1)) {
-        MapInfo *e = container_of(s, MapInfo, itree);
+    open_self_maps_4(opaque, &mi, guest_start, guest_end, flags);
+    return 0;
+}
 
-        if (h2g_valid(e->itree.start)) {
-            unsigned long min = e->itree.start;
-            unsigned long max = e->itree.last + 1;
-            int flags = page_get_flags(h2g(min));
-            const char *path;
+/*
+ * Callback for walk_memory_regions, when read_self_maps() succeeds.
+ */
+static int open_self_maps_2(void *opaque, target_ulong guest_start,
+                            target_ulong guest_end, unsigned long flags)
+{
+    const struct open_self_maps_data *d = opaque;
+    uintptr_t host_start = (uintptr_t)g2h_untagged(guest_start);
+    uintptr_t host_last = (uintptr_t)g2h_untagged(guest_end - 1);
 
-            max = h2g_valid(max - 1) ?
-                max : (uintptr_t) g2h_untagged(GUEST_ADDR_MAX) + 1;
+    while (1) {
+        IntervalTreeNode *n =
+            interval_tree_iter_first(d->host_maps, host_start, host_start);
+        MapInfo *mi = container_of(n, MapInfo, itree);
+        uintptr_t this_hlast = MIN(host_last, n->last);
+        target_ulong this_gend = h2g(this_hlast) + 1;
 
-            if (!page_check_range(h2g(min), max - min, flags)) {
-                continue;
-            }
+        open_self_maps_4(d, mi, guest_start, this_gend, flags);
 
-#ifdef TARGET_HPPA
-            if (h2g(max) == ts->info->stack_limit) {
-#else
-            if (h2g(min) == ts->info->stack_limit) {
-#endif
-                path = "[stack]";
-            } else {
-                path = e->path;
-            }
-
-            count = dprintf(fd, TARGET_ABI_FMT_ptr "-" TARGET_ABI_FMT_ptr
-                            " %c%c%c%c %08" PRIx64 " %s %"PRId64,
-                            h2g(min), h2g(max - 1) + 1,
-                            (flags & PAGE_READ) ? 'r' : '-',
-                            (flags & PAGE_WRITE_ORG) ? 'w' : '-',
-                            (flags & PAGE_EXEC) ? 'x' : '-',
-                            e->is_priv ? 'p' : 's',
-                            (uint64_t) e->offset, e->dev, e->inode);
-            if (path) {
-                dprintf(fd, "%*s%s\n", 73 - count, "", path);
-            } else {
-                dprintf(fd, "\n");
-            }
-            if (smaps) {
-                show_smaps(fd, max - min);
-                dprintf(fd, "VmFlags:%s%s%s%s%s%s%s%s\n",
-                        (flags & PAGE_READ) ? " rd" : "",
-                        (flags & PAGE_WRITE_ORG) ? " wr" : "",
-                        (flags & PAGE_EXEC) ? " ex" : "",
-                        e->is_priv ? "" : " sh",
-                        (flags & PAGE_READ) ? " mr" : "",
-                        (flags & PAGE_WRITE_ORG) ? " mw" : "",
-                        (flags & PAGE_EXEC) ? " me" : "",
-                        e->is_priv ? "" : " ms");
-            }
+        if (this_hlast == host_last) {
+            return 0;
         }
+        host_start = this_hlast + 1;
+        guest_start = h2g(host_start);
     }
+}
 
-    free_self_maps(map_info);
+static int open_self_maps_1(CPUArchState *env, int fd, bool smaps)
+{
+    struct open_self_maps_data d = {
+        .ts = env_cpu(env)->opaque,
+        .host_maps = read_self_maps(),
+        .fd = fd,
+        .smaps = smaps
+    };
 
-#ifdef TARGET_VSYSCALL_PAGE
-    /*
-     * We only support execution from the vsyscall page.
-     * This is as if CONFIG_LEGACY_VSYSCALL_XONLY=y from v5.3.
-     */
-    count = dprintf(fd, TARGET_FMT_lx "-" TARGET_FMT_lx
-                    " --xp 00000000 00:00 0",
-                    TARGET_VSYSCALL_PAGE, TARGET_VSYSCALL_PAGE + TARGET_PAGE_SIZE);
-    dprintf(fd, "%*s%s\n", 73 - count, "",  "[vsyscall]");
-    if (smaps) {
-        show_smaps(fd, TARGET_PAGE_SIZE);
-        dprintf(fd, "VmFlags: ex\n");
+    if (d.host_maps) {
+        walk_memory_regions(&d, open_self_maps_2);
+        free_self_maps(d.host_maps);
+    } else {
+        walk_memory_regions(&d, open_self_maps_3);
     }
-#endif
-
     return 0;
 }
 
@@ -8346,9 +8256,11 @@ void target_exception_dump(CPUArchState *env, const char *fmt, int code)
     }
 }
 
+#include "target_proc.h"
+
 #if HOST_BIG_ENDIAN != TARGET_BIG_ENDIAN || \
-    defined(TARGET_SPARC) || defined(TARGET_M68K) || defined(TARGET_HPPA) || \
-    defined(TARGET_RISCV) || defined(TARGET_S390X)
+    defined(HAVE_ARCH_PROC_CPUINFO) || \
+    defined(HAVE_ARCH_PROC_HARDWARE)
 static int is_proc(const char *filename, const char *entry)
 {
     return strcmp(filename, entry) == 0;
@@ -8400,171 +8312,6 @@ static int open_net_route(CPUArchState *cpu_env, int fd)
 }
 #endif
 
-#if defined(TARGET_SPARC)
-static int open_cpuinfo(CPUArchState *cpu_env, int fd)
-{
-    dprintf(fd, "type\t\t: sun4u\n");
-    return 0;
-}
-#endif
-
-#if defined(TARGET_HPPA)
-static int open_cpuinfo(CPUArchState *cpu_env, int fd)
-{
-    int i, num_cpus;
-
-    num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    for (i = 0; i < num_cpus; i++) {
-        dprintf(fd, "processor\t: %d\n", i);
-        dprintf(fd, "cpu family\t: PA-RISC 1.1e\n");
-        dprintf(fd, "cpu\t\t: PA7300LC (PCX-L2)\n");
-        dprintf(fd, "capabilities\t: os32\n");
-        dprintf(fd, "model\t\t: 9000/778/B160L - "
-                    "Merlin L2 160 QEMU (9000/778/B160L)\n\n");
-    }
-    return 0;
-}
-#endif
-
-#if defined(TARGET_RISCV)
-static int open_cpuinfo(CPUArchState *cpu_env, int fd)
-{
-    int i;
-    int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    RISCVCPU *cpu = env_archcpu(cpu_env);
-    const RISCVCPUConfig *cfg = riscv_cpu_cfg((CPURISCVState *) cpu_env);
-    char *isa_string = riscv_isa_string(cpu);
-    const char *mmu;
-
-    if (cfg->mmu) {
-        mmu = (cpu_env->xl == MXL_RV32) ? "sv32"  : "sv48";
-    } else {
-        mmu = "none";
-    }
-
-    for (i = 0; i < num_cpus; i++) {
-        dprintf(fd, "processor\t: %d\n", i);
-        dprintf(fd, "hart\t\t: %d\n", i);
-        dprintf(fd, "isa\t\t: %s\n", isa_string);
-        dprintf(fd, "mmu\t\t: %s\n", mmu);
-        dprintf(fd, "uarch\t\t: qemu\n\n");
-    }
-
-    g_free(isa_string);
-    return 0;
-}
-#endif
-
-#if defined(TARGET_S390X)
-/*
- * Emulate what a Linux kernel running in qemu-system-s390x -M accel=tcg would
- * show in /proc/cpuinfo.
- *
- * Skip the following in order to match the missing support in op_ecag():
- * - show_cacheinfo().
- * - show_cpu_topology().
- * - show_cpu_mhz().
- *
- * Use fixed values for certain fields:
- * - bogomips per cpu - from a qemu-system-s390x run.
- * - max thread id = 0, since SMT / SIGP_SET_MULTI_THREADING is not supported.
- *
- * Keep the code structure close to arch/s390/kernel/processor.c.
- */
-
-static void show_facilities(int fd)
-{
-    size_t sizeof_stfl_bytes = 2048;
-    g_autofree uint8_t *stfl_bytes = g_new0(uint8_t, sizeof_stfl_bytes);
-    unsigned int bit;
-
-    dprintf(fd, "facilities      :");
-    s390_get_feat_block(S390_FEAT_TYPE_STFL, stfl_bytes);
-    for (bit = 0; bit < sizeof_stfl_bytes * 8; bit++) {
-        if (test_be_bit(bit, stfl_bytes)) {
-            dprintf(fd, " %d", bit);
-        }
-    }
-    dprintf(fd, "\n");
-}
-
-static int cpu_ident(unsigned long n)
-{
-    return deposit32(0, CPU_ID_BITS - CPU_PHYS_ADDR_BITS, CPU_PHYS_ADDR_BITS,
-                     n);
-}
-
-static void show_cpu_summary(CPUArchState *cpu_env, int fd)
-{
-    S390CPUModel *model = env_archcpu(cpu_env)->model;
-    int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    uint32_t elf_hwcap = get_elf_hwcap();
-    const char *hwcap_str;
-    int i;
-
-    dprintf(fd, "vendor_id       : IBM/S390\n"
-                "# processors    : %i\n"
-                "bogomips per cpu: 13370.00\n",
-            num_cpus);
-    dprintf(fd, "max thread id   : 0\n");
-    dprintf(fd, "features\t: ");
-    for (i = 0; i < sizeof(elf_hwcap) * 8; i++) {
-        if (!(elf_hwcap & (1 << i))) {
-            continue;
-        }
-        hwcap_str = elf_hwcap_str(i);
-        if (hwcap_str) {
-            dprintf(fd, "%s ", hwcap_str);
-        }
-    }
-    dprintf(fd, "\n");
-    show_facilities(fd);
-    for (i = 0; i < num_cpus; i++) {
-        dprintf(fd, "processor %d: "
-               "version = %02X,  "
-               "identification = %06X,  "
-               "machine = %04X\n",
-               i, model->cpu_ver, cpu_ident(i), model->def->type);
-    }
-}
-
-static void show_cpu_ids(CPUArchState *cpu_env, int fd, unsigned long n)
-{
-    S390CPUModel *model = env_archcpu(cpu_env)->model;
-
-    dprintf(fd, "version         : %02X\n", model->cpu_ver);
-    dprintf(fd, "identification  : %06X\n", cpu_ident(n));
-    dprintf(fd, "machine         : %04X\n", model->def->type);
-}
-
-static void show_cpuinfo(CPUArchState *cpu_env, int fd, unsigned long n)
-{
-    dprintf(fd, "\ncpu number      : %ld\n", n);
-    show_cpu_ids(cpu_env, fd, n);
-}
-
-static int open_cpuinfo(CPUArchState *cpu_env, int fd)
-{
-    int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    int i;
-
-    show_cpu_summary(cpu_env, fd);
-    for (i = 0; i < num_cpus; i++) {
-        show_cpuinfo(cpu_env, fd, i);
-    }
-    return 0;
-}
-#endif
-
-#if defined(TARGET_M68K)
-static int open_hardware(CPUArchState *cpu_env, int fd)
-{
-    dprintf(fd, "Model:\t\tqemu-m68k\n");
-    return 0;
-}
-#endif
-
-
 int do_guest_openat(CPUArchState *cpu_env, int dirfd, const char *fname,
                     int flags, mode_t mode, bool safe)
 {
@@ -8585,11 +8332,10 @@ int do_guest_openat(CPUArchState *cpu_env, int dirfd, const char *fname,
 #if HOST_BIG_ENDIAN != TARGET_BIG_ENDIAN
         { "/proc/net/route", open_net_route, is_proc },
 #endif
-#if defined(TARGET_SPARC) || defined(TARGET_HPPA) || \
-    defined(TARGET_RISCV) || defined(TARGET_S390X)
+#if defined(HAVE_ARCH_PROC_CPUINFO)
         { "/proc/cpuinfo", open_cpuinfo, is_proc },
 #endif
-#if defined(TARGET_M68K)
+#if defined(HAVE_ARCH_PROC_HARDWARE)
         { "/proc/hardware", open_hardware, is_proc },
 #endif
         { NULL, NULL, NULL }
@@ -9059,6 +8805,10 @@ static int do_getdents64(abi_long dirfd, abi_long arg2, abi_long count)
 #define RISCV_HWPROBE_KEY_IMA_EXT_0     4
 #define     RISCV_HWPROBE_IMA_FD       (1 << 0)
 #define     RISCV_HWPROBE_IMA_C        (1 << 1)
+#define     RISCV_HWPROBE_IMA_V        (1 << 2)
+#define     RISCV_HWPROBE_EXT_ZBA      (1 << 3)
+#define     RISCV_HWPROBE_EXT_ZBB      (1 << 4)
+#define     RISCV_HWPROBE_EXT_ZBS      (1 << 5)
 
 #define RISCV_HWPROBE_KEY_CPUPERF_0     5
 #define     RISCV_HWPROBE_MISALIGNED_UNKNOWN     (0 << 0)
@@ -9067,6 +8817,8 @@ static int do_getdents64(abi_long dirfd, abi_long arg2, abi_long count)
 #define     RISCV_HWPROBE_MISALIGNED_FAST        (3 << 0)
 #define     RISCV_HWPROBE_MISALIGNED_UNSUPPORTED (4 << 0)
 #define     RISCV_HWPROBE_MISALIGNED_MASK        (7 << 0)
+
+#define RISCV_HWPROBE_KEY_ZICBOZ_BLOCK_SIZE 6
 
 struct riscv_hwprobe {
     abi_llong  key;
@@ -9106,11 +8858,23 @@ static void risc_hwprobe_fill_pairs(CPURISCVState *env,
                     riscv_has_ext(env, RVD) ?
                     RISCV_HWPROBE_IMA_FD : 0;
             value |= riscv_has_ext(env, RVC) ?
-                     RISCV_HWPROBE_IMA_C : pair->value;
+                     RISCV_HWPROBE_IMA_C : 0;
+            value |= riscv_has_ext(env, RVV) ?
+                     RISCV_HWPROBE_IMA_V : 0;
+            value |= cfg->ext_zba ?
+                     RISCV_HWPROBE_EXT_ZBA : 0;
+            value |= cfg->ext_zbb ?
+                     RISCV_HWPROBE_EXT_ZBB : 0;
+            value |= cfg->ext_zbs ?
+                     RISCV_HWPROBE_EXT_ZBS : 0;
             __put_user(value, &pair->value);
             break;
         case RISCV_HWPROBE_KEY_CPUPERF_0:
             __put_user(RISCV_HWPROBE_MISALIGNED_FAST, &pair->value);
+            break;
+        case RISCV_HWPROBE_KEY_ZICBOZ_BLOCK_SIZE:
+            value = cfg->ext_zicboz ? cfg->cboz_blocksize : 0;
+            __put_user(value, &pair->value);
             break;
         default:
             __put_user(-1, &pair->key);
@@ -11139,11 +10903,11 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
 #endif
 #ifdef TARGET_NR_shmat
     case TARGET_NR_shmat:
-        return do_shmat(cpu_env, arg1, arg2, arg3);
+        return target_shmat(cpu_env, arg1, arg2, arg3);
 #endif
 #ifdef TARGET_NR_shmdt
     case TARGET_NR_shmdt:
-        return do_shmdt(arg1);
+        return target_shmdt(arg1);
 #endif
     case TARGET_NR_fsync:
         return get_errno(fsync(arg1));
@@ -11431,14 +11195,14 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
         }
     case TARGET_NR_getcpu:
         {
-            unsigned cpu, node;
-            ret = get_errno(sys_getcpu(arg1 ? &cpu : NULL,
+            unsigned cpuid, node;
+            ret = get_errno(sys_getcpu(arg1 ? &cpuid : NULL,
                                        arg2 ? &node : NULL,
                                        NULL));
             if (is_error(ret)) {
                 return ret;
             }
-            if (arg1 && put_user_u32(cpu, arg1)) {
+            if (arg1 && put_user_u32(cpuid, arg1)) {
                 return -TARGET_EFAULT;
             }
             if (arg2 && put_user_u32(node, arg2)) {
@@ -12593,7 +12357,7 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
     case TARGET_NR_listxattr:
     case TARGET_NR_llistxattr:
     {
-        void *p, *b = 0;
+        void *b = 0;
         if (arg2) {
             b = lock_user(VERIFY_WRITE, arg2, arg3, 0);
             if (!b) {
@@ -12630,7 +12394,7 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
     case TARGET_NR_setxattr:
     case TARGET_NR_lsetxattr:
         {
-            void *p, *n, *v = 0;
+            void *n, *v = 0;
             if (arg3) {
                 v = lock_user(VERIFY_READ, arg3, arg4, 1);
                 if (!v) {
@@ -12675,7 +12439,7 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
     case TARGET_NR_getxattr:
     case TARGET_NR_lgetxattr:
         {
-            void *p, *n, *v = 0;
+            void *n, *v = 0;
             if (arg3) {
                 v = lock_user(VERIFY_WRITE, arg3, arg4, 0);
                 if (!v) {
@@ -12720,7 +12484,7 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
     case TARGET_NR_removexattr:
     case TARGET_NR_lremovexattr:
         {
-            void *p, *n;
+            void *n;
             p = lock_user_string(arg1);
             n = lock_user_string(arg2);
             if (p && n) {

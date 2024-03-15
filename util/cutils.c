@@ -1012,8 +1012,17 @@ int qemu_pstrcmp0(const char **str1, const char **str2)
 static inline bool starts_with_prefix(const char *dir)
 {
     size_t prefix_len = strlen(CONFIG_PREFIX);
+    /*
+     * dir[prefix_len] is only accessed if the length of dir is
+     * >= prefix_len, so no out of bounds access is possible.
+     */
+#pragma GCC diagnostic push
+#if !defined(__clang__) || __has_warning("-Warray-bounds=")
+#pragma GCC diagnostic ignored "-Warray-bounds="
+#endif
     return !memcmp(dir, CONFIG_PREFIX, prefix_len) &&
         (!dir[prefix_len] || G_IS_DIR_SEPARATOR(dir[prefix_len]));
+#pragma GCC diagnostic pop
 }
 
 /* Return the next path component in dir, and store its length in *p_len.  */
@@ -1144,7 +1153,6 @@ char *get_relocated_path(const char *dir)
 {
     size_t prefix_len = strlen(CONFIG_PREFIX);
     const char *bindir = CONFIG_BINDIR;
-    const char *exec_dir = qemu_get_exec_dir();
     GString *result;
     int len_dir, len_bindir;
 
@@ -1155,24 +1163,30 @@ char *get_relocated_path(const char *dir)
     g_string_append(result, "/qemu-bundle");
     if (access(result->str, R_OK) == 0) {
 #ifdef G_OS_WIN32
-        size_t size = mbsrtowcs(NULL, &dir, 0, &(mbstate_t){0}) + 1;
+        const char *src = dir;
+        size_t size = mbsrtowcs(NULL, &src, 0, &(mbstate_t){0}) + 1;
         PWSTR wdir = g_new(WCHAR, size);
-        mbsrtowcs(wdir, &dir, size, &(mbstate_t){0});
+        mbsrtowcs(wdir, &src, size, &(mbstate_t){0});
 
         PCWSTR wdir_skipped_root;
-        PathCchSkipRoot(wdir, &wdir_skipped_root);
+        if (PathCchSkipRoot(wdir, &wdir_skipped_root) == S_OK) {
+            size = wcsrtombs(NULL, &wdir_skipped_root, 0, &(mbstate_t){0});
+            char *cursor = result->str + result->len;
+            g_string_set_size(result, result->len + size);
+            wcsrtombs(cursor, &wdir_skipped_root, size + 1, &(mbstate_t){0});
+        } else {
+            g_string_append(result, dir);
+        }
 
-        size = wcsrtombs(NULL, &wdir_skipped_root, 0, &(mbstate_t){0});
-        char *cursor = result->str + result->len;
-        g_string_set_size(result, result->len + size);
-        wcsrtombs(cursor, &wdir_skipped_root, size + 1, &(mbstate_t){0});
         g_free(wdir);
 #else
         g_string_append(result, dir);
 #endif
-    } else if (!starts_with_prefix(dir) || !starts_with_prefix(bindir)) {
-        g_string_assign(result, dir);
-    } else {
+        goto out;
+    }
+
+    if (IS_ENABLED(CONFIG_RELOCATABLE) &&
+        starts_with_prefix(dir) && starts_with_prefix(bindir)) {
         g_string_assign(result, exec_dir);
 
         /* Advance over common components.  */
@@ -1195,7 +1209,10 @@ char *get_relocated_path(const char *dir)
             assert(G_IS_DIR_SEPARATOR(dir[-1]));
             g_string_append(result, dir - 1);
         }
+        goto out;
     }
 
+    g_string_assign(result, dir);
+out:
     return g_string_free(result, false);
 }

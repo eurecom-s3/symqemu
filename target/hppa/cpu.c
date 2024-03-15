@@ -77,9 +77,10 @@ static void hppa_restore_state_to_opc(CPUState *cs,
     HPPACPU *cpu = HPPA_CPU(cs);
 
     cpu->env.iaoq_f = data[0];
-    if (data[1] != (target_ureg)-1) {
+    if (data[1] != (target_ulong)-1) {
         cpu->env.iaoq_b = data[1];
     }
+    cpu->env.unwind_breg = data[2];
     /*
      * Since we were executing the instruction at IAOQ_F, and took some
      * sort of action that provoked the cpu_restore_state, we can infer
@@ -109,11 +110,7 @@ void hppa_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
     CPUHPPAState *env = &cpu->env;
 
     cs->exception_index = EXCP_UNALIGN;
-    if (env->psw & PSW_Q) {
-        /* ??? Needs tweaking for hppa64.  */
-        env->cr[CR_IOR] = addr;
-        env->cr[CR_ISR] = addr >> 32;
-    }
+    hppa_set_ior_and_isr(env, addr, MMU_IDX_MMU_DISABLED(mmu_idx));
 
     cpu_loop_exit_restore(cs, retaddr);
 }
@@ -137,8 +134,10 @@ static void hppa_cpu_realizefn(DeviceState *dev, Error **errp)
 #ifndef CONFIG_USER_ONLY
     {
         HPPACPU *cpu = HPPA_CPU(cs);
+
         cpu->alarm_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                         hppa_cpu_alarm_timer, cpu);
+        hppa_ptlbe(&cpu->env);
     }
 #endif
 }
@@ -149,7 +148,6 @@ static void hppa_cpu_initfn(Object *obj)
     HPPACPU *cpu = HPPA_CPU(obj);
     CPUHPPAState *env = &cpu->env;
 
-    cpu_set_cpustate_pointers(cpu);
     cs->exception_index = -1;
     cpu_hppa_loaded_fr0(env);
     cpu_hppa_put_psw(env, PSW_W);
@@ -157,7 +155,39 @@ static void hppa_cpu_initfn(Object *obj)
 
 static ObjectClass *hppa_cpu_class_by_name(const char *cpu_model)
 {
-    return object_class_by_name(TYPE_HPPA_CPU);
+    g_autofree char *typename = g_strconcat(cpu_model, "-cpu", NULL);
+    ObjectClass *oc = object_class_by_name(typename);
+
+    if (oc &&
+        !object_class_is_abstract(oc) &&
+        object_class_dynamic_cast(oc, TYPE_HPPA_CPU)) {
+        return oc;
+    }
+    return NULL;
+}
+
+static void hppa_cpu_list_entry(gpointer data, gpointer user_data)
+{
+    ObjectClass *oc = data;
+    CPUClass *cc = CPU_CLASS(oc);
+    const char *tname = object_class_get_name(oc);
+    g_autofree char *name = g_strndup(tname, strchr(tname, '-') - tname);
+
+    if (cc->deprecation_note) {
+        qemu_printf("  %s (deprecated)\n", name);
+    } else {
+        qemu_printf("  %s\n", name);
+    }
+}
+
+void hppa_cpu_list(void)
+{
+    GSList *list;
+
+    list = object_class_get_list_sorted(TYPE_HPPA_CPU, false);
+    qemu_printf("Available CPUs:\n");
+    g_slist_foreach(list, hppa_cpu_list_entry, NULL);
+    g_slist_free(list);
 }
 
 #ifndef CONFIG_USER_ONLY
@@ -208,19 +238,21 @@ static void hppa_cpu_class_init(ObjectClass *oc, void *data)
     cc->tcg_ops = &hppa_tcg_ops;
 }
 
-static const TypeInfo hppa_cpu_type_info = {
-    .name = TYPE_HPPA_CPU,
-    .parent = TYPE_CPU,
-    .instance_size = sizeof(HPPACPU),
-    .instance_init = hppa_cpu_initfn,
-    .abstract = false,
-    .class_size = sizeof(HPPACPUClass),
-    .class_init = hppa_cpu_class_init,
+static const TypeInfo hppa_cpu_type_infos[] = {
+    {
+        .name = TYPE_HPPA_CPU,
+        .parent = TYPE_CPU,
+        .instance_size = sizeof(HPPACPU),
+        .instance_align = __alignof(HPPACPU),
+        .instance_init = hppa_cpu_initfn,
+        .abstract = false,
+        .class_size = sizeof(HPPACPUClass),
+        .class_init = hppa_cpu_class_init,
+    },
+    {
+        .name = TYPE_HPPA64_CPU,
+        .parent = TYPE_HPPA_CPU,
+    },
 };
 
-static void hppa_cpu_register_types(void)
-{
-    type_register_static(&hppa_cpu_type_info);
-}
-
-type_init(hppa_cpu_register_types)
+DEFINE_TYPES(hppa_cpu_type_infos)

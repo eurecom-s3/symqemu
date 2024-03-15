@@ -95,7 +95,7 @@ static uint32_t reader_count(void)
 
     QEMU_LOCK_GUARD(&aio_context_list_lock);
 
-    /* rd can temporarly be negative, but the total will *always* be >= 0 */
+    /* rd can temporarily be negative, but the total will *always* be >= 0 */
     rd = orphaned_reader_count;
     QTAILQ_FOREACH(brdv_graph, &aio_context_list, next_aio) {
         rd += qatomic_read(&brdv_graph->reader_count);
@@ -106,12 +106,13 @@ static uint32_t reader_count(void)
     return rd;
 }
 
-void bdrv_graph_wrlock(BlockDriverState *bs)
+void no_coroutine_fn bdrv_graph_wrlock(BlockDriverState *bs)
 {
     AioContext *ctx = NULL;
 
     GLOBAL_STATE_CODE();
     assert(!qatomic_read(&has_writer));
+    assert(!qemu_in_coroutine());
 
     /*
      * Release only non-mainloop AioContext. The mainloop often relies on the
@@ -160,20 +161,53 @@ void bdrv_graph_wrlock(BlockDriverState *bs)
     }
 }
 
-void bdrv_graph_wrunlock(void)
+void no_coroutine_fn bdrv_graph_wrunlock_ctx(AioContext *ctx)
 {
     GLOBAL_STATE_CODE();
-    QEMU_LOCK_GUARD(&aio_context_list_lock);
     assert(qatomic_read(&has_writer));
 
     /*
-     * No need for memory barriers, this works in pair with
-     * the slow path of rdlock() and both take the lock.
+     * Release only non-mainloop AioContext. The mainloop often relies on the
+     * BQL and doesn't lock the main AioContext before doing things.
      */
-    qatomic_store_release(&has_writer, 0);
+    if (ctx && ctx != qemu_get_aio_context()) {
+        aio_context_release(ctx);
+    } else {
+        ctx = NULL;
+    }
 
-    /* Wake up all coroutine that are waiting to read the graph */
-    qemu_co_enter_all(&reader_queue, &aio_context_list_lock);
+    WITH_QEMU_LOCK_GUARD(&aio_context_list_lock) {
+        /*
+         * No need for memory barriers, this works in pair with
+         * the slow path of rdlock() and both take the lock.
+         */
+        qatomic_store_release(&has_writer, 0);
+
+        /* Wake up all coroutines that are waiting to read the graph */
+        qemu_co_enter_all(&reader_queue, &aio_context_list_lock);
+    }
+
+    /*
+     * Run any BHs that were scheduled during the wrlock section and that
+     * callers might expect to have finished (in particular, this is important
+     * for bdrv_schedule_unref()).
+     *
+     * Do this only after restarting coroutines so that nested event loops in
+     * BHs don't deadlock if their condition relies on the coroutine making
+     * progress.
+     */
+    aio_bh_poll(qemu_get_aio_context());
+
+    if (ctx) {
+        aio_context_acquire(ctx);
+    }
+}
+
+void no_coroutine_fn bdrv_graph_wrunlock(BlockDriverState *bs)
+{
+    AioContext *ctx = bs ? bdrv_get_aio_context(bs) : NULL;
+
+    bdrv_graph_wrunlock_ctx(ctx);
 }
 
 void coroutine_fn bdrv_graph_co_rdlock(void)

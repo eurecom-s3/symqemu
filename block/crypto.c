@@ -65,6 +65,9 @@ static int block_crypto_read_func(QCryptoBlock *block,
     BlockDriverState *bs = opaque;
     ssize_t ret;
 
+    GLOBAL_STATE_CODE();
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
+
     ret = bdrv_pread(bs->file, offset, buflen, buf, 0);
     if (ret < 0) {
         error_setg_errno(errp, -ret, "Could not read encryption header");
@@ -82,6 +85,9 @@ static int block_crypto_write_func(QCryptoBlock *block,
 {
     BlockDriverState *bs = opaque;
     ssize_t ret;
+
+    GLOBAL_STATE_CODE();
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
 
     ret = bdrv_pwrite(bs->file, offset, buflen, buf, 0);
     if (ret < 0) {
@@ -263,10 +269,14 @@ static int block_crypto_open_generic(QCryptoBlockFormat format,
     unsigned int cflags = 0;
     QDict *cryptoopts = NULL;
 
+    GLOBAL_STATE_CODE();
+
     ret = bdrv_open_file_child(NULL, options, "file", bs, errp);
     if (ret < 0) {
         return ret;
     }
+
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
 
     bs->supported_write_flags = BDRV_REQ_FUA &
         bs->file->bs->supported_write_flags;
@@ -777,7 +787,7 @@ block_crypto_get_specific_info_luks(BlockDriverState *bs, Error **errp)
     return spec_info;
 }
 
-static int
+static int GRAPH_RDLOCK
 block_crypto_amend_prepare(BlockDriverState *bs, Error **errp)
 {
     BlockCrypto *crypto = bs->opaque;
@@ -793,7 +803,7 @@ block_crypto_amend_prepare(BlockDriverState *bs, Error **errp)
     return ret;
 }
 
-static void
+static void GRAPH_RDLOCK
 block_crypto_amend_cleanup(BlockDriverState *bs)
 {
     BlockCrypto *crypto = bs->opaque;
@@ -828,7 +838,7 @@ block_crypto_amend_options_generic_luks(BlockDriverState *bs,
                                        errp);
 }
 
-static int
+static int GRAPH_RDLOCK
 block_crypto_amend_options_luks(BlockDriverState *bs,
                                 QemuOpts *opts,
                                 BlockDriverAmendStatusCB *status_cb,

@@ -50,7 +50,7 @@ maintained as part of the virtio specification.
   by QEMU.
 
 1af4:1110
-  ivshmem device (shared memory, ``docs/specs/ivshmem-spec.txt``)
+  ivshmem device (:doc:`ivshmem-spec`)
 
 All other device IDs are reserved.
 
@@ -92,6 +92,8 @@ PCI devices (other than virtio):
   PCI PVPanic device (``-device pvpanic-pci``)
 1b36:0012
   PCI ACPI ERST device (``-device acpi-erst``)
+1b36:0013
+  PCI UFS device (``-device ufs``)
 
 All these devices are documented in :doc:`index`.
 

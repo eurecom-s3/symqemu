@@ -30,6 +30,7 @@
 #define QEMU_MIGRATION_COMPRESS_H
 
 #include "qemu-file.h"
+#include "qapi/qapi-types-migration.h"
 
 enum CompressResult {
     RES_NONE = 0,
@@ -58,13 +59,19 @@ typedef struct CompressParam CompressParam;
 void compress_threads_save_cleanup(void);
 int compress_threads_save_setup(void);
 
-void flush_compressed_data(int (send_queued_data(CompressParam *)));
-int compress_page_with_multi_thread(RAMBlock *block, ram_addr_t offset,
-                                int (send_queued_data(CompressParam *)));
+bool compress_page_with_multi_thread(RAMBlock *block, ram_addr_t offset,
+                                      int (send_queued_data(CompressParam *)));
 
 int wait_for_decompress_done(void);
 void compress_threads_load_cleanup(void);
 int compress_threads_load_setup(QEMUFile *f);
 void decompress_data_with_multi_threads(QEMUFile *f, void *host, int len);
+
+void populate_compress(MigrationInfo *info);
+uint64_t compress_ram_pages(void);
+void update_compress_thread_counts(const CompressParam *param, int bytes_xmit);
+void compress_update_rates(uint64_t page_count);
+int compress_send_queued_data(CompressParam *param);
+void compress_flush_data(void);
 
 #endif

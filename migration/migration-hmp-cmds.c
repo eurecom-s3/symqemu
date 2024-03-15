@@ -30,6 +30,7 @@
 #include "sysemu/runstate.h"
 #include "ui/qemu-spice.h"
 #include "sysemu/sysemu.h"
+#include "options.h"
 #include "migration.h"
 
 static void migration_global_dump(Monitor *mon)
@@ -321,6 +322,10 @@ void hmp_info_migrate_parameters(Monitor *mon, const QDict *qdict)
         monitor_printf(mon, "%s: %" PRIu64 " bytes/second\n",
             MigrationParameter_str(MIGRATION_PARAMETER_MAX_BANDWIDTH),
             params->max_bandwidth);
+        assert(params->has_avail_switchover_bandwidth);
+        monitor_printf(mon, "%s: %" PRIu64 " bytes/second\n",
+            MigrationParameter_str(MIGRATION_PARAMETER_AVAIL_SWITCHOVER_BANDWIDTH),
+            params->avail_switchover_bandwidth);
         assert(params->has_downtime_limit);
         monitor_printf(mon, "%s: %" PRIu64 " ms\n",
             MigrationParameter_str(MIGRATION_PARAMETER_DOWNTIME_LIMIT),
@@ -382,6 +387,11 @@ void hmp_info_migrate_parameters(Monitor *mon, const QDict *qdict)
         monitor_printf(mon, "%s: %" PRIu64 " MB/s\n",
             MigrationParameter_str(MIGRATION_PARAMETER_VCPU_DIRTY_LIMIT),
             params->vcpu_dirty_limit);
+
+        assert(params->has_mode);
+        monitor_printf(mon, "%s: %s\n",
+            MigrationParameter_str(MIGRATION_PARAMETER_MODE),
+            qapi_enum_lookup(&MigMode_lookup, params->mode));
     }
 
     qapi_free_MigrationParameters(params);
@@ -441,9 +451,18 @@ void hmp_migrate_incoming(Monitor *mon, const QDict *qdict)
 {
     Error *err = NULL;
     const char *uri = qdict_get_str(qdict, "uri");
+    MigrationChannelList *caps = NULL;
+    g_autoptr(MigrationChannel) channel = NULL;
 
-    qmp_migrate_incoming(uri, &err);
+    if (!migrate_uri_parse(uri, &channel, &err)) {
+        goto end;
+    }
+    QAPI_LIST_PREPEND(caps, g_steal_pointer(&channel));
 
+    qmp_migrate_incoming(NULL, true, caps, &err);
+    qapi_free_MigrationChannelList(caps);
+
+end:
     hmp_handle_error(mon, err);
 }
 
@@ -574,6 +593,16 @@ void hmp_migrate_set_parameter(Monitor *mon, const QDict *qdict)
         }
         p->max_bandwidth = valuebw;
         break;
+    case MIGRATION_PARAMETER_AVAIL_SWITCHOVER_BANDWIDTH:
+        p->has_avail_switchover_bandwidth = true;
+        ret = qemu_strtosz_MiB(valuestr, NULL, &valuebw);
+        if (ret < 0 || valuebw > INT64_MAX
+            || (size_t)valuebw != valuebw) {
+            error_setg(&err, "Invalid size %s", valuestr);
+            break;
+        }
+        p->avail_switchover_bandwidth = valuebw;
+        break;
     case MIGRATION_PARAMETER_DOWNTIME_LIMIT:
         p->has_downtime_limit = true;
         visit_type_size(v, param, &p->downtime_limit, &err);
@@ -646,6 +675,10 @@ void hmp_migrate_set_parameter(Monitor *mon, const QDict *qdict)
         p->has_vcpu_dirty_limit = true;
         visit_type_size(v, param, &p->vcpu_dirty_limit, &err);
         break;
+    case MIGRATION_PARAMETER_MODE:
+        p->has_mode = true;
+        visit_type_MigMode(v, param, &p->mode, &err);
+        break;
     default:
         assert(0);
     }
@@ -682,7 +715,6 @@ void hmp_x_colo_lost_heartbeat(Monitor *mon, const QDict *qdict)
 typedef struct HMPMigrationStatus {
     QEMUTimer *timer;
     Monitor *mon;
-    bool is_block_migration;
 } HMPMigrationStatus;
 
 static void hmp_migrate_status_cb(void *opaque)
@@ -708,7 +740,7 @@ static void hmp_migrate_status_cb(void *opaque)
 
         timer_mod(status->timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + 1000);
     } else {
-        if (status->is_block_migration) {
+        if (migrate_block()) {
             monitor_printf(status->mon, "\n");
         }
         if (info->error_desc) {
@@ -730,12 +762,32 @@ void hmp_migrate(Monitor *mon, const QDict *qdict)
     bool resume = qdict_get_try_bool(qdict, "resume", false);
     const char *uri = qdict_get_str(qdict, "uri");
     Error *err = NULL;
+    MigrationChannelList *caps = NULL;
+    g_autoptr(MigrationChannel) channel = NULL;
 
-    qmp_migrate(uri, !!blk, blk, !!inc, inc,
-                false, false, true, resume, &err);
+    if (inc) {
+        warn_report("option '-i' is deprecated;"
+                    " use blockdev-mirror with NBD instead");
+    }
+
+    if (blk) {
+        warn_report("option '-b' is deprecated;"
+                    " use blockdev-mirror with NBD instead");
+    }
+
+    if (!migrate_uri_parse(uri, &channel, &err)) {
+        hmp_handle_error(mon, err);
+        return;
+    }
+    QAPI_LIST_PREPEND(caps, g_steal_pointer(&channel));
+
+    qmp_migrate(NULL, true, caps, !!blk, blk, !!inc, inc,
+                 false, false, true, resume, &err);
     if (hmp_handle_error(mon, err)) {
         return;
     }
+
+    qapi_free_MigrationChannelList(caps);
 
     if (!detach) {
         HMPMigrationStatus *status;
@@ -748,7 +800,6 @@ void hmp_migrate(Monitor *mon, const QDict *qdict)
 
         status = g_malloc0(sizeof(*status));
         status->mon = mon;
-        status->is_block_migration = blk || inc;
         status->timer = timer_new_ms(QEMU_CLOCK_REALTIME, hmp_migrate_status_cb,
                                           status);
         timer_mod(status->timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
@@ -793,6 +844,8 @@ static void vm_completion(ReadLineState *rs, const char *str)
     size_t len;
     BlockDriverState *bs;
     BdrvNextIterator it;
+
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
 
     len = strlen(str);
     readline_set_completion_index(rs, len);

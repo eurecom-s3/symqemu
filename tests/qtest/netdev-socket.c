@@ -16,7 +16,33 @@
 #include "qapi/qobject-input-visitor.h"
 #include "qapi/qapi-visit-sockets.h"
 
-#define CONNECTION_TIMEOUT    60
+#define CONNECTION_TIMEOUT    120
+
+static double connection_timeout(void)
+{
+    double load;
+    int ret = getloadavg(&load, 1);
+
+    /*
+     * If we can't get load data, or load is low because we just started
+     * running, assume load of 1 (we are alone in this system).
+     */
+    if (ret < 1 || load < 1.0) {
+        load = 1.0;
+    }
+    /*
+     * No one wants to wait more than 10 minutes for this test. Higher load?
+     * Too bad.
+     */
+    if (load > 10.0) {
+        fprintf(stderr, "Warning: load %f higher than 10 - test might timeout\n",
+                load);
+        load = 10.0;
+    }
+
+    /* if load is high increase timeout as we might not get a chance to run */
+    return load * CONNECTION_TIMEOUT;
+}
 
 #define EXPECT_STATE(q, e, t)                             \
 do {                                                      \
@@ -31,7 +57,7 @@ do {                                                      \
         if (g_str_equal(resp, e)) {                       \
             break;                                        \
         }                                                 \
-    } while (g_test_timer_elapsed() < CONNECTION_TIMEOUT); \
+    } while (g_test_timer_elapsed() < connection_timeout()); \
     g_assert_cmpstr(resp, ==, e);                         \
     g_free(resp);                                         \
 } while (0)
@@ -82,7 +108,7 @@ static int inet_get_free_port_socket_ipv6(int sock)
 
 static int inet_get_free_port_multiple(int nb, int *port, bool ipv6)
 {
-    int sock[nb];
+    g_autofree int *sock = g_new(int, nb);
     int i;
 
     for (i = 0; i < nb; i++) {
@@ -401,7 +427,7 @@ static void test_dgram_inet(void)
     qtest_quit(qts0);
 }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(CONFIG_DARWIN)
 static void test_dgram_mcast(void)
 {
     QTestState *qts;
@@ -414,7 +440,9 @@ static void test_dgram_mcast(void)
 
     qtest_quit(qts);
 }
+#endif
 
+#ifndef _WIN32
 static void test_dgram_unix(void)
 {
     QTestState *qts0, *qts1;
@@ -511,7 +539,7 @@ int main(int argc, char **argv)
     if (has_ipv4) {
         qtest_add_func("/netdev/stream/inet/ipv4", test_stream_inet_ipv4);
         qtest_add_func("/netdev/dgram/inet", test_dgram_inet);
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(CONFIG_DARWIN)
         qtest_add_func("/netdev/dgram/mcast", test_dgram_mcast);
 #endif
     }

@@ -149,12 +149,8 @@ static void openrisc_cpu_realizefn(DeviceState *dev, Error **errp)
 
 static void openrisc_cpu_initfn(Object *obj)
 {
-    OpenRISCCPU *cpu = OPENRISC_CPU(obj);
-
-    cpu_set_cpustate_pointers(cpu);
-
 #ifndef CONFIG_USER_ONLY
-    qdev_init_gpio_in_named(DEVICE(cpu), openrisc_cpu_set_irq, "IRQ", NR_IRQS);
+    qdev_init_gpio_in_named(DEVICE(obj), openrisc_cpu_set_irq, "IRQ", NR_IRQS);
 #endif
 }
 
@@ -168,8 +164,7 @@ static ObjectClass *openrisc_cpu_class_by_name(const char *cpu_model)
     typename = g_strdup_printf(OPENRISC_CPU_TYPE_NAME("%s"), cpu_model);
     oc = object_class_by_name(typename);
     g_free(typename);
-    if (oc != NULL && (!object_class_dynamic_cast(oc, TYPE_OPENRISC_CPU) ||
-                       object_class_is_abstract(oc))) {
+    if (oc != NULL && !object_class_dynamic_cast(oc, TYPE_OPENRISC_CPU)) {
         return NULL;
     }
     return oc;
@@ -314,6 +309,7 @@ static const TypeInfo openrisc_cpus_type_infos[] = {
         .name = TYPE_OPENRISC_CPU,
         .parent = TYPE_CPU,
         .instance_size = sizeof(OpenRISCCPU),
+        .instance_align = __alignof(OpenRISCCPU),
         .instance_init = openrisc_cpu_initfn,
         .abstract = true,
         .class_size = sizeof(OpenRISCCPUClass),

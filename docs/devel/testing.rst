@@ -668,11 +668,11 @@ suppressing it.  More information on the file format can be found here:
 
 https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions
 
-tests/tsan/blacklist.tsan - Has TSan warnings we wish to disable
+tests/tsan/ignore.tsan - Has TSan warnings we wish to disable
 at compile time for test or debug.
 Add flags to configure to enable:
 
-"--extra-cflags=-fsanitize-blacklist=<src path>/tests/tsan/blacklist.tsan"
+"--extra-cflags=-fsanitize-blacklist=<src path>/tests/tsan/ignore.tsan"
 
 More information on the file format can be found here under "Blacklist Format":
 
@@ -894,9 +894,9 @@ You can run the avocado tests simply by executing:
 
   make check-avocado
 
-This involves the automatic creation of Python virtual environment
-within the build tree (at ``tests/venv``) which will have all the
-right dependencies, and will save tests results also within the
+This involves the automatic installation, from PyPI, of all the
+necessary avocado-framework dependencies into the QEMU venv within the
+build tree (at ``./pyvenv``). Test results are also saved within the
 build tree (at ``tests/results``).
 
 Note: the build environment must be using a Python 3 stack, and have
@@ -953,7 +953,7 @@ may be invoked by running:
 
  .. code::
 
-  tests/venv/bin/avocado run $OPTION1 $OPTION2 tests/avocado/
+  pyvenv/bin/avocado run $OPTION1 $OPTION2 tests/avocado/
 
 Note that if ``make check-avocado`` was not executed before, it is
 possible to create the Python virtual environment with the dependencies
@@ -968,20 +968,20 @@ a test file. To run tests from a single file within the build tree, use:
 
  .. code::
 
-  tests/venv/bin/avocado run tests/avocado/$TESTFILE
+  pyvenv/bin/avocado run tests/avocado/$TESTFILE
 
 To run a single test within a test file, use:
 
  .. code::
 
-  tests/venv/bin/avocado run tests/avocado/$TESTFILE:$TESTCLASS.$TESTNAME
+  pyvenv/bin/avocado run tests/avocado/$TESTFILE:$TESTCLASS.$TESTNAME
 
 Valid test names are visible in the output from any previous execution
 of Avocado or ``make check-avocado``, and can also be queried using:
 
  .. code::
 
-  tests/venv/bin/avocado list tests/avocado
+  pyvenv/bin/avocado list tests/avocado
 
 Manual Installation
 ~~~~~~~~~~~~~~~~~~~
@@ -1014,9 +1014,9 @@ class.  Here's a simple usage example:
       """
       def test_qmp_human_info_version(self):
           self.vm.launch()
-          res = self.vm.command('human-monitor-command',
-                                command_line='info version')
-          self.assertRegexpMatches(res, r'^(\d+\.\d+\.\d)')
+          res = self.vm.cmd('human-monitor-command',
+                            command_line='info version')
+          self.assertRegex(res, r'^(\d+\.\d+\.\d)')
 
 To execute your test, run:
 
@@ -1065,19 +1065,19 @@ and hypothetical example follows:
           first_machine.launch()
           second_machine.launch()
 
-          first_res = first_machine.command(
+          first_res = first_machine.cmd(
               'human-monitor-command',
               command_line='info version')
 
-          second_res = second_machine.command(
+          second_res = second_machine.cmd(
               'human-monitor-command',
               command_line='info version')
 
-          third_res = self.get_vm(name='third_machine').command(
+          third_res = self.get_vm(name='third_machine').cmd(
               'human-monitor-command',
               command_line='info version')
 
-          self.assertEquals(first_res, second_res, third_res)
+          self.assertEqual(first_res, second_res, third_res)
 
 At test "tear down", ``avocado_qemu.Test`` handles all the QEMUMachines
 shutdown.
@@ -1371,23 +1371,33 @@ conditions. For example, tests that take longer to execute when QEMU is
 compiled with debug flags. Therefore, the ``AVOCADO_TIMEOUT_EXPECTED`` variable
 has been used to determine whether those tests should run or not.
 
-GITLAB_CI
-^^^^^^^^^
-A number of tests are flagged to not run on the GitLab CI. Usually because
-they proved to the flaky or there are constraints on the CI environment which
-would make them fail. If you encounter a similar situation then use that
-variable as shown on the code snippet below to skip the test:
-
-.. code::
-
-  @skipIf(os.getenv('GITLAB_CI'), 'Running on GitLab')
-  def test(self):
-      do_something()
-
 QEMU_TEST_FLAKY_TESTS
 ^^^^^^^^^^^^^^^^^^^^^
 Some tests are not working reliably and thus are disabled by default.
-Set this environment variable to enable them.
+This includes tests that don't run reliably on GitLab's CI which
+usually expose real issues that are rarely seen on developer machines
+due to the constraints of the CI environment. If you encounter a
+similar situation then raise a bug and then mark the test as shown on
+the code snippet below:
+
+.. code::
+
+  # See https://gitlab.com/qemu-project/qemu/-/issues/nnnn
+  @skipUnless(os.getenv('QEMU_TEST_FLAKY_TESTS'), 'Test is unstable on GitLab')
+  def test(self):
+      do_something()
+
+You can also add ``:avocado: tags=flaky`` to the test meta-data so
+only the flaky tests can be run as a group:
+
+.. code::
+
+   env QEMU_TEST_FLAKY_TESTS=1 ./pyvenv/bin/avocado \
+      run tests/avocado -filter-by-tags=flaky
+
+Tests should not live in this state forever and should either be fixed
+or eventually removed.
+
 
 Uninstalling Avocado
 ~~~~~~~~~~~~~~~~~~~~
@@ -1458,7 +1468,7 @@ TCG test dependencies
 ~~~~~~~~~~~~~~~~~~~~~
 
 The TCG tests are deliberately very light on dependencies and are
-either totally bare with minimal gcc lib support (for softmmu tests)
+either totally bare with minimal gcc lib support (for system-mode tests)
 or just glibc (for linux-user tests). This is because getting a cross
 compiler to work with additional libraries can be challenging.
 

@@ -67,6 +67,18 @@ struct BlockJobDriver {
     void (*attached_aio_context)(BlockJob *job, AioContext *new_context);
 
     void (*set_speed)(BlockJob *job, int64_t speed);
+
+    /*
+     * Change the @job's options according to @opts.
+     *
+     * Note that this can already be called before the job coroutine is running.
+     */
+    void (*change)(BlockJob *job, BlockJobChangeOptions *opts, Error **errp);
+
+    /*
+     * Query information specific to this kind of block job.
+     */
+    void (*query)(BlockJob *job, BlockJobInfo *info);
 };
 
 /*
@@ -99,10 +111,11 @@ struct BlockJobDriver {
  * This function is not part of the public job interface; it should be
  * called from a wrapper that is specific to the job type.
  */
-void *block_job_create(const char *job_id, const BlockJobDriver *driver,
-                       JobTxn *txn, BlockDriverState *bs, uint64_t perm,
-                       uint64_t shared_perm, int64_t speed, int flags,
-                       BlockCompletionFunc *cb, void *opaque, Error **errp);
+void * GRAPH_UNLOCKED
+block_job_create(const char *job_id, const BlockJobDriver *driver,
+                 JobTxn *txn, BlockDriverState *bs, uint64_t perm,
+                 uint64_t shared_perm, int64_t speed, int flags,
+                 BlockCompletionFunc *cb, void *opaque, Error **errp);
 
 /**
  * block_job_free:

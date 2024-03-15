@@ -137,7 +137,7 @@ def _console_interaction(test, success_message, failure_message,
     assert not keep_sending or send_string
     if vm is None:
         vm = test.vm
-    console = vm.console_socket.makefile(mode='rb', encoding='utf-8')
+    console = vm.console_file
     console_logger = logging.getLogger('console')
     while True:
         if send_string:
@@ -254,7 +254,7 @@ class QemuBaseTest(avocado.Test):
             self.cancel("No QEMU binary defined or found in the build tree")
 
     def fetch_asset(self, name,
-                    asset_hash=None, algorithm=None,
+                    asset_hash, algorithm=None,
                     locations=None, expire=None,
                     find_only=False, cancel_on_missing=True):
         return super().fetch_asset(name,
@@ -322,7 +322,7 @@ class QemuSystemTest(QemuBaseTest):
     def _new_vm(self, name, *args):
         self._sd = tempfile.TemporaryDirectory(prefix="qemu_")
         vm = QEMUMachine(self.qemu_bin, base_temp_dir=self.workdir,
-                         sock_dir=self._sd.name, log_dir=self.logdir)
+                         log_dir=self.logdir)
         self.log.debug('QEMUMachine "%s" created', name)
         self.log.debug('QEMUMachine "%s" temp_dir: %s', name, vm.temp_dir)
         self.log.debug('QEMUMachine "%s" log_dir: %s', name, vm.log_dir)
@@ -408,8 +408,8 @@ class LinuxSSHMixIn:
 
     def ssh_connect(self, username, credential, credential_is_key=True):
         self.ssh_logger = logging.getLogger('ssh')
-        res = self.vm.command('human-monitor-command',
-                              command_line='info usernet')
+        res = self.vm.cmd('human-monitor-command',
+                          command_line='info usernet')
         port = get_info_usernet_hostfwd_port(res)
         self.assertIsNotNone(port)
         self.assertGreater(port, 0)

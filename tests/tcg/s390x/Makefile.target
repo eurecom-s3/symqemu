@@ -41,6 +41,9 @@ TESTS+=larl
 TESTS+=mdeb
 TESTS+=cgebra
 TESTS+=clgebr
+TESTS+=clc
+TESTS+=laalg
+TESTS+=add-logical-with-carry
 
 cdsg: CFLAGS+=-pthread
 cdsg: LDFLAGS+=-pthread
@@ -59,6 +62,9 @@ Z13_TESTS=vistr
 Z13_TESTS+=lcbb
 Z13_TESTS+=locfhr
 Z13_TESTS+=vcksm
+Z13_TESTS+=vstl
+Z13_TESTS+=vrep
+Z13_TESTS+=precise-smc-user
 $(Z13_TESTS): CFLAGS+=-march=z13 -O2
 TESTS+=$(Z13_TESTS)
 
@@ -73,16 +79,17 @@ ifneq ($(CROSS_CC_HAS_Z15),)
 Z15_TESTS=vxeh2_vs
 Z15_TESTS+=vxeh2_vcvt
 Z15_TESTS+=vxeh2_vlstr
+Z15_TESTS+=vxeh2_vstrs
 $(Z15_TESTS): CFLAGS+=-march=z15 -O2
 TESTS+=$(Z15_TESTS)
 endif
 
-ifeq ($(HOST_GDB_SUPPORTS_ARCH),y)
+ifneq ($(GDB),)
 GDB_SCRIPT=$(SRC_PATH)/tests/guest-debug/run-test.py
 
 run-gdbstub-signals-s390x: signals-s390x
 	$(call run-test, $@, $(GDB_SCRIPT) \
-		--gdb $(HAVE_GDB_BIN) \
+		--gdb $(GDB) \
 		--qemu $(QEMU) --qargs "$(QEMU_OPTS)" \
 		--bin $< --test $(S390X_SRC)/gdbstub/test-signals-s390x.py, \
 	mixing signals and debugging)
@@ -91,7 +98,7 @@ hello-s390x-asm: CFLAGS+=-nostdlib
 
 run-gdbstub-svc: hello-s390x-asm
 	$(call run-test, $@, $(GDB_SCRIPT) \
-		--gdb $(HAVE_GDB_BIN) \
+		--gdb $(GDB) \
 		--qemu $(QEMU) --qargs "$(QEMU_OPTS)" \
 		--bin $< --test $(S390X_SRC)/gdbstub/test-svc.py, \
 	single-stepping svc)

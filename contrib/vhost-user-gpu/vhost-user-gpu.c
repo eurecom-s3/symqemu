@@ -834,7 +834,7 @@ vg_resource_flush(VuGpu *g,
                 .width = width,
                 .height = height,
             };
-            pixman_image_t *i =
+            pixman_image_t *img =
                 pixman_image_create_bits(pixman_image_get_format(res->image),
                                          msg->payload.update.width,
                                          msg->payload.update.height,
@@ -842,11 +842,11 @@ vg_resource_flush(VuGpu *g,
                                                       payload.update.data),
                                          width * bpp);
             pixman_image_composite(PIXMAN_OP_SRC,
-                                   res->image, NULL, i,
+                                   res->image, NULL, img,
                                    extents->x1, extents->y1,
                                    0, 0, 0, 0,
                                    width, height);
-            pixman_image_unref(i);
+            pixman_image_unref(img);
             vg_send_msg(g, msg, -1);
             g_free(msg);
         }
@@ -1071,6 +1071,7 @@ static gboolean
 protocol_features_cb(gint fd, GIOCondition condition, gpointer user_data)
 {
     const uint64_t protocol_edid = (1 << VHOST_USER_GPU_PROTOCOL_F_EDID);
+    const uint64_t protocol_dmabuf2 = (1 << VHOST_USER_GPU_PROTOCOL_F_DMABUF2);
     VuGpu *g = user_data;
     uint64_t protocol_features;
     VhostUserGpuMsg msg = {
@@ -1082,7 +1083,7 @@ protocol_features_cb(gint fd, GIOCondition condition, gpointer user_data)
         return G_SOURCE_CONTINUE;
     }
 
-    protocol_features &= protocol_edid;
+    protocol_features &= (protocol_edid | protocol_dmabuf2);
 
     msg = (VhostUserGpuMsg) {
         .request = VHOST_USER_GPU_SET_PROTOCOL_FEATURES,
@@ -1099,6 +1100,8 @@ protocol_features_cb(gint fd, GIOCondition condition, gpointer user_data)
                    "the EDID vhost-user-gpu protocol.\n");
         exit(EXIT_FAILURE);
     }
+
+    g->use_modifiers = !!(protocol_features & protocol_dmabuf2);
 
     return G_SOURCE_REMOVE;
 }
