@@ -1380,7 +1380,7 @@ static void tcg_context_init(unsigned max_cpus, intptr_t sym_offset)
 #endif
 
     tcg_debug_assert(!tcg_regset_test_reg(s->reserved_regs, TCG_AREG0));
-    ts = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, TCG_AREG0, "env");
+    ts = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, TCG_AREG0, sym_offset, "env");
     tcg_env = temp_tcgv_ptr(ts);
 }
 
@@ -1637,7 +1637,6 @@ static TCGTemp *tcg_global_mem_new_internal(TCGv_ptr base, intptr_t offset,
 
     if (TCG_TARGET_REG_BITS == 32 && type == TCG_TYPE_I64) {
         TCGTemp *ts2 = tcg_global_alloc(s);
-        char buf[64];
 
         ts->base_type = TCG_TYPE_I64;
         ts->type = TCG_TYPE_I32;
@@ -2358,7 +2357,7 @@ static void tcg_gen_callN(TCGHelperInfo *info, TCGTemp *ret, TCGTemp **args)
     if (ret != NULL && ret->symbolic_expression == 0) {
         /* This is an unhandled helper; we concretize, i.e., the expression for
          * the result is NULL */
-        tcg_gen_op2_i64(INDEX_op_mov_i64, temp_tcgv_i64(temp_expr(ret)),
+        tcg_gen_mov_i64_concrete(temp_tcgv_i64(temp_expr(ret)),
                         temp_tcgv_i64(tcg_constant_internal(TCG_TYPE_I64, 0)));
     }
 

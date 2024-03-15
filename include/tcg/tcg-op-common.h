@@ -304,6 +304,8 @@ void tcg_gen_sar_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2);
 void tcg_gen_mul_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2);
 void tcg_gen_neg_i64(TCGv_i64 ret, TCGv_i64 arg);
 
+/* Concrete operations */
+void tcg_gen_mov_i64_concrete(TCGv_i64 ret, TCGv_i64 arg);
 
 /* Size changing operations.  */
 

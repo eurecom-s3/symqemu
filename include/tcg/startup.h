@@ -30,11 +30,12 @@
  * @tb_size: translation buffer size
  * @splitwx: use separate rw and rx mappings
  * @max_cpus: number of vcpus in system mode
+ * @sym_offset: (SymQEMU) Indirect bases used to store the offset to the symbolic shadow
  *
  * Allocate and initialize TCG resources, especially the JIT buffer.
  * In user-only mode, @max_cpus is unused.
  */
-void tcg_init(size_t tb_size, int splitwx, unsigned max_cpus);
+void tcg_init(size_t tb_size, int splitwx, unsigned max_cpus, intptr_t sym_offset);
 
 /**
  * tcg_register_thread: Register this thread with the TCG runtime

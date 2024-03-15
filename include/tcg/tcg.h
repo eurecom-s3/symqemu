@@ -422,7 +422,7 @@ typedef struct TCGTemp {
     int64_t val;
     struct TCGTemp *mem_base;
     intptr_t mem_offset;
-    /* Indirect bases use this to store the offset to the symbolic shadow. */
+    /* Indirect bases used to store the offset to the symbolic shadow. */
     intptr_t sym_offset;
     const char *name;
 

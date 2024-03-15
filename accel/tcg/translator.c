@@ -91,9 +91,9 @@ static TCGOp *gen_tb_start(DisasContextBase *db, uint32_t cflags)
      */
     set_can_do_io(db, db->max_insns == 1);
 
-    TCGv_i64 block = tcg_constant_i64((uint64_t)db->tb);
+    TCGv_i64 block = tcg_constant_i64((int64_t) db->tb);
     gen_helper_sym_notify_block(block);
-    tcg_temp_free_i64(block);
+    // tcg_temp_free_i64(block); TODO: free is reserved for internal now, is it ok in that case?
 
     return icount_start_insn;
 }
