@@ -25,6 +25,7 @@ RUN mv /symqemu_source/symcc /symcc
 COPY --from=symcc /symcc_build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so /symcc/build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so
 
 RUN ./configure                                                       \
+          --cc=gcc-13                                               \
           --audio-drv-list=                                           \
           --disable-sdl                                               \
           --disable-gtk                                               \
@@ -35,7 +36,9 @@ RUN ./configure                                                       \
           --target-list=x86_64-linux-user                             \
           --enable-debug                                              \
           --symcc-source=/symcc                                       \
-          --symcc-build=/symcc/build
+          --symcc-build=/symcc/build                                  \
+          --enable-debug-tcg                                          \
+          --enable-werror
 
 RUN make -j
 
