@@ -1,23 +1,14 @@
 # prepare machine
 FROM ubuntu:22.04 as builder
 
-RUN apt update && apt install -y software-properties-common
-
-RUN add-apt-repository ppa:ubuntu-toolchain-r/test -y
-
-RUN apt update && apt install -y \
+RUN apt update
+RUN apt install -y \
     ninja-build \
     libglib2.0-dev \
+    llvm \
     git \
     python3 \
-    python3-pip\
-    wget \
-    gcc-13
-
-RUN wget https://apt.llvm.org/llvm.sh
-RUN chmod +x llvm.sh
-RUN ./llvm.sh 17
-
+    python3-pip
 
 #
 FROM builder as symqemu
