@@ -37,6 +37,9 @@
 #include "tcg/tcg-cpu.h"
 #include "tcg/tcg.h"
 
+#define SymExpr void*
+#include "RuntimeCommon.h"
+
 /* RISC-V CPU definitions */
 static const char riscv_single_letter_exts[] = "IEMAFDQCPVH";
 const uint32_t misa_bits[] = {RVI, RVE, RVM, RVA, RVF, RVD, RVV,
@@ -1213,6 +1216,10 @@ static void riscv_cpu_post_init(Object *obj)
 
 static void riscv_cpu_init(Object *obj)
 {
+    RISCVCPU *cpu = RISCV_CPU(obj);
+    memset(cpu->env_exprs, 0, sizeof(cpu->env_exprs));
+    _sym_register_expression_region(cpu->env_exprs, sizeof(cpu->env_exprs));
+
 #ifndef CONFIG_USER_ONLY
     qdev_init_gpio_in(DEVICE(obj), riscv_cpu_set_irq,
                       IRQ_LOCAL_MAX + IRQ_LOCAL_GUEST_MAX);
