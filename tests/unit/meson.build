@@ -198,7 +198,7 @@ foreach test_name, extra: tests
     # embeds most of qemu objects, including SymQEMU
     lwith += [lib]
     args +=  ['-I../target/i386/',
-	      '-I../../symcc/runtime/',
+	      '-I' + config_host['SYMCC_INC'],
 	      '-DCONFIG_TARGET="x86_64-linux-user-config-target.h"',
 	      '-DNEED_CPU_H',
 	      '-Ix86_64-linux-user']
