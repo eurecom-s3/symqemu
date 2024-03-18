@@ -1,14 +1,23 @@
 # prepare machine
 FROM ubuntu:22.04 as builder
 
-RUN apt update
-RUN apt install -y \
+RUN apt update && apt install -y software-properties-common
+
+RUN add-apt-repository ppa:ubuntu-toolchain-r/test -y
+
+RUN apt update && apt install -y \
     ninja-build \
     libglib2.0-dev \
-    llvm \
     git \
     python3 \
-    python3-pip
+    python3-pip\
+    wget \
+    gcc-13
+
+RUN wget https://apt.llvm.org/llvm.sh
+RUN chmod +x llvm.sh
+RUN ./llvm.sh 17
+
 
 #
 FROM builder as symqemu
@@ -25,7 +34,6 @@ RUN mv /symqemu_source/symcc /symcc
 COPY --from=symcc /symcc_build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so /symcc/build/SymRuntime-prefix/src/SymRuntime-build/libSymRuntime.so
 
 RUN ./configure                                                       \
-          --cc=gcc-13                                               \
           --audio-drv-list=                                           \
           --disable-sdl                                               \
           --disable-gtk                                               \
