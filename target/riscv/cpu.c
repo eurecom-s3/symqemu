@@ -38,6 +38,9 @@
 #include "kvm_riscv.h"
 #include "tcg/tcg.h"
 
+#define SymExpr void*
+#include "RuntimeCommon.h"
+
 /* RISC-V CPU definitions */
 static const char riscv_single_letter_exts[] = "IEMAFDQCPVH";
 
@@ -1616,6 +1619,8 @@ static void riscv_cpu_set_irq(void *opaque, int irq, int level)
 static void riscv_cpu_init(Object *obj)
 {
     RISCVCPU *cpu = RISCV_CPU(obj);
+    memset(cpu->env_exprs, 0, sizeof(cpu->env_exprs));
+    _sym_register_expression_region(cpu->env_exprs, sizeof(cpu->env_exprs));
 
     cpu_set_cpustate_pointers(cpu);
 

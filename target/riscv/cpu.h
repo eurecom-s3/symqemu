@@ -390,6 +390,8 @@ struct ArchCPU {
     /* < public > */
     CPUNegativeOffsetState neg;
     CPURISCVState env;
+    /* space for symbolic expressions corresponding to env */
+    void *env_exprs[512 + 1];   /* TCG_MAX_TEMPS + 1 (for NULL) */
 
     char *dyn_csr_xml;
     char *dyn_vreg_xml;
