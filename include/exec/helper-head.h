@@ -96,7 +96,7 @@
 #define dh_typecode_f64 dh_typecode_i64
 #define dh_typecode_cptr dh_typecode_ptr
 #define dh_typecode_env dh_typecode_ptr
-#define dh_typecode(t) dh_typecode_##t
+#define dh_typecode(t) ((unsigned long long) dh_typecode_##t)
 
 #define dh_callflag_i32  0
 #define dh_callflag_i64  0

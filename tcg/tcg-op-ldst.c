@@ -467,7 +467,7 @@ void tcg_gen_qemu_st_i64_chk(TCGv_i64 val, TCGTemp *addr, TCGArg idx,
  *     if (tcg_use_softmmu) {
  *         return false;
  *     }
- * 
+ *
  *     /\*
  *      * For user-only, two 64-bit operations may well be smaller than a call.
  *      * Determine if that would be legal for the requested atomicity.

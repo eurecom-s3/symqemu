@@ -105,6 +105,30 @@
                   | dh_typemask(T8, 8) | dh_typemask(T9, 9)             \
     };
 
+#define DEF_HELPER_FLAGS_10(NAME, FLAGS, RET, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10) \
+    TCGHelperInfo glue(helper_info_, NAME) = {                          \
+        .func = HELPER(NAME), .name = str(NAME),                        \
+        .flags = FLAGS | dh_callflag(RET),                              \
+        .typemask = dh_typemask(RET, 0) | dh_typemask(T1, 1)            \
+                  | dh_typemask(T2, 2) | dh_typemask(T3, 3)             \
+                  | dh_typemask(T4, 4) | dh_typemask(T5, 5)             \
+                  | dh_typemask(T6, 6) | dh_typemask(T7, 7)             \
+                  | dh_typemask(T8, 8) | dh_typemask(T9, 9)             \
+                  | dh_typemask(T10, 10)                                \
+    };
+
+#define DEF_HELPER_FLAGS_11(NAME, FLAGS, RET, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11) \
+    TCGHelperInfo glue(helper_info_, NAME) = {                          \
+        .func = HELPER(NAME), .name = str(NAME),                        \
+        .flags = FLAGS | dh_callflag(RET),                              \
+        .typemask = dh_typemask(RET, 0) | dh_typemask(T1, 1)            \
+                  | dh_typemask(T2, 2) | dh_typemask(T3, 3)             \
+                  | dh_typemask(T4, 4) | dh_typemask(T5, 5)             \
+                  | dh_typemask(T6, 6) | dh_typemask(T7, 7)             \
+                  | dh_typemask(T8, 8) | dh_typemask(T9, 9)             \
+                  | dh_typemask(T10, 10) | dh_typemask(T11, 11)         \
+    };
+
 
 #include HELPER_H
 
@@ -119,3 +143,5 @@
 #undef DEF_HELPER_FLAGS_7
 #undef DEF_HELPER_FLAGS_8
 #undef DEF_HELPER_FLAGS_9
+#undef DEF_HELPER_FLAGS_10
+#undef DEF_HELPER_FLAGS_11

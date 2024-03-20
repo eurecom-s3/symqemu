@@ -2512,6 +2512,23 @@ void tcg_gen_call9(TCGHelperInfo *info, TCGTemp *ret, TCGTemp *t1, TCGTemp *t2,
     tcg_gen_callN(info, ret, args);
 }
 
+void tcg_gen_call10(TCGHelperInfo *info, TCGTemp *ret, TCGTemp *t1, TCGTemp *t2,
+                   TCGTemp *t3, TCGTemp *t4, TCGTemp *t5, TCGTemp *t6,
+                   TCGTemp *t7, TCGTemp *t8, TCGTemp *t9, TCGTemp *t10)
+{
+    TCGTemp *args[10] = { t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 };
+    tcg_gen_callN(info, ret, args);
+}
+
+void tcg_gen_call11(TCGHelperInfo *info, TCGTemp *ret, TCGTemp *t1, TCGTemp *t2,
+                   TCGTemp *t3, TCGTemp *t4, TCGTemp *t5, TCGTemp *t6,
+                   TCGTemp *t7, TCGTemp *t8, TCGTemp *t9, TCGTemp *t10,
+                   TCGTemp *t11)
+{
+    TCGTemp *args[11] = { t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11 };
+    tcg_gen_callN(info, ret, args);
+}
+
 static void tcg_reg_alloc_start(TCGContext *s)
 {
     int i, n;
