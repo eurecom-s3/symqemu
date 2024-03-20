@@ -416,6 +416,8 @@ typedef struct TCGTemp {
     unsigned int temp_allocated:1;
     unsigned int temp_subindex:1;
 
+    /* Maximum len of subindex. Must be the same size as temp_subindex */
+    unsigned int temp_subindex_len:1;
     /* If true, this temp contains a symbolic expression. */
     unsigned int symbolic_expression:1;
 
@@ -632,10 +634,15 @@ static inline TCGTemp *tcgv_i32_temp(TCGv_i32 v)
 #endif
 
 static inline TCGTemp *temp_expr(TCGTemp *ts) {
-    tcg_debug_assert(temp_idx(ts) + 1 < tcg_ctx->nb_temps);
+    // Length of subindex. For now, it can only be 0 or 1 (for i128)
+    // Could become bigger in the future.
+    unsigned char temp_sz = ts->temp_subindex_len;
+
+    tcg_debug_assert(temp_idx(ts) + temp_sz + 1 < tcg_ctx->nb_temps);
     tcg_debug_assert(!ts->symbolic_expression);
-    tcg_debug_assert((ts + 1)->symbolic_expression);
-    return ts + 1;
+    tcg_debug_assert((ts + temp_sz + 1)->symbolic_expression);
+
+    return ts + temp_sz + 1;
 }
 
 static inline TCGTemp *tcgv_i64_temp(TCGv_i64 v)

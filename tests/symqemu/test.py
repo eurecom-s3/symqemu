@@ -33,3 +33,6 @@ class SymQemuTests(unittest.TestCase):
 
     def test_printf(self):
         self.run_symqemu_and_assert_correct_result('printf')
+
+    def test_simple_i128(self):
+        self.run_symqemu_and_assert_correct_result('simple_i128')

@@ -35,7 +35,9 @@ RUN ./configure                                                       \
           --target-list=x86_64-linux-user,riscv64-linux-user          \ 
           --enable-debug                                              \
           --symcc-source=/symcc                                       \
-          --symcc-build=/symcc/build
+          --symcc-build=/symcc/build                                  \
+          --enable-debug-tcg                                          \
+          --enable-werror
 
 RUN make -j
 
