@@ -1509,14 +1509,16 @@ void tcg_func_start(TCGContext *s)
 
 static TCGTemp *tcg_temp_alloc(TCGContext *s)
 {
-    // int last_temp_idx = s->nb_temps - 1;
-    // if (last_temp_idx > 0) {
-    //     if (last_temp_idx % 2 == 0) {
-    //         g_assert(!(s->temps[last_temp_idx].symbolic_expression));
-    //     } else {
-    //         g_assert((s->temps[last_temp_idx].symbolic_expression));
-    //     }
-    // }
+    /* Not necessarily true with i128
+    int last_temp_idx = s->nb_temps - 1;
+    if (last_temp_idx > 0) {
+        if (last_temp_idx % 2 == 0) {
+            g_assert(!(s->temps[last_temp_idx].symbolic_expression));
+        } else {
+            g_assert((s->temps[last_temp_idx].symbolic_expression));
+        }
+    }
+    */
 
     int n = s->nb_temps++;
 
@@ -1718,10 +1720,6 @@ TCGTemp *tcg_temp_new_internal(TCGType type, TCGTempKind kind)
     if (n == 1) {
         ts->type = type;
     } else {
-        // /* The current implementation of SymQEMU does not support this case
-        //  * as the symbolic version of a TCGTemp is expected to be located right after the concrete version */
-        // g_assert_not_reached();
-
         ts->type = TCG_TYPE_REG;
 
         for (int i = 1; i < n; ++i) {
