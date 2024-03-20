@@ -387,7 +387,7 @@ void *HELPER(sym_cmp_vec)(
         CPUArchState *env,
         void *arg1_concrete, void *arg1_symbolic,
         void *arg2_concrete, void *arg2_symbolic,
-        uint32_t comparison_operator, void *result_concrete,
+        /* TCGCond */ uint32_t comparison_operator, void *result_concrete,
         uint64_t vector_size, uint64_t vece
 ) {
     g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
@@ -468,7 +468,7 @@ void *HELPER(sym_ternary_vec)(
         CPUArchState *env,
         void *arg1_concrete, void *arg1_symbolic,
         void *arg2_concrete, void *arg2_symbolic,
-        uint32_t comparison_operator, void *concrete_result,
+        /* TCGCond */ uint32_t comparison_operator, void *concrete_result,
         uint64_t vector_size, uint64_t vece
 ) {
     g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
