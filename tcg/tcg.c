@@ -1732,6 +1732,7 @@ TCGTemp *tcg_temp_new_internal(TCGType type, TCGTempKind kind)
             ts2->type = TCG_TYPE_REG;
             ts2->temp_allocated = 1;
             ts2->temp_subindex = i;
+            ts2->temp_subindex_len = n - 1;
             ts2->kind = kind;
         }
     }
@@ -1740,6 +1741,7 @@ TCGTemp *tcg_temp_new_internal(TCGType type, TCGTempKind kind)
     ts_expr->base_type = TCG_TYPE_PTR;
     ts_expr->type = TCG_TYPE_PTR;
     ts_expr->temp_allocated = 1;
+    ts_expr->temp_subindex = 0;
     ts_expr->kind = kind;
     ts_expr->symbolic_expression = 1;
 
