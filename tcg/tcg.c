@@ -1531,6 +1531,7 @@ void tcg_func_start(TCGContext *s)
 
 static TCGTemp *tcg_temp_alloc(TCGContext *s)
 {
+    /* Not necessarily true with i128
     int last_temp_idx = s->nb_temps - 1;
     if (last_temp_idx > 0) {
         if (last_temp_idx % 2 == 0) {
@@ -1539,6 +1540,7 @@ static TCGTemp *tcg_temp_alloc(TCGContext *s)
             g_assert((s->temps[last_temp_idx].symbolic_expression));
         }
     }
+    */
 
     int n = s->nb_temps++;
 
@@ -1751,13 +1753,13 @@ static TCGTemp *tcg_temp_new_internal(TCGType type, TCGTempKind kind)
     ts->temp_allocated = 1;
     ts->kind = kind;
 
+    // To change if subindex can take bigger values
+    tcg_debug_assert(n >= 0 && n - 1 <= 1);
+    ts->temp_subindex_len = n - 1;
+
     if (n == 1) {
         ts->type = type;
     } else {
-        /* The current implementation of SymQEMU does not support this case
-         * as the symbolic version of a TCGTemp is expected to be located right after the concrete version */
-        g_assert_not_reached();
-
         ts->type = TCG_TYPE_REG;
 
         for (int i = 1; i < n; ++i) {
@@ -1768,6 +1770,7 @@ static TCGTemp *tcg_temp_new_internal(TCGType type, TCGTempKind kind)
             ts2->type = TCG_TYPE_REG;
             ts2->temp_allocated = 1;
             ts2->temp_subindex = i;
+            ts2->temp_subindex_len = n - 1;
             ts2->kind = kind;
         }
     }
@@ -1776,8 +1779,28 @@ static TCGTemp *tcg_temp_new_internal(TCGType type, TCGTempKind kind)
     ts_expr->base_type = TCG_TYPE_PTR;
     ts_expr->type = TCG_TYPE_PTR;
     ts_expr->temp_allocated = 1;
+    ts_expr->temp_subindex = 0;
     ts_expr->kind = kind;
     ts_expr->symbolic_expression = 1;
+
+    // We allocate multiple symbolic expressions if n > 1 since TCG's i128 are
+    // split in 64 bits blocks for now, so it is more convenient.
+    // It could be more efficient to have 1 symbolic expression if later TCG's i128 are
+    // handled as a single block.
+    if (n > 1) {
+        for (int i = 1; i < n; ++i) {
+            TCGTemp *ts2_expr = tcg_temp_alloc(s);
+
+            tcg_debug_assert(ts2_expr == ts_expr + i);
+            tcg_debug_assert(ts2_expr == ts + n + i);
+            ts2_expr->base_type = TCG_TYPE_PTR;
+            ts2_expr->type = TCG_TYPE_PTR;
+            ts2_expr->temp_allocated = 1;
+            ts2_expr->temp_subindex = i;
+            ts2_expr->kind = kind;
+            ts2_expr->symbolic_expression = 1;
+        }
+    }
 
     return ts;
 }
