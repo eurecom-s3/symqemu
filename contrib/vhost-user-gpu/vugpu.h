@@ -37,6 +37,7 @@ typedef enum VhostUserGpuRequest {
     VHOST_USER_GPU_DMABUF_SCANOUT,
     VHOST_USER_GPU_DMABUF_UPDATE,
     VHOST_USER_GPU_GET_EDID,
+    VHOST_USER_GPU_DMABUF_SCANOUT2,
 } VhostUserGpuRequest;
 
 typedef struct VhostUserGpuDisplayInfoReply {
@@ -84,6 +85,11 @@ typedef struct VhostUserGpuDMABUFScanout {
     int fd_drm_fourcc;
 } QEMU_PACKED VhostUserGpuDMABUFScanout;
 
+typedef struct VhostUserGpuDMABUFScanout2 {
+    struct VhostUserGpuDMABUFScanout dmabuf_scanout;
+    uint64_t modifier;
+} QEMU_PACKED VhostUserGpuDMABUFScanout2;
+
 typedef struct VhostUserGpuEdidRequest {
     uint32_t scanout_id;
 } QEMU_PACKED VhostUserGpuEdidRequest;
@@ -98,6 +104,7 @@ typedef struct VhostUserGpuMsg {
         VhostUserGpuScanout scanout;
         VhostUserGpuUpdate update;
         VhostUserGpuDMABUFScanout dmabuf_scanout;
+        VhostUserGpuDMABUFScanout2 dmabuf_scanout2;
         VhostUserGpuEdidRequest edid_req;
         struct virtio_gpu_resp_edid resp_edid;
         struct virtio_gpu_resp_display_info display_info;
@@ -112,6 +119,7 @@ static VhostUserGpuMsg m __attribute__ ((unused));
 #define VHOST_USER_GPU_MSG_FLAG_REPLY 0x4
 
 #define VHOST_USER_GPU_PROTOCOL_F_EDID 0
+#define VHOST_USER_GPU_PROTOCOL_F_DMABUF2 1
 
 struct virtio_gpu_scanout {
     uint32_t width, height;
@@ -132,6 +140,7 @@ typedef struct VuGpu {
     bool virgl;
     bool virgl_inited;
     bool edid_inited;
+    bool use_modifiers;
     uint32_t inflight;
 
     struct virtio_gpu_scanout scanout[VIRTIO_GPU_MAX_SCANOUTS];
@@ -155,12 +164,12 @@ struct virtio_gpu_ctrl_command {
 };
 
 #define VUGPU_FILL_CMD(out) do {                                \
-        size_t s;                                               \
-        s = iov_to_buf(cmd->elem.out_sg, cmd->elem.out_num, 0,  \
+        size_t vugpufillcmd_s_ =                                \
+            iov_to_buf(cmd->elem.out_sg, cmd->elem.out_num, 0,  \
                        &out, sizeof(out));                      \
-        if (s != sizeof(out)) {                                 \
+        if (vugpufillcmd_s_ != sizeof(out)) {                   \
             g_critical("%s: command size incorrect %zu vs %zu", \
-                       __func__, s, sizeof(out));               \
+                       __func__, vugpufillcmd_s_, sizeof(out)); \
             return;                                             \
         }                                                       \
     } while (0)

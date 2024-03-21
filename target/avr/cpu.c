@@ -25,6 +25,7 @@
 #include "cpu.h"
 #include "disas/dis-asm.h"
 #include "tcg/debug-assert.h"
+#include "hw/qdev-properties.h"
 
 static void avr_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -95,7 +96,7 @@ static void avr_cpu_reset_hold(Object *obj)
     env->rampY = 0;
     env->rampZ = 0;
     env->eind = 0;
-    env->sp = 0;
+    env->sp = cpu->init_sp;
 
     env->skip = 0;
 
@@ -147,20 +148,22 @@ static void avr_cpu_initfn(Object *obj)
 {
     AVRCPU *cpu = AVR_CPU(obj);
 
-    cpu_set_cpustate_pointers(cpu);
-
     /* Set the number of interrupts supported by the CPU. */
     qdev_init_gpio_in(DEVICE(cpu), avr_cpu_set_int,
                       sizeof(cpu->env.intsrc) * 8);
 }
+
+static Property avr_cpu_properties[] = {
+    DEFINE_PROP_UINT32("init-sp", AVRCPU, init_sp, 0),
+    DEFINE_PROP_END_OF_LIST()
+};
 
 static ObjectClass *avr_cpu_class_by_name(const char *cpu_model)
 {
     ObjectClass *oc;
 
     oc = object_class_by_name(cpu_model);
-    if (object_class_dynamic_cast(oc, TYPE_AVR_CPU) == NULL ||
-        object_class_is_abstract(oc)) {
+    if (object_class_dynamic_cast(oc, TYPE_AVR_CPU) == NULL) {
         oc = NULL;
     }
     return oc;
@@ -230,6 +233,8 @@ static void avr_cpu_class_init(ObjectClass *oc, void *data)
     ResettableClass *rc = RESETTABLE_CLASS(oc);
 
     device_class_set_parent_realize(dc, avr_cpu_realizefn, &mcc->parent_realize);
+
+    device_class_set_props(dc, avr_cpu_properties);
 
     resettable_class_set_parent_phases(rc, NULL, avr_cpu_reset_hold, NULL,
                                        &mcc->parent_phases);
@@ -390,6 +395,7 @@ static const TypeInfo avr_cpu_type_info[] = {
         .name = TYPE_AVR_CPU,
         .parent = TYPE_CPU,
         .instance_size = sizeof(AVRCPU),
+        .instance_align = __alignof(AVRCPU),
         .instance_init = avr_cpu_initfn,
         .class_size = sizeof(AVRCPUClass),
         .class_init = avr_cpu_class_init,

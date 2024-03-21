@@ -383,6 +383,9 @@ static void test_sync_op_check(BdrvChild *c)
 
 static void test_sync_op_activate(BdrvChild *c)
 {
+    GLOBAL_STATE_CODE();
+    GRAPH_RDLOCK_GUARD_MAINLOOP();
+
     /* Early success: Image is not inactive */
     bdrv_activate(c->bs, NULL);
 }
@@ -468,11 +471,16 @@ static void test_sync_op(const void *opaque)
     BlockDriverState *bs;
     BdrvChild *c;
 
+    GLOBAL_STATE_CODE();
+
     blk = blk_new(qemu_get_aio_context(), BLK_PERM_ALL, BLK_PERM_ALL);
     bs = bdrv_new_open_driver(&bdrv_test, "base", BDRV_O_RDWR, &error_abort);
     bs->total_sectors = 65536 / BDRV_SECTOR_SIZE;
     blk_insert_bs(blk, bs, &error_abort);
+
+    bdrv_graph_rdlock_main_loop();
     c = QLIST_FIRST(&bs->parents);
+    bdrv_graph_rdunlock_main_loop();
 
     blk_set_aio_context(blk, ctx, &error_abort);
     aio_context_acquire(ctx);
@@ -756,11 +764,14 @@ static void test_propagate_mirror(void)
                                   &error_abort);
 
     /* Start a mirror job */
+    aio_context_acquire(main_ctx);
     mirror_start("job0", src, target, NULL, JOB_DEFAULT, 0, 0, 0,
                  MIRROR_SYNC_MODE_NONE, MIRROR_OPEN_BACKING_CHAIN, false,
                  BLOCKDEV_ON_ERROR_REPORT, BLOCKDEV_ON_ERROR_REPORT,
                  false, "filter_node", MIRROR_COPY_MODE_BACKGROUND,
                  &error_abort);
+    aio_context_release(main_ctx);
+
     WITH_JOB_LOCK_GUARD() {
         job = job_get_locked("job0");
     }

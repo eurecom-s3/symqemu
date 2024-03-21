@@ -69,6 +69,7 @@ packages:
  - liburing
  - libusbx
  - libvdeplug
+ - libxdp
  - libzstd
  - llvm
  - lttng-ust
@@ -85,7 +86,7 @@ packages:
  - pam
  - pcre-static
  - pixman
- - pipewire
+ - libpipewire-dev
  - pkg-config
  - pulseaudio
  - python3
@@ -96,6 +97,7 @@ packages:
  - python3-pip
  - python3-sphinx
  - python3-sphinx-rtd-theme
+ - python3-tomli
  - python3-venv
  - rpm2cpio
  - sdl2
@@ -108,6 +110,7 @@ packages:
  - spice-protocol
  - spice-server
  - ssh-client
+ - swtpm
  - systemd
  - tar
  - tesseract

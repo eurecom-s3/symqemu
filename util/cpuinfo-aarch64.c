@@ -1,6 +1,6 @@
 /*
  * SPDX-License-Identifier: GPL-2.0-or-later
- * Host specific cpu indentification for AArch64.
+ * Host specific cpu identification for AArch64.
  */
 
 #include "qemu/osdep.h"
@@ -12,6 +12,9 @@
 # else
 #  include <asm/hwcap.h>
 #  include "elf.h"
+# endif
+# ifndef HWCAP2_BTI
+#  define HWCAP2_BTI 0  /* added in glibc 2.32 */
 # endif
 #endif
 #ifdef CONFIG_DARWIN
@@ -33,7 +36,7 @@ static bool sysctl_for_bool(const char *name)
     /*
      * We might in the future ask for properties not present in older kernels,
      * but we're only asking about static properties, all of which should be
-     * 'int'.  So we shouln't see ENOMEM (val too small), or any of the other
+     * 'int'.  So we shouldn't see ENOMEM (val too small), or any of the other
      * more exotic errors.
      */
     assert(errno == ENOENT);
@@ -56,12 +59,18 @@ unsigned __attribute__((constructor)) cpuinfo_init(void)
     unsigned long hwcap = qemu_getauxval(AT_HWCAP);
     info |= (hwcap & HWCAP_ATOMICS ? CPUINFO_LSE : 0);
     info |= (hwcap & HWCAP_USCAT ? CPUINFO_LSE2 : 0);
-    info |= (hwcap & HWCAP_AES ? CPUINFO_AES: 0);
+    info |= (hwcap & HWCAP_AES ? CPUINFO_AES : 0);
+    info |= (hwcap & HWCAP_PMULL ? CPUINFO_PMULL : 0);
+
+    unsigned long hwcap2 = qemu_getauxval(AT_HWCAP2);
+    info |= (hwcap2 & HWCAP2_BTI ? CPUINFO_BTI : 0);
 #endif
 #ifdef CONFIG_DARWIN
     info |= sysctl_for_bool("hw.optional.arm.FEAT_LSE") * CPUINFO_LSE;
     info |= sysctl_for_bool("hw.optional.arm.FEAT_LSE2") * CPUINFO_LSE2;
     info |= sysctl_for_bool("hw.optional.arm.FEAT_AES") * CPUINFO_AES;
+    info |= sysctl_for_bool("hw.optional.arm.FEAT_PMULL") * CPUINFO_PMULL;
+    info |= sysctl_for_bool("hw.optional.arm.FEAT_BTI") * CPUINFO_BTI;
 #endif
 
     cpuinfo = info;

@@ -409,6 +409,8 @@
 #
 # @zero: whether the virtual blocks read as zeroes
 #
+# @compressed: true if the data is stored compressed (since 8.2)
+#
 # @depth: number of layers (0 = top image, 1 = top image's backing
 #     file, ..., n - 1 = bottom image (where n is the number of images
 #     in the chain)) before reaching one for which the range is
@@ -426,8 +428,8 @@
 ##
 { 'struct': 'MapEntry',
   'data': {'start': 'int', 'length': 'int', 'data': 'bool',
-           'zero': 'bool', 'depth': 'int', 'present': 'bool',
-           '*offset': 'int', '*filename': 'str' } }
+           'zero': 'bool', 'compressed': 'bool', 'depth': 'int',
+           'present': 'bool', '*offset': 'int', '*filename': 'str' } }
 
 ##
 # @BlockdevCacheInfo:
@@ -1351,6 +1353,20 @@
   'data': ['background', 'write-blocking'] }
 
 ##
+# @BlockJobInfoMirror:
+#
+# Information specific to mirror block jobs.
+#
+# @actively-synced: Whether the source is actively synced to the
+#     target, i.e. same data and new writes are done synchronously to
+#     both.
+#
+# Since 8.2
+##
+{ 'struct': 'BlockJobInfoMirror',
+  'data': { 'actively-synced': 'bool' } }
+
+##
 # @BlockJobInfo:
 #
 # Information about a long-running block device operation.
@@ -1393,13 +1409,15 @@
 #
 # Since: 1.1
 ##
-{ 'struct': 'BlockJobInfo',
-  'data': {'type': 'str', 'device': 'str', 'len': 'int',
+{ 'union': 'BlockJobInfo',
+  'base': {'type': 'JobType', 'device': 'str', 'len': 'int',
            'offset': 'int', 'busy': 'bool', 'paused': 'bool', 'speed': 'int',
            'io-status': 'BlockDeviceIoStatus', 'ready': 'bool',
            'status': 'JobStatus',
            'auto-finalize': 'bool', 'auto-dismiss': 'bool',
-           '*error': 'str' } }
+           '*error': 'str' },
+  'discriminator': 'type',
+  'data': { 'mirror': 'BlockJobInfoMirror' } }
 
 ##
 # @query-block-jobs:
@@ -3043,6 +3061,43 @@
   'allow-preconfig': true }
 
 ##
+# @BlockJobChangeOptionsMirror:
+#
+# @copy-mode: Switch to this copy mode.  Currently, only the switch
+#     from 'background' to 'write-blocking' is implemented.
+#
+# Since: 8.2
+##
+{ 'struct': 'BlockJobChangeOptionsMirror',
+  'data': { 'copy-mode' : 'MirrorCopyMode' } }
+
+##
+# @BlockJobChangeOptions:
+#
+# Block job options that can be changed after job creation.
+#
+# @id: The job identifier
+#
+# @type: The job type
+#
+# Since 8.2
+##
+{ 'union': 'BlockJobChangeOptions',
+  'base': { 'id': 'str', 'type': 'JobType' },
+  'discriminator': 'type',
+  'data': { 'mirror': 'BlockJobChangeOptionsMirror' } }
+
+##
+# @block-job-change:
+#
+# Change the block job's options.
+#
+# Since: 8.2
+##
+{ 'command': 'block-job-change',
+  'data': 'BlockJobChangeOptions', 'boxed': true }
+
+##
 # @BlockdevDiscardOptions:
 #
 # Determines how to handle discard requests.
@@ -3473,16 +3528,20 @@
 # @pass-discard-other: whether discard requests for the data source
 #     should be issued on other occasions where a cluster gets freed
 #
-# @discard-no-unref: when enabled, discards from the guest will not
-#     cause cluster allocations to be relinquished.  This prevents
-#     qcow2 fragmentation that would be caused by such discards.
-#     Besides potential performance degradation, such fragmentation
-#     can lead to increased allocation of clusters past the end of the
-#     image file, resulting in image files whose file length can grow
-#     much larger than their guest disk size would suggest.  If image
-#     file length is of concern (e.g. when storing qcow2 images
-#     directly on block devices), you should consider enabling this
-#     option.  (since 8.1)
+# @discard-no-unref: when enabled, data clusters will remain
+#     preallocated when they are no longer used, e.g. because they are
+#     discarded or converted to zero clusters.  As usual, whether the
+#     old data is discarded or kept on the protocol level (i.e. in the
+#     image file) depends on the setting of the pass-discard-request
+#     option.  Keeping the clusters preallocated prevents qcow2
+#     fragmentation that would otherwise be caused by freeing and
+#     re-allocating them later.  Besides potential performance
+#     degradation, such fragmentation can lead to increased allocation
+#     of clusters past the end of the image file, resulting in image
+#     files whose file length can grow much larger than their guest disk
+#     size would suggest.  If image file length is of concern (e.g. when
+#     storing qcow2 images directly on block devices), you should
+#     consider enabling this option.  (since 8.1)
 #
 # @overlap-check: which overlap checks to perform for writes to the
 #     image, defaults to 'cached' (since 2.2)

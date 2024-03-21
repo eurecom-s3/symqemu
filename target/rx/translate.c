@@ -237,7 +237,7 @@ static int is_privileged(DisasContext *ctx, int is_exception)
 {
     if (FIELD_EX32(ctx->tb_flags, PSW, PM)) {
         if (is_exception) {
-            gen_helper_raise_privilege_violation(cpu_env);
+            gen_helper_raise_privilege_violation(tcg_env);
         }
         return 0;
     } else {
@@ -318,7 +318,7 @@ static void move_from_cr(DisasContext *ctx, TCGv ret, int cr, uint32_t pc)
 {
     switch (cr) {
     case 0:     /* PSW */
-        gen_helper_pack_psw(ret, cpu_env);
+        gen_helper_pack_psw(ret, tcg_env);
         break;
     case 1:     /* PC */
         tcg_gen_movi_i32(ret, pc);
@@ -370,7 +370,7 @@ static void move_to_cr(DisasContext *ctx, TCGv val, int cr)
     }
     switch (cr) {
     case 0:     /* PSW */
-        gen_helper_set_psw(cpu_env, val);
+        gen_helper_set_psw(tcg_env, val);
         if (is_privileged(ctx, 0)) {
             /* PSW.{I,U} may be updated here. exit TB. */
             ctx->base.is_jmp = DISAS_UPDATE;
@@ -385,7 +385,7 @@ static void move_to_cr(DisasContext *ctx, TCGv val, int cr)
         }
         break;
     case 3:     /* FPSW */
-        gen_helper_set_fpsw(cpu_env, val);
+        gen_helper_set_fpsw(tcg_env, val);
         break;
     case 8:     /* BPSW */
         tcg_gen_mov_i32(cpu_bpsw, val);
@@ -492,13 +492,11 @@ static bool trans_MOV_ra(DisasContext *ctx, arg_MOV_ra *a)
 /* mov.<bwl> rs,rd */
 static bool trans_MOV_mm(DisasContext *ctx, arg_MOV_mm *a)
 {
-    static void (* const mov[])(TCGv ret, TCGv arg) = {
-        tcg_gen_ext8s_i32, tcg_gen_ext16s_i32, tcg_gen_mov_i32,
-    };
     TCGv tmp, mem, addr;
+
     if (a->lds == 3 && a->ldd == 3) {
         /* mov.<bwl> rs,rd */
-        mov[a->sz](cpu_regs[a->rd], cpu_regs[a->rs]);
+        tcg_gen_ext_i32(cpu_regs[a->rd], cpu_regs[a->rs], a->sz | MO_SIGN);
         return true;
     }
 
@@ -570,10 +568,7 @@ static bool trans_MOVU_mr(DisasContext *ctx, arg_MOVU_mr *a)
 /* movu.<bw> rs,rd */
 static bool trans_MOVU_rr(DisasContext *ctx, arg_MOVU_rr *a)
 {
-    static void (* const ext[])(TCGv ret, TCGv arg) = {
-        tcg_gen_ext8u_i32, tcg_gen_ext16u_i32,
-    };
-    ext[a->sz](cpu_regs[a->rd], cpu_regs[a->rs]);
+    tcg_gen_ext_i32(cpu_regs[a->rd], cpu_regs[a->rs], a->sz);
     return true;
 }
 
@@ -1244,12 +1239,12 @@ static bool trans_EMULU_mr(DisasContext *ctx, arg_EMULU_mr *a)
 
 static void rx_div(TCGv ret, TCGv arg1, TCGv arg2)
 {
-    gen_helper_div(ret, cpu_env, arg1, arg2);
+    gen_helper_div(ret, tcg_env, arg1, arg2);
 }
 
 static void rx_divu(TCGv ret, TCGv arg1, TCGv arg2)
 {
-    gen_helper_divu(ret, cpu_env, arg1, arg2);
+    gen_helper_divu(ret, tcg_env, arg1, arg2);
 }
 
 /* div #imm, rd */
@@ -1644,35 +1639,35 @@ static bool trans_NOP(DisasContext *ctx, arg_NOP *a)
 /* scmpu */
 static bool trans_SCMPU(DisasContext *ctx, arg_SCMPU *a)
 {
-    gen_helper_scmpu(cpu_env);
+    gen_helper_scmpu(tcg_env);
     return true;
 }
 
 /* smovu */
 static bool trans_SMOVU(DisasContext *ctx, arg_SMOVU *a)
 {
-    gen_helper_smovu(cpu_env);
+    gen_helper_smovu(tcg_env);
     return true;
 }
 
 /* smovf */
 static bool trans_SMOVF(DisasContext *ctx, arg_SMOVF *a)
 {
-    gen_helper_smovf(cpu_env);
+    gen_helper_smovf(tcg_env);
     return true;
 }
 
 /* smovb */
 static bool trans_SMOVB(DisasContext *ctx, arg_SMOVB *a)
 {
-    gen_helper_smovb(cpu_env);
+    gen_helper_smovb(tcg_env);
     return true;
 }
 
 #define STRING(op)                              \
     do {                                        \
         TCGv size = tcg_constant_i32(a->sz);    \
-        gen_helper_##op(cpu_env, size);         \
+        gen_helper_##op(tcg_env, size);         \
     } while (0)
 
 /* suntile.<bwl> */
@@ -1803,7 +1798,7 @@ static bool trans_MVTACLO(DisasContext *ctx, arg_MVTACLO *a)
 static bool trans_RACW(DisasContext *ctx, arg_RACW *a)
 {
     TCGv imm = tcg_constant_i32(a->imm + 1);
-    gen_helper_racw(cpu_env, imm);
+    gen_helper_racw(tcg_env, imm);
     return true;
 }
 
@@ -1825,7 +1820,7 @@ static bool trans_SAT(DisasContext *ctx, arg_SAT *a)
 /* satr */
 static bool trans_SATR(DisasContext *ctx, arg_SATR *a)
 {
-    gen_helper_satr(cpu_env);
+    gen_helper_satr(tcg_env);
     return true;
 }
 
@@ -1835,7 +1830,7 @@ static bool trans_SATR(DisasContext *ctx, arg_SATR *a)
                                         cat3(arg_, name, _ir) * a)      \
     {                                                                   \
         TCGv imm = tcg_constant_i32(li(ctx, 0));                        \
-        gen_helper_##op(cpu_regs[a->rd], cpu_env,                       \
+        gen_helper_##op(cpu_regs[a->rd], tcg_env,                       \
                         cpu_regs[a->rd], imm);                          \
         return true;                                                    \
     }                                                                   \
@@ -1845,7 +1840,7 @@ static bool trans_SATR(DisasContext *ctx, arg_SATR *a)
         TCGv val, mem;                                                  \
         mem = tcg_temp_new();                                           \
         val = rx_load_source(ctx, mem, a->ld, MO_32, a->rs);            \
-        gen_helper_##op(cpu_regs[a->rd], cpu_env,                       \
+        gen_helper_##op(cpu_regs[a->rd], tcg_env,                       \
                         cpu_regs[a->rd], val);                          \
         return true;                                                    \
     }
@@ -1856,7 +1851,7 @@ static bool trans_SATR(DisasContext *ctx, arg_SATR *a)
         TCGv val, mem;                                          \
         mem = tcg_temp_new();                                   \
         val = rx_load_source(ctx, mem, a->ld, MO_32, a->rs);    \
-        gen_helper_##op(cpu_regs[a->rd], cpu_env, val);         \
+        gen_helper_##op(cpu_regs[a->rd], tcg_env, val);         \
         return true;                                            \
     }
 
@@ -1869,7 +1864,7 @@ FOP(FDIV, fdiv)
 static bool trans_FCMP_ir(DisasContext *ctx, arg_FCMP_ir * a)
 {
     TCGv imm = tcg_constant_i32(li(ctx, 0));
-    gen_helper_fcmp(cpu_env, cpu_regs[a->rd], imm);
+    gen_helper_fcmp(tcg_env, cpu_regs[a->rd], imm);
     return true;
 }
 
@@ -1880,7 +1875,7 @@ static bool trans_FCMP_mr(DisasContext *ctx, arg_FCMP_mr *a)
     TCGv val, mem;
     mem = tcg_temp_new();
     val = rx_load_source(ctx, mem, a->ld, MO_32, a->rs);
-    gen_helper_fcmp(cpu_env, cpu_regs[a->rd], val);
+    gen_helper_fcmp(tcg_env, cpu_regs[a->rd], val);
     return true;
 }
 
@@ -1894,7 +1889,7 @@ static bool trans_ITOF(DisasContext *ctx, arg_ITOF * a)
     TCGv val, mem;
     mem = tcg_temp_new();
     val = rx_load_source(ctx, mem, a->ld, a->mi, a->rs);
-    gen_helper_itof(cpu_regs[a->rd], cpu_env, val);
+    gen_helper_itof(cpu_regs[a->rd], tcg_env, val);
     return true;
 }
 
@@ -2146,7 +2141,7 @@ static bool trans_RTFI(DisasContext *ctx, arg_RTFI *a)
         psw = tcg_temp_new();
         tcg_gen_mov_i32(cpu_pc, cpu_bpc);
         tcg_gen_mov_i32(psw, cpu_bpsw);
-        gen_helper_set_psw_rte(cpu_env, psw);
+        gen_helper_set_psw_rte(tcg_env, psw);
         ctx->base.is_jmp = DISAS_EXIT;
     }
     return true;
@@ -2160,7 +2155,7 @@ static bool trans_RTE(DisasContext *ctx, arg_RTE *a)
         psw = tcg_temp_new();
         pop(cpu_pc);
         pop(psw);
-        gen_helper_set_psw_rte(cpu_env, psw);
+        gen_helper_set_psw_rte(tcg_env, psw);
         ctx->base.is_jmp = DISAS_EXIT;
     }
     return true;
@@ -2170,7 +2165,7 @@ static bool trans_RTE(DisasContext *ctx, arg_RTE *a)
 static bool trans_BRK(DisasContext *ctx, arg_BRK *a)
 {
     tcg_gen_movi_i32(cpu_pc, ctx->base.pc_next);
-    gen_helper_rxbrk(cpu_env);
+    gen_helper_rxbrk(tcg_env);
     ctx->base.is_jmp = DISAS_NORETURN;
     return true;
 }
@@ -2183,7 +2178,7 @@ static bool trans_INT(DisasContext *ctx, arg_INT *a)
     tcg_debug_assert(a->imm < 0x100);
     vec = tcg_constant_i32(a->imm);
     tcg_gen_movi_i32(cpu_pc, ctx->base.pc_next);
-    gen_helper_rxint(cpu_env, vec);
+    gen_helper_rxint(tcg_env, vec);
     ctx->base.is_jmp = DISAS_NORETURN;
     return true;
 }
@@ -2193,14 +2188,14 @@ static bool trans_WAIT(DisasContext *ctx, arg_WAIT *a)
 {
     if (is_privileged(ctx, 1)) {
         tcg_gen_movi_i32(cpu_pc, ctx->base.pc_next);
-        gen_helper_wait(cpu_env);
+        gen_helper_wait(tcg_env);
     }
     return true;
 }
 
 static void rx_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
 {
-    CPURXState *env = cs->env_ptr;
+    CPURXState *env = cpu_env(cs);
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
     ctx->env = env;
     ctx->tb_flags = ctx->base.tb->flags;
@@ -2225,7 +2220,7 @@ static void rx_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     ctx->pc = ctx->base.pc_next;
     insn = decode_load(ctx);
     if (!decode(ctx, insn)) {
-        gen_helper_raise_illegal_instruction(cpu_env);
+        gen_helper_raise_illegal_instruction(tcg_env);
     }
 }
 
@@ -2279,7 +2274,7 @@ void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int *max_insns,
 }
 
 #define ALLOC_REGISTER(sym, name) \
-    cpu_##sym = tcg_global_mem_new_i32(cpu_env, \
+    cpu_##sym = tcg_global_mem_new_i32(tcg_env, \
                                        offsetof(CPURXState, sym), name)
 
 void rx_translate_init(void)
@@ -2291,7 +2286,7 @@ void rx_translate_init(void)
     int i;
 
     for (i = 0; i < NUM_REGS; i++) {
-        cpu_regs[i] = tcg_global_mem_new_i32(cpu_env,
+        cpu_regs[i] = tcg_global_mem_new_i32(tcg_env,
                                               offsetof(CPURXState, regs[i]),
                                               regnames[i]);
     }
@@ -2311,6 +2306,6 @@ void rx_translate_init(void)
     ALLOC_REGISTER(isp, "ISP");
     ALLOC_REGISTER(fintv, "FINTV");
     ALLOC_REGISTER(intb, "INTB");
-    cpu_acc = tcg_global_mem_new_i64(cpu_env,
+    cpu_acc = tcg_global_mem_new_i64(tcg_env,
                                      offsetof(CPURXState, acc), "ACC");
 }

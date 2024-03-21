@@ -114,6 +114,8 @@ DEF_HELPER_FLAGS_6(sym_deposit_i64, TCG_CALL_NO_RWG_SE, ptr, i64, ptr, i64, ptr,
 /* Conditionals */
 DEF_HELPER_FLAGS_7(sym_setcond_i32, TCG_CALL_NO_RWG, ptr, env, i32, ptr, i32, ptr, s32, i32)
 DEF_HELPER_FLAGS_7(sym_setcond_i64, TCG_CALL_NO_RWG, ptr, env, i64, ptr, i64, ptr, s32, i64)
+DEF_HELPER_FLAGS_11(sym_movcond_i32, TCG_CALL_NO_RWG, ptr, env, i32, ptr, i32, ptr, i32, ptr, i32, ptr, s32, i32)
+DEF_HELPER_FLAGS_11(sym_movcond_i64, TCG_CALL_NO_RWG, ptr, env, i64, ptr, i64, ptr, i64, ptr, i64, ptr, s32, i64)
 
 /* Context tracking */
 DEF_HELPER_FLAGS_1(sym_notify_call, TCG_CALL_NO_RWG, void, i64)

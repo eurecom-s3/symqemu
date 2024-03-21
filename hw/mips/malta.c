@@ -37,7 +37,6 @@
 #include "hw/block/flash.h"
 #include "hw/mips/mips.h"
 #include "hw/mips/bootloader.h"
-#include "hw/mips/cpudevs.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bus.h"
 #include "qemu/log.h"
@@ -206,7 +205,7 @@ static eeprom24c0x_t spd_eeprom = {
 
 static void generate_eeprom_spd(uint8_t *eeprom, ram_addr_t ram_size)
 {
-    enum { SDR = 0x4, DDR2 = 0x8 } type;
+    enum sdram_type type;
     uint8_t *spd = spd_eeprom.contents;
     uint8_t nbanks = 0;
     uint16_t density = 0;
@@ -627,7 +626,7 @@ static void bl_setup_gt64120_jump_kernel(void **p, uint64_t run_addr,
         10, 10, 11, 11 /* PIIX IRQRC[A:D] */
     };
 
-    /* Bus endianess is always reversed */
+    /* Bus endianness is always reversed */
 #if TARGET_BIG_ENDIAN
 #define cpu_to_gt32(x) (x)
 #else
@@ -870,7 +869,6 @@ static uint64_t load_kernel(void)
     uint64_t kernel_entry, kernel_high, initrd_size;
     long kernel_size;
     ram_addr_t initrd_offset;
-    int big_endian;
     uint32_t *prom_buf;
     long prom_size;
     int prom_index = 0;
@@ -878,16 +876,10 @@ static uint64_t load_kernel(void)
     char rng_seed_hex[sizeof(rng_seed) * 2 + 1];
     size_t rng_seed_prom_offset;
 
-#if TARGET_BIG_ENDIAN
-    big_endian = 1;
-#else
-    big_endian = 0;
-#endif
-
     kernel_size = load_elf(loaderparams.kernel_filename, NULL,
                            cpu_mips_kseg0_to_phys, NULL,
                            &kernel_entry, NULL,
-                           &kernel_high, NULL, big_endian, EM_MIPS,
+                           &kernel_high, NULL, TARGET_BIG_ENDIAN, EM_MIPS,
                            1, 0);
     if (kernel_size < 0) {
         error_report("could not load kernel '%s': %s",
@@ -1107,7 +1099,6 @@ void mips_malta_init(MachineState *machine)
     I2CBus *smbus;
     DriveInfo *dinfo;
     int fl_idx = 0;
-    int be;
     MaltaState *s;
     PCIDevice *piix4;
     DeviceState *dev;
@@ -1144,12 +1135,6 @@ void mips_malta_init(MachineState *machine)
                                     ram_low_postio);
     }
 
-#if TARGET_BIG_ENDIAN
-    be = 1;
-#else
-    be = 0;
-#endif
-
     /* FPGA */
 
     /* The CBUS UART is attached to the MIPS CPU INT2 pin, ie interrupt 4 */
@@ -1161,7 +1146,8 @@ void mips_malta_init(MachineState *machine)
                                FLASH_SIZE,
                                dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
                                65536,
-                               4, 0x0000, 0x0000, 0x0000, 0x0000, be);
+                               4, 0x0000, 0x0000, 0x0000, 0x0000,
+                               TARGET_BIG_ENDIAN);
     bios = pflash_cfi01_get_memory(fl);
     fl_idx++;
     if (kernel_filename) {
@@ -1245,14 +1231,15 @@ void mips_malta_init(MachineState *machine)
 
     /* Northbridge */
     dev = qdev_new("gt64120");
-    qdev_prop_set_bit(dev, "cpu-little-endian", !be);
+    qdev_prop_set_bit(dev, "cpu-little-endian", !TARGET_BIG_ENDIAN);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     pci_bus = PCI_BUS(qdev_get_child_bus(dev, "pci"));
     pci_bus_map_irqs(pci_bus, malta_pci_slot_get_pirq);
 
     /* Southbridge */
-    piix4 = pci_create_simple_multifunction(pci_bus, PIIX4_PCI_DEVFN,
-                                            TYPE_PIIX4_PCI_DEVICE);
+    piix4 = pci_new_multifunction(PIIX4_PCI_DEVFN, TYPE_PIIX4_PCI_DEVICE);
+    qdev_prop_set_uint32(DEVICE(piix4), "smb_io_base", 0x1100);
+    pci_realize_and_unref(piix4, pci_bus, &error_fatal);
     isa_bus = ISA_BUS(qdev_get_child_bus(DEVICE(piix4), "isa.0"));
 
     dev = DEVICE(object_resolve_path_component(OBJECT(piix4), "ide"));

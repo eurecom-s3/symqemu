@@ -30,7 +30,7 @@ struct QemuInputHandler {
 };
 
 QemuInputHandlerState *qemu_input_handler_register(DeviceState *dev,
-                                                   QemuInputHandler *handler);
+                                            const QemuInputHandler *handler);
 void qemu_input_handler_activate(QemuInputHandlerState *s);
 void qemu_input_handler_deactivate(QemuInputHandlerState *s);
 void qemu_input_handler_unregister(QemuInputHandlerState *s);
@@ -57,7 +57,7 @@ void qemu_input_queue_btn(QemuConsole *src, InputButton btn, bool down);
 void qemu_input_update_buttons(QemuConsole *src, uint32_t *button_map,
                                uint32_t button_old, uint32_t button_new);
 
-bool qemu_input_is_absolute(void);
+bool qemu_input_is_absolute(QemuConsole *con);
 int qemu_input_scale_axis(int value,
                           int min_in, int max_in,
                           int min_out, int max_out);

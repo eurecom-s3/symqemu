@@ -34,6 +34,11 @@ config PCA9552
     bool
     depends on I2C
 
+config I2C_ECHO
+    bool
+    default y if TEST_DEVICES
+    depends on I2C
+
 config PL310
     bool
 
@@ -185,5 +190,14 @@ config ALLWINNER_A10_DRAMC
 config AXP2XX_PMU
     bool
     depends on I2C
+
+config DJMEMC
+    bool
+
+config IOSB
+    bool
+
+config XLNX_VERSAL_TRNG
+    bool
 
 source macio/Kconfig

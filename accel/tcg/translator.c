@@ -14,16 +14,17 @@
 #include "exec/translator.h"
 #include "exec/plugin-gen.h"
 #include "tcg/tcg-op-common.h"
-#include "internal.h"
-#include "tcg/tcg-temp-internal.h"
+#include "internal-target.h"
 
 static void set_can_do_io(DisasContextBase *db, bool val)
 {
     if (db->saved_can_do_io != val) {
         db->saved_can_do_io = val;
-        tcg_gen_st_i32(tcg_constant_i32(val), cpu_env,
-                       offsetof(ArchCPU, parent_obj.can_do_io) -
-                       offsetof(ArchCPU, env));
+
+        QEMU_BUILD_BUG_ON(sizeof_field(CPUState, neg.can_do_io) != 1);
+        tcg_gen_st8_i32(tcg_constant_i32(val), tcg_env,
+                        offsetof(ArchCPU, parent_obj.neg.can_do_io) -
+                        offsetof(ArchCPU, env));
     }
 }
 
@@ -48,9 +49,9 @@ static TCGOp *gen_tb_start(DisasContextBase *db, uint32_t cflags)
 
     if ((cflags & CF_USE_ICOUNT) || !(cflags & CF_NOIRQ)) {
         count = tcg_temp_new_i32();
-        tcg_gen_ld_i32(count, cpu_env,
-                       offsetof(ArchCPU, neg.icount_decr.u32) -
-                       offsetof(ArchCPU, env));
+        tcg_gen_ld_i32(count, tcg_env,
+                       offsetof(ArchCPU, parent_obj.neg.icount_decr.u32)
+                       - offsetof(ArchCPU, env));
     }
 
     if (cflags & CF_USE_ICOUNT) {
@@ -78,21 +79,21 @@ static TCGOp *gen_tb_start(DisasContextBase *db, uint32_t cflags)
     }
 
     if (cflags & CF_USE_ICOUNT) {
-        tcg_gen_st16_i32(count, cpu_env,
-                         offsetof(ArchCPU, neg.icount_decr.u16.low) -
-                         offsetof(ArchCPU, env));
+        tcg_gen_st16_i32(count, tcg_env,
+                         offsetof(ArchCPU, parent_obj.neg.icount_decr.u16.low)
+                         - offsetof(ArchCPU, env));
     }
 
     /*
-     * cpu->can_do_io is set automatically here at the beginning of
+     * cpu->neg.can_do_io is set automatically here at the beginning of
      * each translation block.  The cost is minimal, plus it would be
      * very easy to forget doing it in the translator.
      */
-    set_can_do_io(db, db->max_insns == 1 && (cflags & CF_LAST_IO));
+    set_can_do_io(db, db->max_insns == 1);
 
-    TCGv_i64 block = tcg_constant_i64((uint64_t)db->tb);
+    TCGv_i64 block = tcg_constant_i64((int64_t) db->tb);
     gen_helper_sym_notify_block(block);
-    tcg_temp_free_i64(block);
+    // tcg_temp_free_i64(block); TODO: free is reserved for internal now, is it ok in that case?
 
     return icount_start_insn;
 }
@@ -154,13 +155,8 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
     ops->tb_start(db, cpu);
     tcg_debug_assert(db->is_jmp == DISAS_NEXT);  /* no early exit */
 
-    if (cflags & CF_MEMI_ONLY) {
-        /* We should only see CF_MEMI_ONLY for io_recompile. */
-        assert(cflags & CF_LAST_IO);
-        plugin_enabled = plugin_gen_tb_start(cpu, db, true);
-    } else {
-        plugin_enabled = plugin_gen_tb_start(cpu, db, false);
-    }
+    plugin_enabled = plugin_gen_tb_start(cpu, db, cflags & CF_MEMI_ONLY);
+    db->plugin_enabled = plugin_enabled;
 
     while (true) {
         *max_insns = ++db->num_insns;
@@ -171,11 +167,13 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
             plugin_gen_insn_start(cpu, db);
         }
 
-        /* Disassemble one instruction.  The translate_insn hook should
-           update db->pc_next and db->is_jmp to indicate what should be
-           done next -- either exiting this loop or locate the start of
-           the next instruction.  */
-        if (db->num_insns == db->max_insns && (cflags & CF_LAST_IO)) {
+        /*
+         * Disassemble one instruction.  The translate_insn hook should
+         * update db->pc_next and db->is_jmp to indicate what should be
+         * done next -- either exiting this loop or locate the start of
+         * the next instruction.
+         */
+        if (db->num_insns == db->max_insns) {
             /* Accept I/O on the last instruction.  */
             set_can_do_io(db, true);
         }
@@ -212,7 +210,7 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
     gen_tb_end(tb, cflags, icount_start_insn, db->num_insns);
 
     if (plugin_enabled) {
-        plugin_gen_tb_end(cpu);
+        plugin_gen_tb_end(cpu, db->num_insns);
     }
 
     /* The disas_log hook may use these values rather than recompute.  */

@@ -22,24 +22,24 @@ if get_option('tcg_interpreter')
   tcg_ss.add(files('tci.c'))
 endif
 
-tcg_ss = tcg_ss.apply(config_host, strict: false)
+tcg_ss = tcg_ss.apply(config_targetos, strict: false)
 
 libtcg_user = static_library('tcg_user',
                              tcg_ss.sources() + genh,
                              name_suffix: 'fa',
                              c_args: '-DCONFIG_USER_ONLY',
-                             build_by_default: have_user)
+                             build_by_default: false)
 
 tcg_user = declare_dependency(link_with: libtcg_user,
                               dependencies: tcg_ss.dependencies())
 user_ss.add(tcg_user)
 
-libtcg_softmmu = static_library('tcg_softmmu',
+libtcg_system = static_library('tcg_system',
                                 tcg_ss.sources() + genh,
                                 name_suffix: 'fa',
                                 c_args: '-DCONFIG_SOFTMMU',
-                                build_by_default: have_system)
+                                build_by_default: false)
 
-tcg_softmmu = declare_dependency(link_with: libtcg_softmmu,
+tcg_system = declare_dependency(link_with: libtcg_system,
                                  dependencies: tcg_ss.dependencies())
-system_ss.add(tcg_softmmu)
+system_ss.add(tcg_system)

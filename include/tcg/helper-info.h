@@ -1,5 +1,5 @@
 /*
- * TCG Helper Infomation Structure
+ * TCG Helper Information Structure
  *
  * Copyright (c) 2023 Linaro Ltd
  *
@@ -51,7 +51,7 @@ struct TCGHelperInfo {
     uintptr_t init;
 #endif
 
-    unsigned typemask           : 32;
+    unsigned long long typemask : 64;
     unsigned flags              : 8;
     unsigned nr_in              : 8;
     unsigned nr_out             : 8;

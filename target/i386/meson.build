@@ -25,12 +25,11 @@ i386_system_ss.add(when: 'CONFIG_SEV', if_true: files('sev.c'), if_false: files(
 i386_user_ss = ss.source_set()
 
 subdir('kvm')
-subdir('hax')
 subdir('whpx')
 subdir('nvmm')
 subdir('hvf')
 subdir('tcg')
 
 target_arch += {'i386': i386_ss}
-target_softmmu_arch += {'i386': i386_system_ss}
+target_system_arch += {'i386': i386_system_ss}
 target_user_arch += {'i386': i386_user_ss}

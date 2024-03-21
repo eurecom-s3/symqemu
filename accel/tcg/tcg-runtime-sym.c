@@ -592,6 +592,77 @@ void *HELPER(sym_setcond_i64)(CPUArchState *env,
             env, arg1, arg1_expr, arg2, arg2_expr, comparison_operator, is_taken, 64);
 }
 
+static void *sym_movcond_internal(CPUArchState *env,
+                              uint64_t c1, void *c1_expr,
+                              uint64_t c2, void *c2_expr,
+                              uint64_t v1, void *v1_expr,
+                              uint64_t v2, void *v2_expr,
+                              int32_t comparison_operator,
+                              uint64_t is_taken, uint8_t result_bits)
+{
+    if (c1_expr == NULL && c2_expr == NULL && v1_expr == NULL && v2_expr == NULL) {
+        return NULL;
+    }
+
+    if (c1_expr == NULL) {
+        c1_expr = _sym_build_integer(c1, _sym_bits_helper(c2_expr));
+    }
+
+    if (c2_expr == NULL) {
+        c2_expr = _sym_build_integer(c2, _sym_bits_helper(c1_expr));
+    }
+
+    if (v1_expr == NULL) {
+        v1_expr = _sym_build_integer(v1, _sym_bits_helper(c1_expr));
+    }
+
+    if (v2_expr == NULL) {
+        v2_expr = _sym_build_integer(v2, _sym_bits_helper(c1_expr));
+    }
+
+    assert(_sym_bits_helper(c1_expr) == result_bits);
+    assert(_sym_bits_helper(c2_expr) == result_bits);
+    assert(_sym_bits_helper(v1_expr) == result_bits);
+    assert(_sym_bits_helper(v2_expr) == result_bits);
+
+    void *condition_symbol = build_and_push_path_constraint(env, c1_expr, c2_expr, comparison_operator, is_taken);
+
+    void *condition_ext = _sym_build_sext(_sym_build_bool_to_bit(condition_symbol),
+                                          result_bits - 1);
+
+    assert(_sym_bits_helper(condition_ext) == result_bits);
+
+    void *v1_masked = _sym_build_and(v1_expr, condition_ext);
+    void *v2_masked = _sym_build_and(v2_expr, condition_ext);
+
+    return _sym_build_xor(v1_masked, v2_masked);
+}
+
+void *HELPER(sym_movcond_i32)(CPUArchState *env,
+                              uint32_t c1, void *c1_expr,
+                              uint32_t c2, void *c2_expr,
+                              uint32_t v1, void *v1_expr,
+                              uint32_t v2, void *v2_expr,
+                              int32_t comparison_operator,
+                              uint32_t is_taken)
+{
+    return sym_movcond_internal(
+            env, c1, c1_expr, c2, c2_expr,v1, v1_expr, v2, v2_expr, comparison_operator, is_taken, 32);
+}
+
+void *HELPER(sym_movcond_i64)(CPUArchState *env,
+                              uint64_t c1, void *c1_expr,
+                              uint64_t c2, void *c2_expr,
+                              uint64_t v1, void *v1_expr,
+                              uint64_t v2, void *v2_expr,
+                              int32_t comparison_operator,
+                              uint64_t is_taken)
+{
+    return sym_movcond_internal(
+            env, c1, c1_expr, c2, c2_expr,v1, v1_expr, v2, v2_expr, comparison_operator, is_taken, 64);
+}
+
+
 void HELPER(sym_notify_call)(uint64_t return_address)
 {
     _sym_notify_call(return_address);

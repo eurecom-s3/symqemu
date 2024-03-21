@@ -280,18 +280,18 @@ void vec_gen_4(TCGOpcode opc, TCGType type, unsigned vece,
 }
 
 /* static void vec_gen_6(TCGOpcode opc, TCGType type, unsigned vece, TCGArg r,
-                      TCGArg a, TCGArg b, TCGArg c, TCGArg d, TCGArg e)
-{
-    TCGOp *op = tcg_emit_op(opc, 6);
-    TCGOP_VECL(op) = type - TCG_TYPE_V64;
-    TCGOP_VECE(op) = vece;
-    op->args[0] = r;
-    op->args[1] = a;
-    op->args[2] = b;
-    op->args[3] = c;
-    op->args[4] = d;
-    op->args[5] = e;
-} */
+ *                       TCGArg a, TCGArg b, TCGArg c, TCGArg d, TCGArg e)
+ * {
+ *     TCGOp *op = tcg_emit_op(opc, 6);
+ *     TCGOP_VECL(op) = type - TCG_TYPE_V64;
+ *     TCGOP_VECE(op) = vece;
+ *     op->args[0] = r;
+ *     op->args[1] = a;
+ *     op->args[2] = b;
+ *     op->args[3] = c;
+ *     op->args[4] = d;
+ *     op->args[5] = e;
+ * }  */
 
 static void vec_gen_op2(TCGOpcode opc, unsigned vece, TCGv_vec r, TCGv_vec a)
 {
@@ -321,7 +321,7 @@ static void vec_gen_op3(TCGOpcode opc, unsigned vece,
 void tcg_gen_mov_vec(TCGv_vec r, TCGv_vec a)
 {
     if (r != a) {
-        tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_vec_expr_num(r), tcgv_vec_expr_num(a));
+        tcg_gen_mov_i64_concrete(tcgv_vec_expr_num(r), tcgv_vec_expr_num(a));
         vec_gen_op2(INDEX_op_mov_vec, 0, r, a);
     }
 }
@@ -472,11 +472,12 @@ void tcg_gen_andc_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
 
    /*
-   TODO (SymQEMU):
-   This instruction is not instrumented yet.
-   For now, we make sure that alternative instructions below, which are instrumented, are always used.
-   Directly instrumenting this instruction would improve performance of SymQEMU.
-   */
+    * TODO (SymQEMU):
+    * This instruction is not instrumented yet.
+    * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+    * Directly instrumenting this instruction would improve performance of SymQEMU.
+    */
+
 
    /* if (TCG_TARGET_HAS_andc_vec) {
         vec_gen_op3(INDEX_op_andc_vec, 0, r, a, b);
@@ -492,11 +493,12 @@ void tcg_gen_orc_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
 
     /*
-    TODO (SymQEMU):
-    This instruction is not instrumented yet.
-    For now, we make sure that alternative instructions below, which are instrumented, are always used.
-    Directly instrumenting this instruction would improve performance of SymQEMU.
-    */
+     * TODO (SymQEMU):
+     * This instruction is not instrumented yet.
+     * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+     * Directly instrumenting this instruction would improve performance of SymQEMU.
+     */
+
 
     /* if (TCG_TARGET_HAS_orc_vec) {
         vec_gen_op3(INDEX_op_orc_vec, 0, r, a, b);
@@ -512,11 +514,11 @@ void tcg_gen_nand_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
 
     /*
-    TODO (SymQEMU):
-    This instruction is not instrumented yet.
-    For now, we make sure that alternative instructions below, which are instrumented, are always used.
-    Directly instrumenting this instruction would improve performance of SymQEMU.
-    */
+     * TODO (SymQEMU):
+     * This instruction is not instrumented yet.
+     * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+     * Directly instrumenting this instruction would improve performance of SymQEMU.
+     */
 
     /* if (TCG_TARGET_HAS_nand_vec) {
         vec_gen_op3(INDEX_op_nand_vec, 0, r, a, b);
@@ -529,12 +531,12 @@ void tcg_gen_nand_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 void tcg_gen_nor_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
 
-    /*
-    TODO (SymQEMU):
-    This instruction is not instrumented yet.
-    For now, we make sure that alternative instructions below, which are instrumented, are always used.
-    Directly instrumenting this instruction would improve performance of SymQEMU.
-    */
+    /* TODO (SymQEMU):
+     * This instruction is not instrumented yet.
+     * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+     * Directly instrumenting this instruction would improve performance of SymQEMU.
+     */
+
 
     /* if (TCG_TARGET_HAS_nor_vec) {
         vec_gen_op3(INDEX_op_nor_vec, 0, r, a, b);
@@ -547,12 +549,11 @@ void tcg_gen_nor_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 void tcg_gen_eqv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 {
 
-    /*
-    TODO (SymQEMU):
-    This instruction is not instrumented yet.
-    For now, we make sure that alternative instructions below, which are instrumented, are always used.
-    Directly instrumenting this instruction would improve performance of SymQEMU.
-    */
+    /* TODO (SymQEMU):
+     * This instruction is not instrumented yet.
+     * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+     * Directly instrumenting this instruction would improve performance of SymQEMU. */
+    
 
     /* if (TCG_TARGET_HAS_eqv_vec) {
         vec_gen_op3(INDEX_op_eqv_vec, 0, r, a, b);
@@ -563,37 +564,37 @@ void tcg_gen_eqv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 }
 
 /* static bool do_op2(unsigned vece, TCGv_vec r, TCGv_vec a, TCGOpcode opc)
-{
-    TCGTemp *rt = tcgv_vec_temp(r);
-    TCGTemp *at = tcgv_vec_temp(a);
-    TCGArg ri = temp_arg(rt);
-    TCGArg ai = temp_arg(at);
-    TCGType type = rt->base_type;
-    int can;
-
-    tcg_debug_assert(at->base_type >= type);
-    tcg_assert_listed_vecop(opc);
-    can = tcg_can_emit_vec_op(opc, type, vece);
-    if (can > 0) {
-        vec_gen_2(opc, type, vece, ri, ai);
-    } else if (can < 0) {
-        const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
-        tcg_expand_vec_op(opc, type, vece, ri, ai);
-        tcg_swap_vecop_list(hold_list);
-    } else {
-        return false;
-    }
-    return true;
-} */
+ * {
+ *     TCGTemp *rt = tcgv_vec_temp(r);
+ *     TCGTemp *at = tcgv_vec_temp(a);
+ *     TCGArg ri = temp_arg(rt);
+ *     TCGArg ai = temp_arg(at);
+ *     TCGType type = rt->base_type;
+ *     int can;
+ * 
+ *     tcg_debug_assert(at->base_type >= type);
+ *     tcg_assert_listed_vecop(opc);
+ *     can = tcg_can_emit_vec_op(opc, type, vece);
+ *     if (can > 0) {
+ *         vec_gen_2(opc, type, vece, ri, ai);
+ *     } else if (can < 0) {
+ *         const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
+ *         tcg_expand_vec_op(opc, type, vece, ri, ai);
+ *         tcg_swap_vecop_list(hold_list);
+ *     } else {
+ *         return false;
+ *     }
+ *     return true;
+ * }
+ */
 
 void tcg_gen_not_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
 {
-    const TCGOpcode *hold_list = tcg_swap_vecop_list(NULL);
-
-    /*if (!TCG_TARGET_HAS_not_vec || !do_op2(vece, r, a, INDEX_op_not_vec)) {*/
+    if (TCG_TARGET_HAS_not_vec) {
+        vec_gen_op2(INDEX_op_not_vec, 0, r, a);
+    } else {
         tcg_gen_xor_vec(0, r, a, tcg_constant_vec_matching(r, 0, -1));
-    /*}*/
-    tcg_swap_vecop_list(hold_list);
+    }
 }
 
 void tcg_gen_neg_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
@@ -603,12 +604,13 @@ void tcg_gen_neg_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
     tcg_assert_listed_vecop(INDEX_op_neg_vec);
     hold_list = tcg_swap_vecop_list(NULL);
 
-    /*
-    TODO (SymQEMU):
-    This instruction is not instrumented yet.
-    For now, we make sure that alternative instructions below, which are instrumented, are always used.
-    Directly instrumenting this instruction would improve performance of SymQEMU.
-    */
+   
+    /* TODO (SymQEMU):
+     * This instruction is not instrumented yet.
+     * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+     * Directly instrumenting this instruction would improve performance of SymQEMU.
+     */
+    
 
     /*if (!TCG_TARGET_HAS_neg_vec || !do_op2(vece, r, a, INDEX_op_neg_vec)) {*/
         tcg_gen_sub_vec(vece, r, tcg_constant_vec_matching(r, vece, 0), a);
@@ -623,12 +625,14 @@ void tcg_gen_abs_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
     tcg_assert_listed_vecop(INDEX_op_abs_vec);
     hold_list = tcg_swap_vecop_list(NULL);
 
+
     /*
-    TODO (SymQEMU):
-    This instruction is not instrumented yet.
-    For now, we make sure that alternative instructions below, which are instrumented, are always used.
-    Directly instrumenting this instruction would improve performance of SymQEMU.
-    */
+     * TODO (SymQEMU):
+     * This instruction is not instrumented yet.
+     * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+     * Directly instrumenting this instruction would improve performance of SymQEMU.
+     */
+
 
     /*if (!do_op2(vece, r, a, INDEX_op_abs_vec)) {*/
         TCGType type = tcgv_vec_temp(r)->base_type;
@@ -761,7 +765,7 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
 
     gen_helper_sym_cmp_vec(
             tcgv_vec_expr(r),
-            cpu_env,
+            tcg_env,
             buffer_address_a,
             tcgv_vec_expr(a),
             buffer_address_b,
@@ -911,7 +915,7 @@ static void do_minmax(unsigned vece, TCGv_vec r, TCGv_vec a,
 
     gen_helper_sym_ternary_vec(
             tcgv_vec_expr(r),
-            cpu_env,
+            tcg_env,
             buffer_address_a,
             tcgv_vec_expr(a),
             buffer_address_b,
@@ -1040,17 +1044,21 @@ void tcg_gen_bitsel_vec(unsigned vece, TCGv_vec r, TCGv_vec a,
     tcg_debug_assert(bt->base_type >= type);
     tcg_debug_assert(ct->base_type >= type);
 
-    /*
-    TODO (SymQEMU):
-    This instruction is not instrumented yet.
-    For now, we make sure that alternative instructions below, which are instrumented, are always used.
-    Directly instrumenting this instruction would improve performance of SymQEMU.
-    */
 
-    /* if (TCG_TARGET_HAS_bitsel_vec) {
-        vec_gen_4(INDEX_op_bitsel_vec, type, MO_8,
-                  temp_arg(rt), temp_arg(at), temp_arg(bt), temp_arg(ct));
-    } else { */
+    /*
+     * TODO (SymQEMU):
+     * This instruction is not instrumented yet.
+     * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+     * Directly instrumenting this instruction would improve performance of SymQEMU.
+     */
+
+
+    /*
+     *  if (TCG_TARGET_HAS_bitsel_vec) {
+     *     vec_gen_4(INDEX_op_bitsel_vec, type, MO_8,
+     *               temp_arg(rt), temp_arg(at), temp_arg(bt), temp_arg(ct));
+     * } else {
+     */
         TCGv_vec t = tcg_temp_new_vec(type);
         tcg_gen_and_vec(MO_8, t, a, b);
         tcg_gen_andc_vec(MO_8, r, c, a);
@@ -1067,11 +1075,13 @@ void tcg_gen_cmpsel_vec(TCGCond cond, unsigned vece, TCGv_vec r,
     TCGTemp *bt = tcgv_vec_temp(b);
     TCGTemp *ct = tcgv_vec_temp(c);
     TCGTemp *dt = tcgv_vec_temp(d);
-    /* TCGArg ri = temp_arg(rt);
-    TCGArg ai = temp_arg(at);
-    TCGArg bi = temp_arg(bt);
-    TCGArg ci = temp_arg(ct);
-    TCGArg di = temp_arg(dt); */
+    /*
+     * TCGArg ri = temp_arg(rt);
+     * TCGArg ai = temp_arg(at);
+     * TCGArg bi = temp_arg(bt);
+     * TCGArg ci = temp_arg(ct);
+     * TCGArg di = temp_arg(dt);
+     */
     TCGType type = rt->base_type;
     const TCGOpcode *hold_list;
     /* int can; */
@@ -1083,21 +1093,25 @@ void tcg_gen_cmpsel_vec(TCGCond cond, unsigned vece, TCGv_vec r,
 
     tcg_assert_listed_vecop(INDEX_op_cmpsel_vec);
     hold_list = tcg_swap_vecop_list(NULL);
-    /* can = tcg_can_emit_vec_op(INDEX_op_cmpsel_vec, type, vece); */
+
 
     /*
-    TODO (SymQEMU):
-    This instruction is not instrumented yet.
-    For now, we make sure that alternative instructions below, which are instrumented, are always used.
-    Directly instrumenting this instruction would improve performance of SymQEMU.
-    */
+     * TODO (SymQEMU):
+     * This instruction is not instrumented yet.
+     * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+     * Directly instrumenting this instruction would improve performance of SymQEMU.
+     */
 
-    /* if (can > 0) {
-        vec_gen_6(INDEX_op_cmpsel_vec, type, vece, ri, ai, bi, ci, di, cond);
-    } else if (can < 0) {
-        tcg_expand_vec_op(INDEX_op_cmpsel_vec, type, vece,
-                          ri, ai, bi, ci, di, cond);
-    } else { */
+    /*
+     * can = tcg_can_emit_vec_op(INDEX_op_cmpsel_vec, type, vece);
+     *
+     * if (can > 0) {
+     *     vec_gen_6(INDEX_op_cmpsel_vec, type, vece, ri, ai, bi, ci, di, cond);
+     * } else if (can < 0) {
+     *     tcg_expand_vec_op(INDEX_op_cmpsel_vec, type, vece,
+     *                       ri, ai, bi, ci, di, cond);
+     * } else {
+     */
         TCGv_vec t = tcg_temp_new_vec(type);
         tcg_gen_cmp_vec(cond, vece, t, a, b);
         tcg_gen_bitsel_vec(vece, r, t, c, d);

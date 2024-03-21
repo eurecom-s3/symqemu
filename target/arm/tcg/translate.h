@@ -8,7 +8,7 @@
 #include "exec/translator.h"
 #include "exec/helper-gen.h"
 #include "internals.h"
-
+#include "cpu-features.h"
 
 /* internal defines */
 
@@ -114,8 +114,8 @@ typedef struct DisasContext {
     bool unpriv;
     /* True if v8.3-PAuth is active.  */
     bool pauth_active;
-    /* True if v8.5-MTE access to tags is enabled.  */
-    bool ata;
+    /* True if v8.5-MTE access to tags is enabled; index with is_unpriv.  */
+    bool ata[2];
     /* True if v8.5-MTE tag checks affect the PE; index with is_unpriv.  */
     bool mte_active[2];
     /* True with v8.5-BTI and SCTLR_ELx.BT* set.  */
@@ -151,6 +151,8 @@ typedef struct DisasContext {
     int8_t btype;
     /* A copy of cpu->dcz_blocksize. */
     uint8_t dcz_blocksize;
+    /* A copy of cpu->gm_blocksize. */
+    uint8_t gm_blocksize;
     /* True if this page is guarded.  */
     bool guarded_page;
     /* Bottom two bits of XScale c15_cpar coprocessor access control reg */
@@ -201,6 +203,11 @@ static inline int times_2(DisasContext *s, int x)
 static inline int times_4(DisasContext *s, int x)
 {
     return x * 4;
+}
+
+static inline int times_8(DisasContext *s, int x)
+{
+    return x * 8;
 }
 
 static inline int times_2_plus_1(DisasContext *s, int x)
@@ -327,7 +334,7 @@ static inline TCGv_i32 get_ahp_flag(void)
 {
     TCGv_i32 ret = tcg_temp_new_i32();
 
-    tcg_gen_ld_i32(ret, cpu_env,
+    tcg_gen_ld_i32(ret, tcg_env,
                    offsetof(CPUARMState, vfp.xregs[ARM_VFP_FPSCR]));
     tcg_gen_extract_i32(ret, ret, 26, 1);
 
@@ -341,9 +348,9 @@ static inline void set_pstate_bits(uint32_t bits)
 
     tcg_debug_assert(!(bits & CACHED_PSTATE_BITS));
 
-    tcg_gen_ld_i32(p, cpu_env, offsetof(CPUARMState, pstate));
+    tcg_gen_ld_i32(p, tcg_env, offsetof(CPUARMState, pstate));
     tcg_gen_ori_i32(p, p, bits);
-    tcg_gen_st_i32(p, cpu_env, offsetof(CPUARMState, pstate));
+    tcg_gen_st_i32(p, tcg_env, offsetof(CPUARMState, pstate));
 }
 
 /* Clear bits within PSTATE.  */
@@ -353,9 +360,9 @@ static inline void clear_pstate_bits(uint32_t bits)
 
     tcg_debug_assert(!(bits & CACHED_PSTATE_BITS));
 
-    tcg_gen_ld_i32(p, cpu_env, offsetof(CPUARMState, pstate));
+    tcg_gen_ld_i32(p, tcg_env, offsetof(CPUARMState, pstate));
     tcg_gen_andi_i32(p, p, ~bits);
-    tcg_gen_st_i32(p, cpu_env, offsetof(CPUARMState, pstate));
+    tcg_gen_st_i32(p, tcg_env, offsetof(CPUARMState, pstate));
 }
 
 /* If the singlestep state is Active-not-pending, advance to Active-pending. */
@@ -372,7 +379,7 @@ static inline void gen_swstep_exception(DisasContext *s, int isv, int ex)
 {
     /* Fill in the same_el field of the syndrome in the helper. */
     uint32_t syn = syn_swstep(false, isv, ex);
-    gen_helper_exception_swstep(cpu_env, tcg_constant_i32(syn));
+    gen_helper_exception_swstep(tcg_env, tcg_constant_i32(syn));
 }
 
 /*
@@ -555,7 +562,7 @@ static inline TCGv_ptr fpstatus_ptr(ARMFPStatusFlavour flavour)
     default:
         g_assert_not_reached();
     }
-    tcg_gen_addi_ptr(statusptr, cpu_env, offset);
+    tcg_gen_addi_ptr(statusptr, tcg_env, offset);
     return statusptr;
 }
 
@@ -677,7 +684,7 @@ static inline void set_disas_label(DisasContext *s, DisasLabel l)
 static inline TCGv_ptr gen_lookup_cp_reg(uint32_t key)
 {
     TCGv_ptr ret = tcg_temp_new_ptr();
-    gen_helper_lookup_cp_reg(ret, cpu_env, tcg_constant_i32(key));
+    gen_helper_lookup_cp_reg(ret, tcg_env, tcg_constant_i32(key));
     return ret;
 }
 
