@@ -59,7 +59,8 @@ void *build_and_push_path_constraint(CPUArchState *env, void *arg1_expr, void *a
 /* Architecture-independent way to get the program counter */
 target_ulong get_pc(CPUArchState *env)
 {
-    target_ulong pc, cs_base;
+    vaddr pc;
+    uint64_t cs_base;
     uint32_t flags;
 
     cpu_get_tb_cpu_state(env, &pc, &cs_base, &flags);
