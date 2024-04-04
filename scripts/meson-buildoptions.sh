@@ -47,6 +47,8 @@ meson_options_help() {
   printf "%s\n" '                           clang/llvm and coroutine backend ucontext)'
   printf "%s\n" '  --enable-sanitizers      enable default sanitizers'
   printf "%s\n" '  --enable-strip           Strip targets on install'
+  printf "%s\n" '  --enable-symcc-shared    Compile SymCC Runtime dynamically instead of'
+  printf "%s\n" '                           statically.'
   printf "%s\n" '  --enable-tcg-interpreter TCG with bytecode interpreter (slow)'
   printf "%s\n" '  --enable-trace-backends=CHOICES'
   printf "%s\n" '                           Set available tracing backends [log] (choices:'
@@ -71,6 +73,8 @@ meson_options_help() {
   printf "%s\n" '                           [QEMU]'
   printf "%s\n" '  --qemu-ga-version=VALUE  version number for qemu-ga installer'
   printf "%s\n" '  --smbd=VALUE             Path to smbd for slirp networking'
+  printf "%s\n" '  --symcc-backend=VALUE    SymCC backend to use. Please check SymCC Runtime'
+  printf "%s\n" '                           for a list of available backends. [qsym]'
   printf "%s\n" '  --sysconfdir=VALUE       Sysconf data directory [etc]'
   printf "%s\n" '  --tls-priority=VALUE     Default TLS protocol/cipher priority string'
   printf "%s\n" '                           [NORMAL]'
@@ -488,6 +492,9 @@ _meson_option_parse() {
     --disable-stack-protector) printf "%s" -Dstack_protector=disabled ;;
     --enable-strip) printf "%s" -Dstrip=true ;;
     --disable-strip) printf "%s" -Dstrip=false ;;
+    --symcc-backend=*) quote_sh "-Dsymcc_backend=$2" ;;
+    --enable-symcc-shared) printf "%s" -Dsymcc_shared=true ;;
+    --disable-symcc-shared) printf "%s" -Dsymcc_shared=false ;;
     --sysconfdir=*) quote_sh "-Dsysconfdir=$2" ;;
     --enable-tcg) printf "%s" -Dtcg=enabled ;;
     --disable-tcg) printf "%s" -Dtcg=disabled ;;

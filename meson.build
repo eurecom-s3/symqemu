@@ -1,5 +1,5 @@
 project('qemu', ['c'], meson_version: '>=0.63.0',
-        default_options: ['warning_level=1', 'c_std=gnu11', 'cpp_std=gnu++11', 'b_colorout=auto',
+        default_options: ['warning_level=1', 'c_std=gnu11', 'cpp_std=gnu++17', 'b_colorout=auto',
                           'b_staticpic=false', 'stdsplit=false', 'optimization=2', 'b_pie=true'],
         version: files('VERSION'))
 
@@ -13,6 +13,7 @@ not_found = dependency('', required: false)
 keyval = import('keyval')
 ss = import('sourceset')
 fs = import('fs')
+cmake = import('cmake')
 
 targetos = host_machine.system()
 sh = find_program('sh')
@@ -1078,6 +1079,26 @@ if targetos == 'linux' and (have_system or have_tools)
   libudev = dependency('libudev',
                        method: 'pkg-config',
                        required: get_option('libudev'))
+endif
+
+symcc_backend = get_option('symcc_backend')
+
+if not fs.is_file('subprojects/symcc-rt/RuntimeCommon.h')
+  error_msg='''The SymCC source path "@0@" is incorrect.
+Did you initialize symcc-rt subrepository? (git submodule update --init --recursive subprojects/symcc-rt)'''.format('subprojects/symcc')
+  error(error_msg)
+endif
+
+symcc_rt = not_found
+
+symcc_var = cmake.subproject_options()
+symcc_var.add_cmake_defines({ 'SYMCC_RT_BACKEND': symcc_backend })
+
+symcc_rt_proj = cmake.subproject('symcc-rt', options: symcc_var)
+if get_option('symcc_shared')
+  symcc_rt = symcc_rt_proj.dependency('SymccRtShared')
+else
+  symcc_rt = symcc_rt_proj.dependency('SymccRtStatic')
 endif
 
 mpathlibs = [libudev]
@@ -3508,7 +3529,6 @@ subdir('plugins')
 subdir('ebpf')
 
 common_user_inc = []
-common_user_inc += config_host['SYMCC_INC'].split()
 
 subdir('common-user')
 subdir('bsd-user')
@@ -3738,6 +3758,9 @@ common_ss.add(qom, qemuutil)
 common_ss.add_all(when: 'CONFIG_SYSTEM_ONLY', if_true: [system_ss])
 common_ss.add_all(when: 'CONFIG_USER_ONLY', if_true: user_ss)
 
+common_ss.add(symcc_rt)
+specific_ss.add(symcc_rt)
+
 common_all = common_ss.apply(config_all, strict: false)
 common_all = static_library('common',
                             build_by_default: false,
@@ -3885,16 +3908,13 @@ foreach target : target_dirs
       exe_name += '-unsigned'
     endif
 
-    symcc_libs = files(config_host['SYMCC_LIBS'].split())
-
     emulator = executable(exe_name, exe['sources'],
                install: true,
                c_args: c_args,
                dependencies: arch_deps + deps + exe['dependencies'],
-               objects: [lib.extract_all_objects(recursive: true), symcc_libs],
+               objects: lib.extract_all_objects(recursive: true),
                link_depends: [block_syms, qemu_syms] + exe.get('link_depends', []),
                link_args: link_args,
-               build_rpath: config_host['SYMCC_BUILD'],
                win_subsystem: exe['win_subsystem'])
 
     if targetos == 'darwin'
@@ -4340,6 +4360,12 @@ summary_info += {'vde support':       vde}
 summary_info += {'netmap support':    have_netmap}
 summary_info += {'l2tpv3 support':    have_l2tpv3}
 summary(summary_info, bool_yn: true, section: 'Network backends')
+
+# SymQEMU
+summary_info = {}
+summary_info += {'SymCC Backend':         symcc_backend}
+summary_info += {'SymCC Shared Library':  get_option('symcc_shared')}
+summary(summary_info, bool_yn: true, section: 'SymQEMU')
 
 # Libraries
 summary_info = {}

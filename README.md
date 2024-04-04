@@ -8,28 +8,16 @@ changes to happen there, but PR may be accepted.
 
 ## How to build
 
-SymQEMU requires [SymCC](https://github.com/eurecom-s3/symcc), so please
-download and build SymCC first. For best results, configure it with the QSYM
-backend as explained in the README. For the impatient, here's a quick summary of
-the required steps that may or may not work on your system:
-
+First of all, make sure the [symcc-rt](https://github.com/eurecom-s3/symcc-rt.git) submodule is initialized:
 ``` shell
-$ git clone https://github.com/eurecom-s3/symcc.git
-$ cd symcc
-$ git submodule update --init
-$ mkdir build
-$ cd build
-$ cmake -G Ninja -DQSYM_BACKEND=ON ..
-$ ninja
+$ git submodule update --init --recursive subprojects/symcc-rt
 ```
 
-Next, make sure that QEMU's build dependencies are installed. Most package
+Make sure that QEMU's build dependencies are installed. Most package
 managers provide a command to get them, e.g., `apt build-dep qemu` on Debian and
 Ubuntu, or `dnf builddep qemu` on Fedora and CentOS.
 
-We've extended QEMU's configuration script to accept pointers to SymCC's source
-and binaries. The following invocation is known to work on Debian 10, Arch and
-Fedora 33:
+The following invocation is known to work on Debian 10, Arch and Fedora 33:
 
 ``` shell
 $ mkdir build
@@ -42,9 +30,7 @@ $ ../configure                                                    \
       --disable-opengl                                            \
       --disable-virglrenderer                                     \
       --disable-werror                                            \
-      --target-list=x86_64-linux-user                             \
-      --symcc-source=../symcc                                     \
-      --symcc-build=../symcc/build
+      --target-list=x86_64-linux-user
 $ make -j
 ```
 
@@ -53,6 +39,12 @@ binaries. We also have experimental support for AARCH64. Working with 32-bit
 target architectures is possible in principle but will require a bit of work
 because the current implementation assumes that we can pass around host pointers
 in guest registers.
+
+## SymQEMU compilation options
+
+Several compilation options are available:
+- `enable-symcc-shared`: Compile SymQEMU with the shared library of `SymCC Runtime` instead of a static library
+- `symcc-backend`: Choose a specific backend from `SymCC Runtime`. Please have a look to [symcc-rt](https://github.com/eurecom-s3/symcc-rt.git) to get an exhaustive list of available backends.
 
 ## Running SymQEMU
 
@@ -90,17 +82,7 @@ you'll have to run AFL in QEMU mode by adding `-Q` to its command line; the
 fuzzing helper will automatically pick up the setting and use QEMU mode too.)
 
 ## Build with Docker
-First, make sure to have an up-to-date Docker image of SymCC. If you
-don't have one, either in the submodule, run:
-
-``` shell
-git submodule update --init --recursive symcc
-cd symcc
-docker build -t symcc .
-cd ..
-```
-
-Then build the SymQEMU image with (this will also run the tests):
+Build the SymQEMU image with (this will also run the tests):
 ```shell
 docker build -t symqemu .
 ```
