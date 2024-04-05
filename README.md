@@ -43,8 +43,8 @@ in guest registers.
 ## SymQEMU compilation options
 
 Several compilation options are available:
-- `enable-symcc-shared`: Compile SymQEMU with the shared library of `SymCC Runtime` instead of a static library
-- `symcc-backend`: Choose a specific backend from `SymCC Runtime`. Please have a look to [symcc-rt](https://github.com/eurecom-s3/symcc-rt.git) to get an exhaustive list of available backends.
+- `enable-symcc-shared`: Compile SymQEMU with the shared library of `SymCC Runtime` instead of a static library.
+- `symcc-backend`: Choose a specific backend from `SymCC Runtime`. Please have a look at [symcc-rt](https://github.com/eurecom-s3/symcc-rt.git) to get an exhaustive list of available backends.
 
 ## Running SymQEMU
 
