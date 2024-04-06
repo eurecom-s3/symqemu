@@ -192,7 +192,6 @@ foreach test_name, extra: tests
 
   # SymQEMU unit tests executable construction
   if test_name == 'check-sym-runtime'
-
     deps += [symcc_rt]
 
     # embeds most of qemu objects, including SymQEMU

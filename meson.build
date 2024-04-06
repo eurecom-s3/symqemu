@@ -1081,21 +1081,23 @@ if targetos == 'linux' and (have_system or have_tools)
                        required: get_option('libudev'))
 endif
 
-symcc_backend = get_option('symcc_backend')
+symcc_rt_backend = get_option('symcc_rt_backend')
 
 if not fs.is_file('subprojects/symcc-rt/RuntimeCommon.h')
-  error_msg='''The SymCC source path "@0@" is incorrect.
-Did you initialize symcc-rt subrepository? (git submodule update --init --recursive subprojects/symcc-rt)'''.format('subprojects/symcc')
-  error(error_msg)
+  error('''Symcc Runtime does not seem to be present.
+Did you initialize the symcc-rt submodule? (git submodule update --init --recursive subprojects/symcc-rt)''')
 endif
 
 symcc_rt = not_found
 
-symcc_var = cmake.subproject_options()
-symcc_var.add_cmake_defines({ 'SYMCC_RT_BACKEND': symcc_backend })
+symcc_rt_vars = cmake.subproject_options()
+symcc_rt_vars.add_cmake_defines({
+  'SYMCC_RT_BACKEND': symcc_rt_backend,
+  'Z3_TRUST_SYSTEM_VERSION': get_option('symcc_rt_trust_system_z3'),
+})
 
-symcc_rt_proj = cmake.subproject('symcc-rt', options: symcc_var)
-if get_option('symcc_shared')
+symcc_rt_proj = cmake.subproject('symcc-rt', options: symcc_rt_vars)
+if get_option('symcc_rt_shared')
   symcc_rt = symcc_rt_proj.dependency('SymccRtShared')
 else
   symcc_rt = symcc_rt_proj.dependency('SymccRtStatic')
@@ -4363,8 +4365,9 @@ summary(summary_info, bool_yn: true, section: 'Network backends')
 
 # SymQEMU
 summary_info = {}
-summary_info += {'SymCC Backend':         symcc_backend}
-summary_info += {'SymCC Shared Library':  get_option('symcc_shared')}
+summary_info += {'SymCC Runtime Backend':         symcc_rt_backend}
+summary_info += {'SymCC Runtime trust system\'s Z3':         get_option('symcc_rt_trust_system_z3')}
+summary_info += {'SymCC Shared Library':  get_option('symcc_rt_shared')}
 summary(summary_info, bool_yn: true, section: 'SymQEMU')
 
 # Libraries
