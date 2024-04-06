@@ -20,7 +20,7 @@ Make sure that QEMU's build dependencies are installed. Most package managers
 provide a command to get them, e.g., `apt build-dep qemu` on Debian and Ubuntu,
 or `dnf builddep qemu` on Fedora and CentOS.
 
-The following invocation is known to work on Debian 10, Arch and Fedora 33:
+The following invocation is known to work on Ubuntu 22.04 and Arch:
 
 ``` shell
 $ mkdir build
