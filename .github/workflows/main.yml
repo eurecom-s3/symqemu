@@ -8,4 +8,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - run: git submodule update --init --recursive subprojects/symcc-rt
+    # build and test with default LLVM version 15
     - run: docker build -t symqemu .
+    # LLVM version 14
+    - run: docker build --build-arg LLVM_VERSION=14 -t symqemu .

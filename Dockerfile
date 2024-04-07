@@ -1,6 +1,9 @@
 # prepare machine
 FROM ubuntu:22.04 as builder
 
+# This is passed along to symcc and qsym backend
+arg LLVM_VERSION=15
+
 RUN apt update && apt install -y \
     ninja-build \
     libglib2.0-dev \
@@ -17,8 +20,8 @@ RUN apt update && apt install -y \
     libz3-dev \
     libz3-dev \
     libzstd-dev \
-    llvm-15 \
-    clang-15
+    llvm-${LLVM_VERSION} \
+    clang-${LLVM_VERSION}
 
 RUN pip install --user meson
 
@@ -36,9 +39,9 @@ RUN mkdir build && cd build && ../configure                           \
           --enable-debug                                              \
           --enable-debug-tcg
 
-RUN cd build && ninja
+RUN cd build && make -j
 
-RUN cd build && ninja check
+RUN cd build && make check
 
 WORKDIR /symqemu_source/tests/symqemu
 RUN python3 -m unittest test.py

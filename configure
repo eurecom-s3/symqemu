@@ -1635,6 +1635,7 @@ echo "GENISOIMAGE=$genisoimage" >> $config_host_mak
 echo "MESON=$meson" >> $config_host_mak
 echo "NINJA=$ninja" >> $config_host_mak
 echo "EXESUF=$EXESUF" >> $config_host_mak
+echo "LLVM_VERSION=${LLVM_VERSION}" >> $config_host_mak
 
 # use included Linux headers for KVM architectures
 if test "$targetos" = "linux" && test -n "$linux_arch"; then
@@ -1881,6 +1882,7 @@ preserve_env DLLTOOL
 preserve_env LD
 preserve_env LDFLAGS
 preserve_env LD_LIBRARY_PATH
+preserve_env LLVM_VERSION
 preserve_env NM
 preserve_env OBJCFLAGS
 preserve_env OBJCOPY

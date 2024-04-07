@@ -1094,6 +1094,7 @@ symcc_rt_vars = cmake.subproject_options()
 symcc_rt_vars.add_cmake_defines({
   'SYMCC_RT_BACKEND': symcc_rt_backend,
   'Z3_TRUST_SYSTEM_VERSION': get_option('symcc_rt_trust_system_z3'),
+  'LLVM_VERSION': config_host['LLVM_VERSION'],
 })
 
 symcc_rt_proj = cmake.subproject('symcc-rt', options: symcc_rt_vars)
@@ -4368,6 +4369,11 @@ summary_info = {}
 summary_info += {'SymCC Runtime Backend':         symcc_rt_backend}
 summary_info += {'SymCC Runtime trust system\'s Z3':         get_option('symcc_rt_trust_system_z3')}
 summary_info += {'SymCC Shared Library':  get_option('symcc_rt_shared')}
+if config_host['LLVM_VERSION']  != ''
+  summary_info += {'SymCC using LLVM Version':  config_host['LLVM_VERSION']}
+else
+  summary_info += {'SymCC using LLVM Version': 'to be detected by SymCC build'}
+endif
 summary(summary_info, bool_yn: true, section: 'SymQEMU')
 
 # Libraries
