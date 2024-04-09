@@ -19,6 +19,12 @@ meson_options_help() {
   printf "%s\n" '  --disable-install-blobs  install provided firmware blobs'
   printf "%s\n" '  --disable-qom-cast-debug cast debugging support'
   printf "%s\n" '  --disable-relocatable    toggle relocatable install'
+  printf "%s\n" '  --disable-symcc-rt-shared'
+  printf "%s\n" '                           Compile SymCC Runtime dynamically instead of'
+  printf "%s\n" '                           statically.'
+  printf "%s\n" '  --disable-symcc-rt-trust-system-z3'
+  printf "%s\n" '                           Trust the system version of Z3 to build SymCC'
+  printf "%s\n" '                           Runtime'
   printf "%s\n" '  --docdir=VALUE           Base directory for documentation installation'
   printf "%s\n" '                           (can be empty) [share/doc]'
   printf "%s\n" '  --enable-block-drv-whitelist-in-tools'
@@ -47,8 +53,6 @@ meson_options_help() {
   printf "%s\n" '                           clang/llvm and coroutine backend ucontext)'
   printf "%s\n" '  --enable-sanitizers      enable default sanitizers'
   printf "%s\n" '  --enable-strip           Strip targets on install'
-  printf "%s\n" '  --enable-symcc-shared    Compile SymCC Runtime dynamically instead of'
-  printf "%s\n" '                           statically.'
   printf "%s\n" '  --enable-tcg-interpreter TCG with bytecode interpreter (slow)'
   printf "%s\n" '  --enable-trace-backends=CHOICES'
   printf "%s\n" '                           Set available tracing backends [log] (choices:'
@@ -73,8 +77,10 @@ meson_options_help() {
   printf "%s\n" '                           [QEMU]'
   printf "%s\n" '  --qemu-ga-version=VALUE  version number for qemu-ga installer'
   printf "%s\n" '  --smbd=VALUE             Path to smbd for slirp networking'
-  printf "%s\n" '  --symcc-backend=VALUE    SymCC backend to use. Please check SymCC Runtime'
-  printf "%s\n" '                           for a list of available backends. [qsym]'
+  printf "%s\n" '  --symcc-rt-backend=VALUE SymCC Runtime backend to use. Please check SymCC'
+  printf "%s\n" '                           Runtime for a list of available backends. [qsym]'
+  printf "%s\n" '  --symcc-rt-llvm-version=VALUE'
+  printf "%s\n" '                           LLVM Version to use to compile SymCC Runtime.'
   printf "%s\n" '  --sysconfdir=VALUE       Sysconf data directory [etc]'
   printf "%s\n" '  --tls-priority=VALUE     Default TLS protocol/cipher priority string'
   printf "%s\n" '                           [NORMAL]'
@@ -492,9 +498,12 @@ _meson_option_parse() {
     --disable-stack-protector) printf "%s" -Dstack_protector=disabled ;;
     --enable-strip) printf "%s" -Dstrip=true ;;
     --disable-strip) printf "%s" -Dstrip=false ;;
-    --symcc-backend=*) quote_sh "-Dsymcc_backend=$2" ;;
-    --enable-symcc-shared) printf "%s" -Dsymcc_shared=true ;;
-    --disable-symcc-shared) printf "%s" -Dsymcc_shared=false ;;
+    --symcc-rt-backend=*) quote_sh "-Dsymcc_rt_backend=$2" ;;
+    --symcc-rt-llvm-version=*) quote_sh "-Dsymcc_rt_llvm_version=$2" ;;
+    --enable-symcc-rt-shared) printf "%s" -Dsymcc_rt_shared=true ;;
+    --disable-symcc-rt-shared) printf "%s" -Dsymcc_rt_shared=false ;;
+    --enable-symcc-rt-trust-system-z3) printf "%s" -Dsymcc_rt_trust_system_z3=true ;;
+    --disable-symcc-rt-trust-system-z3) printf "%s" -Dsymcc_rt_trust_system_z3=false ;;
     --sysconfdir=*) quote_sh "-Dsysconfdir=$2" ;;
     --enable-tcg) printf "%s" -Dtcg=enabled ;;
     --disable-tcg) printf "%s" -Dtcg=disabled ;;

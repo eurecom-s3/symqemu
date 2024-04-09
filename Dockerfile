@@ -47,7 +47,8 @@ RUN mkdir build && cd build && ../configure                           \
           --disable-virglrenderer                                     \
           --target-list=x86_64-linux-user,riscv64-linux-user          \
           --enable-debug                                              \
-          --enable-debug-tcg
+          --enable-debug-tcg                                          \
+          --symcc-rt-llvm-version="$LLVM_VERSION"
 
 RUN cd build && make -j
 

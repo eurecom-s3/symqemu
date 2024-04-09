@@ -376,3 +376,5 @@ option('symcc_rt_trust_system_z3', type: 'boolean', value: true,
        description: 'Trust the system version of Z3 to build SymCC Runtime')
 option('symcc_rt_shared', type: 'boolean', value: true,
        description: 'Compile SymCC Runtime dynamically instead of statically.')
+option('symcc_rt_llvm_version', type: 'string', value: '',
+       description: 'LLVM Version to use to compile SymCC Runtime.')
