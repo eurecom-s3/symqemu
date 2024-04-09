@@ -190,17 +190,13 @@ foreach test_name, extra: tests
   args =  []
   lwith = []
 
-  # SymQEMU unit tests executable construction is a bit more complicated
+  # SymQEMU unit tests executable construction
   if test_name == 'check-sym-runtime'
-    # lookup the libSymRuntime.so and add it as a dependence
-    libdir = meson.current_build_dir() / '../../' / config_host['SYMCC_BUILD']
-    symcc_runtime = cc.find_library('SymRuntime', dirs : libdir)
-    deps += [symcc_runtime]
+    deps += [symcc_rt]
 
     # embeds most of qemu objects, including SymQEMU
     lwith += [lib]
     args +=  ['-I../target/i386/',
-	      '-I' + config_host['SYMCC_INC'],
 	      '-DCONFIG_TARGET="x86_64-linux-user-config-target.h"',
 	      '-DNEED_CPU_H',
 	      '-Ix86_64-linux-user']

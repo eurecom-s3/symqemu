@@ -368,3 +368,13 @@ option('qemu_ga_version', type: 'string', value: '',
 
 option('hexagon_idef_parser', type : 'boolean', value : true,
        description: 'use idef-parser to automatically generate TCG code for the Hexagon frontend')
+
+# SymQEMU related options
+option('symcc_rt_backend', type: 'string', value: 'qsym',
+       description: 'SymCC Runtime backend to use. Please check SymCC Runtime for a list of available backends.')
+option('symcc_rt_trust_system_z3', type: 'boolean', value: true,
+       description: 'Trust the system version of Z3 to build SymCC Runtime')
+option('symcc_rt_shared', type: 'boolean', value: true,
+       description: 'Compile SymCC Runtime dynamically instead of statically.')
+option('symcc_rt_llvm_version', type: 'string', value: '',
+       description: 'LLVM Version to use to compile SymCC Runtime.')

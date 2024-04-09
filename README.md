@@ -2,34 +2,25 @@
 
 This is SymQEMU, a binary-only symbolic executor based on QEMU and SymCC. It
 currently extends QEMU 8.1 and works with the most recent version of SymCC.
-(See README.orig for QEMU's original README file.)
-A separate branch is available for the [old version of SymQEMU based on QEMU 4.1.1](https://github.com/eurecom-s3/symqemu/tree/4.1.1) we don't expect much 
+(See README.orig for QEMU's original README file.) A separate branch is
+available for the [old version of SymQEMU based on QEMU
+4.1.1](https://github.com/eurecom-s3/symqemu/tree/4.1.1) we don't expect much
 changes to happen there, but PR may be accepted.
 
 ## How to build
 
-SymQEMU requires [SymCC](https://github.com/eurecom-s3/symcc), so please
-download and build SymCC first. For best results, configure it with the QSYM
-backend as explained in the README. For the impatient, here's a quick summary of
-the required steps that may or may not work on your system:
+First of all, make sure the
+[symcc-rt](https://github.com/eurecom-s3/symcc-rt.git) submodule is initialized:
 
 ``` shell
-$ git clone https://github.com/eurecom-s3/symcc.git
-$ cd symcc
-$ git submodule update --init
-$ mkdir build
-$ cd build
-$ cmake -G Ninja -DQSYM_BACKEND=ON ..
-$ ninja
+$ git submodule update --init --recursive subprojects/symcc-rt
 ```
 
-Next, make sure that QEMU's build dependencies are installed. Most package
-managers provide a command to get them, e.g., `apt build-dep qemu` on Debian and
-Ubuntu, or `dnf builddep qemu` on Fedora and CentOS.
+Make sure that QEMU's build dependencies are installed. Most package managers
+provide a command to get them, e.g., `apt build-dep qemu` on Debian and Ubuntu,
+or `dnf builddep qemu` on Fedora and CentOS.
 
-We've extended QEMU's configuration script to accept pointers to SymCC's source
-and binaries. The following invocation is known to work on Debian 10, Arch and
-Fedora 33:
+The following invocation is known to work on Ubuntu 22.04 and Arch:
 
 ``` shell
 $ mkdir build
@@ -42,9 +33,7 @@ $ ../configure                                                    \
       --disable-opengl                                            \
       --disable-virglrenderer                                     \
       --disable-werror                                            \
-      --target-list=x86_64-linux-user                             \
-      --symcc-source=../symcc                                     \
-      --symcc-build=../symcc/build
+      --target-list=x86_64-linux-user
 $ make -j
 ```
 
@@ -53,6 +42,15 @@ binaries. We also have experimental support for AARCH64. Working with 32-bit
 target architectures is possible in principle but will require a bit of work
 because the current implementation assumes that we can pass around host pointers
 in guest registers.
+
+## SymQEMU compilation options
+
+Several compilation options are available:
+- `enable-symcc-shared`: Compile SymQEMU with the shared library of `SymCC
+  Runtime` instead of a static library.
+- `symcc-backend`: Choose a specific backend from `SymCC Runtime`. Please have a
+  look at [symcc-rt](https://github.com/eurecom-s3/symcc-rt.git) to get an
+  exhaustive list of available backends.
 
 ## Running SymQEMU
 
@@ -84,23 +82,14 @@ This is a very basic use of symbolic execution. See SymCC's documentation for
 more advanced scenarios. Since SymQEMU is based on it, it understands all the
 same
 [settings](https://github.com/eurecom-s3/symcc/blob/master/docs/Configuration.txt),
-and you can even run SymQEMU with `symcc_fuzzing_helper` for [hybrid fuzzing](https://github.com/eurecom-s3/symcc/blob/master/docs/Fuzzing.txt): just
+and you can even run SymQEMU with `symcc_fuzzing_helper` for [hybrid
+fuzzing](https://github.com/eurecom-s3/symcc/blob/master/docs/Fuzzing.txt): just
 prefix the target command with `x86_64-linux-user/symqemu-x86_64`. (Note that
 you'll have to run AFL in QEMU mode by adding `-Q` to its command line; the
 fuzzing helper will automatically pick up the setting and use QEMU mode too.)
 
 ## Build with Docker
-First, make sure to have an up-to-date Docker image of SymCC. If you
-don't have one, either in the submodule, run:
-
-``` shell
-git submodule update --init --recursive symcc
-cd symcc
-docker build -t symcc .
-cd ..
-```
-
-Then build the SymQEMU image with (this will also run the tests):
+Build the SymQEMU image with (this will also run the tests):
 ```shell
 docker build -t symqemu .
 ```
@@ -146,23 +135,23 @@ Also, refer to [QEMU's own tests suite documentation](https://www.qemu.org/docs/
 
 ## Documentation
 
-The [paper](http://www.s3.eurecom.fr/tools/symbolic_execution/symqemu.html) contains
-details on how SymQEMU works. A large part of the implementation is the run-time support
-in `accel/tcg/tcg-runtime-sym.{c,h}` and `accel/tcg/tcg-runtime-sym-vec.{c,h}`  (which
-delegates any actual symbolic computation to SymCC's symbolic backend), and we have
-modified most code-generating functions in `tcg/tcg-op.c`, `tcg/tcg-op-vec.c` and
+The [paper](http://www.s3.eurecom.fr/tools/symbolic_execution/symqemu.html)
+contains details on how SymQEMU works. A large part of the implementation is the
+run-time support in `accel/tcg/tcg-runtime-sym.{c,h}` and
+`accel/tcg/tcg-runtime-sym-vec.{c,h}` (which delegates any actual symbolic
+computation to SymCC's symbolic backend), and we have modified most
+code-generating functions in `tcg/tcg-op.c`, `tcg/tcg-op-vec.c` and
 `include/tcg/tcg-op-common.h` to emit calls to the runtime.
 
-For development, configure with `--enable-debug` for run-time assertions; there are tests
-for the symbolic run-time support in `tests/check-sym-runtime.c`.
+For development, configure with `--enable-debug` for run-time assertions; there
+are tests for the symbolic run-time support in `tests/check-sym-runtime.c`.
 
-More information about the port to QEMU 8 and internals of (Sym)QEMU
-can be found in the QEMU 8 merge commit message
-[23e570bf42](https://github.com/eurecom-s3/symqemu/commit/23e570bf42531bcac66a54283eafd4c9c233891a) which
-gives some information about the adaptations performed. There are also
-some detailed explanations about potential problems in section 5.1 of
-Damien Maier's [bachelor
-thesis](https://dmaier.ch/bachelor-thesis.pdf).
+More information about the port to QEMU 8 and internals of (Sym)QEMU can be
+found in the QEMU 8 merge commit message
+[23e570bf42](https://github.com/eurecom-s3/symqemu/commit/23e570bf42531bcac66a54283eafd4c9c233891a)
+which gives some information about the adaptations performed. There are also
+some detailed explanations about potential problems in section 5.1 of Damien
+Maier's [bachelor thesis](https://dmaier.ch/bachelor-thesis.pdf).
 
 ## License
 
