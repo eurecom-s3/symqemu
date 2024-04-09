@@ -4372,7 +4372,7 @@ summary_info += {'SymCC Shared Library':  get_option('symcc_rt_shared')}
 if get_option('symcc_rt_llvm_version') != ''
   summary_info += {'SymCC Runtime with LLVM Version':  get_option('symcc_rt_llvm_version')}
 else
-  summary_info += {'SymCC Runtime with LLVM Version': 'To be detected by SymCC build'}
+  summary_info += {'SymCC Runtime with LLVM Version': 'To be detected by SymCC Runtime build'}
 endif
 summary(summary_info, bool_yn: true, section: 'SymQEMU')
 
