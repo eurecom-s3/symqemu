@@ -4366,11 +4366,11 @@ summary(summary_info, bool_yn: true, section: 'Network backends')
 
 # SymQEMU
 summary_info = {}
-summary_info += {'SymCC Runtime Backend':         symcc_rt_backend}
-summary_info += {'SymCC Runtime trust system\'s Z3':         get_option('symcc_rt_trust_system_z3')}
-summary_info += {'SymCC Shared Library':  get_option('symcc_rt_shared')}
+summary_info += {'SymCC Runtime Backend':             symcc_rt_backend}
+summary_info += {'SymCC Runtime trust system\'s Z3':  get_option('symcc_rt_trust_system_z3')}
+summary_info += {'SymCC Shared Library':              get_option('symcc_rt_shared')}
 if get_option('symcc_rt_llvm_version') != ''
-  summary_info += {'SymCC Runtime with LLVM Version':  get_option('symcc_rt_llvm_version')}
+  summary_info += {'SymCC Runtime with LLVM Version': get_option('symcc_rt_llvm_version')}
 else
   summary_info += {'SymCC Runtime with LLVM Version': 'To be detected by SymCC Runtime build'}
 endif
