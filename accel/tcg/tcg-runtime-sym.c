@@ -313,22 +313,22 @@ static void *sym_load_guest_internal(CPUArchState *env,
 }
 
 void *HELPER(sym_load_guest_i32)(CPUArchState *env,
-                                 target_ulong addr, void *addr_expr,
-                                 uint64_t length, target_ulong mmu_idx)
+                                 uint64_t addr, void *addr_expr,
+                                 uint64_t length, uint64_t mmu_idx)
 {
     return sym_load_guest_internal(env, addr, addr_expr, length, 4, mmu_idx);
 }
 
 void *HELPER(sym_load_guest_i64)(CPUArchState *env,
-                                 target_ulong addr, void *addr_expr,
-                                 uint64_t length, target_ulong mmu_idx)
+                                 uint64_t addr, void *addr_expr,
+                                 uint64_t length, uint64_t mmu_idx)
 {
     return sym_load_guest_internal(env, addr, addr_expr, length, 8, mmu_idx);
 }
 
 static void sym_store_guest_internal(CPUArchState *env,
                                      uint64_t value, void *value_expr,
-                                     target_ulong addr, void *addr_expr,
+                                     uint64_t addr, void *addr_expr,
                                      uint64_t length, target_ulong mmu_idx)
 {
     /* Try an alternative address */
@@ -344,8 +344,8 @@ static void sym_store_guest_internal(CPUArchState *env,
 
 void HELPER(sym_store_guest_i32)(CPUArchState *env,
                                  uint32_t value, void *value_expr,
-                                 target_ulong addr, void *addr_expr,
-                                 uint64_t length, target_ulong mmu_idx)
+                                 uint64_t addr, void *addr_expr,
+                                 uint64_t length, uint64_t mmu_idx)
 {
     return sym_store_guest_internal(
         env, value, value_expr, addr, addr_expr, length, mmu_idx);
@@ -353,8 +353,8 @@ void HELPER(sym_store_guest_i32)(CPUArchState *env,
 
 void HELPER(sym_store_guest_i64)(CPUArchState *env,
                                  uint64_t value, void *value_expr,
-                                 target_ulong addr, void *addr_expr,
-                                 uint64_t length, target_ulong mmu_idx)
+                                 uint64_t addr, void *addr_expr,
+                                 uint64_t length, uint64_t mmu_idx)
 {
     return sym_store_guest_internal(
         env, value, value_expr, addr, addr_expr, length, mmu_idx);
