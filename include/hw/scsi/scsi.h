@@ -69,14 +69,19 @@ struct SCSIDevice
 {
     DeviceState qdev;
     VMChangeStateEntry *vmsentry;
-    QEMUBH *bh;
     uint32_t id;
     BlockConf conf;
     SCSISense unit_attention;
     bool sense_is_ua;
     uint8_t sense[SCSI_SENSE_BUF_SIZE];
     uint32_t sense_len;
+
+    /*
+     * The requests list is only accessed from the AioContext that executes
+     * requests or from the main loop when IOThread processing is stopped.
+     */
     QTAILQ_HEAD(, SCSIRequest) requests;
+
     uint32_t channel;
     uint32_t lun;
     int blocksize;
@@ -194,10 +199,7 @@ static inline SCSIBus *scsi_bus_from_device(SCSIDevice *d)
 }
 
 SCSIDevice *scsi_bus_legacy_add_drive(SCSIBus *bus, BlockBackend *blk,
-                                      int unit, bool removable, int bootindex,
-                                      bool share_rw,
-                                      BlockdevOnError rerror,
-                                      BlockdevOnError werror,
+                                      int unit, bool removable, BlockConf *conf,
                                       const char *serial, Error **errp);
 void scsi_bus_set_ua(SCSIBus *bus, SCSISense sense);
 void scsi_bus_legacy_handle_cmdline(SCSIBus *bus);

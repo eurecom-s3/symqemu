@@ -644,8 +644,7 @@ static void trng_prop_fault_event_set(Object *obj, Visitor *v,
     Property *prop = opaque;
     uint32_t *events = object_field_prop_ptr(obj, prop);
 
-    visit_type_uint32(v, name, events, errp);
-    if (*errp) {
+    if (!visit_type_uint32(v, name, events, errp)) {
         return;
     }
 
@@ -674,7 +673,7 @@ static const VMStateDescription vmstate_trng = {
     .name = TYPE_XLNX_VERSAL_TRNG,
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(rand_count, XlnxVersalTRng),
         VMSTATE_UINT64(rand_reseed, XlnxVersalTRng),
         VMSTATE_UINT64(forced_prng_count, XlnxVersalTRng),

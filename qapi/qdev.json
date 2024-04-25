@@ -53,22 +53,22 @@
 #
 # Notes:
 #
-# 1. Additional arguments depend on the type.
+#     1. Additional arguments depend on the type.
 #
-# 2. For detailed information about this command, please refer to the
-#    'docs/qdev-device-use.txt' file.
+#     2. For detailed information about this command, please refer to
+#        the 'docs/qdev-device-use.txt' file.
 #
-# 3. It's possible to list device properties by running QEMU with the
-#    "-device DEVICE,help" command-line argument, where DEVICE is the
-#    device's name
+#     3. It's possible to list device properties by running QEMU with
+#        the "-device DEVICE,help" command-line argument, where DEVICE
+#        is the device's name
 #
 # Example:
 #
-# -> { "execute": "device_add",
-#      "arguments": { "driver": "e1000", "id": "net1",
-#                     "bus": "pci.0",
-#                     "mac": "52:54:00:12:34:56" } }
-# <- { "return": {} }
+#     -> { "execute": "device_add",
+#          "arguments": { "driver": "e1000", "id": "net1",
+#                         "bus": "pci.0",
+#                         "mac": "52:54:00:12:34:56" } }
+#     <- { "return": {} }
 #
 # TODO: This command effectively bypasses QAPI completely due to its
 #     "additional arguments" business.  It shouldn't have been added
@@ -89,8 +89,8 @@
 #
 # @id: the device's ID or QOM path
 #
-# Returns: Nothing on success If @id is not a valid device,
-#     DeviceNotFound
+# Errors:
+#     - If @id is not a valid device, DeviceNotFound
 #
 # Notes: When this command completes, the device may not be removed
 #     from the guest.  Hot removal is an operation that requires guest
@@ -106,13 +106,13 @@
 #
 # Examples:
 #
-# -> { "execute": "device_del",
-#      "arguments": { "id": "net1" } }
-# <- { "return": {} }
+#     -> { "execute": "device_del",
+#          "arguments": { "id": "net1" } }
+#     <- { "return": {} }
 #
-# -> { "execute": "device_del",
-#      "arguments": { "id": "/machine/peripheral-anon/device[0]" } }
-# <- { "return": {} }
+#     -> { "execute": "device_del",
+#          "arguments": { "id": "/machine/peripheral-anon/device[0]" } }
+#     <- { "return": {} }
 ##
 { 'command': 'device_del', 'data': {'id': 'str'} }
 
@@ -132,10 +132,10 @@
 #
 # Example:
 #
-# <- { "event": "DEVICE_DELETED",
-#      "data": { "device": "virtio-net-pci-0",
-#                "path": "/machine/peripheral/virtio-net-pci-0" },
-#      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+#     <- { "event": "DEVICE_DELETED",
+#          "data": { "device": "virtio-net-pci-0",
+#                    "path": "/machine/peripheral/virtio-net-pci-0" },
+#          "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
 ##
 { 'event': 'DEVICE_DELETED',
   'data': { '*device': 'str', 'path': 'str' } }
@@ -154,10 +154,10 @@
 #
 # Example:
 #
-# <- { "event": "DEVICE_UNPLUG_GUEST_ERROR",
-#      "data": { "device": "core1",
-#                "path": "/machine/peripheral/core1" },
-#      "timestamp": { "seconds": 1615570772, "microseconds": 202844 } }
+#     <- { "event": "DEVICE_UNPLUG_GUEST_ERROR",
+#          "data": { "device": "core1",
+#                    "path": "/machine/peripheral/core1" },
+#          "timestamp": { "seconds": 1615570772, "microseconds": 202844 } }
 ##
 { 'event': 'DEVICE_UNPLUG_GUEST_ERROR',
   'data': { '*device': 'str', 'path': 'str' } }

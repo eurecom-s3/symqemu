@@ -2807,9 +2807,9 @@ qcow2_do_close(BlockDriverState *bs, bool close_data_file)
     if (close_data_file && has_data_file(bs)) {
         GLOBAL_STATE_CODE();
         bdrv_graph_rdunlock_main_loop();
-        bdrv_graph_wrlock(NULL);
+        bdrv_graph_wrlock();
         bdrv_unref_child(bs, s->data_file);
-        bdrv_graph_wrunlock(NULL);
+        bdrv_graph_wrunlock();
         s->data_file = NULL;
         bdrv_graph_rdlock_main_loop();
     }
@@ -3216,7 +3216,7 @@ qcow2_set_up_encryption(BlockDriverState *bs,
     crypto = qcrypto_block_create(cryptoopts, "encrypt.",
                                   qcow2_crypto_hdr_init_func,
                                   qcow2_crypto_hdr_write_func,
-                                  bs, errp);
+                                  bs, 0, errp);
     if (!crypto) {
         return -EINVAL;
     }
@@ -3483,6 +3483,7 @@ static uint64_t qcow2_opt_get_refcount_bits_del(QemuOpts *opts, int version,
 static int coroutine_fn GRAPH_UNLOCKED
 qcow2_co_create(BlockdevCreateOptions *create_options, Error **errp)
 {
+    ERRP_GUARD();
     BlockdevCreateOptionsQcow2 *qcow2_opts;
     QDict *options;
 
@@ -4283,6 +4284,7 @@ static int coroutine_fn GRAPH_RDLOCK
 qcow2_co_truncate(BlockDriverState *bs, int64_t offset, bool exact,
                   PreallocMode prealloc, BdrvRequestFlags flags, Error **errp)
 {
+    ERRP_GUARD();
     BDRVQcow2State *s = bs->opaque;
     uint64_t old_length;
     int64_t new_l1_size;

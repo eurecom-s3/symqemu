@@ -31,10 +31,9 @@
 
 static void sparc_cpu_reset_hold(Object *obj)
 {
-    CPUState *s = CPU(obj);
-    SPARCCPU *cpu = SPARC_CPU(s);
-    SPARCCPUClass *scc = SPARC_CPU_GET_CLASS(cpu);
-    CPUSPARCState *env = &cpu->env;
+    CPUState *cs = CPU(obj);
+    SPARCCPUClass *scc = SPARC_CPU_GET_CLASS(obj);
+    CPUSPARCState *env = cpu_env(cs);
 
     if (scc->parent_phases.hold) {
         scc->parent_phases.hold(obj);
@@ -83,8 +82,7 @@ static void sparc_cpu_reset_hold(Object *obj)
 static bool sparc_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 {
     if (interrupt_request & CPU_INTERRUPT_HARD) {
-        SPARCCPU *cpu = SPARC_CPU(cs);
-        CPUSPARCState *env = &cpu->env;
+        CPUSPARCState *env = cpu_env(cs);
 
         if (cpu_interrupts_enabled(env) && env->interrupt_index > 0) {
             int pil = env->interrupt_index & 0xf;
@@ -368,7 +366,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "Fujitsu MB86904",
         .iu_version = 0x04 << 24, /* Impl 0, ver 4 */
-        .fpu_version = 4 << 17, /* FPU version 4 (Meiko) */
+        .fpu_version = 4 << FSR_VER_SHIFT, /* FPU version 4 (Meiko) */
         .mmu_version = 0x04 << 24, /* Impl 0, ver 4 */
         .mmu_bm = 0x00004000,
         .mmu_ctpr_mask = 0x00ffffc0,
@@ -381,7 +379,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "Fujitsu MB86907",
         .iu_version = 0x05 << 24, /* Impl 0, ver 5 */
-        .fpu_version = 4 << 17, /* FPU version 4 (Meiko) */
+        .fpu_version = 4 << FSR_VER_SHIFT, /* FPU version 4 (Meiko) */
         .mmu_version = 0x05 << 24, /* Impl 0, ver 5 */
         .mmu_bm = 0x00004000,
         .mmu_ctpr_mask = 0xffffffc0,
@@ -394,7 +392,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "TI MicroSparc I",
         .iu_version = 0x41000000,
-        .fpu_version = 4 << 17,
+        .fpu_version = 4 << FSR_VER_SHIFT,
         .mmu_version = 0x41000000,
         .mmu_bm = 0x00004000,
         .mmu_ctpr_mask = 0x007ffff0,
@@ -407,7 +405,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "TI MicroSparc II",
         .iu_version = 0x42000000,
-        .fpu_version = 4 << 17,
+        .fpu_version = 4 << FSR_VER_SHIFT,
         .mmu_version = 0x02000000,
         .mmu_bm = 0x00004000,
         .mmu_ctpr_mask = 0x00ffffc0,
@@ -420,7 +418,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "TI MicroSparc IIep",
         .iu_version = 0x42000000,
-        .fpu_version = 4 << 17,
+        .fpu_version = 4 << FSR_VER_SHIFT,
         .mmu_version = 0x04000000,
         .mmu_bm = 0x00004000,
         .mmu_ctpr_mask = 0x00ffffc0,
@@ -433,7 +431,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "TI SuperSparc 40", /* STP1020NPGA */
         .iu_version = 0x41000000, /* SuperSPARC 2.x */
-        .fpu_version = 0 << 17,
+        .fpu_version = 0 << FSR_VER_SHIFT,
         .mmu_version = 0x00000800, /* SuperSPARC 2.x, no MXCC */
         .mmu_bm = 0x00002000,
         .mmu_ctpr_mask = 0xffffffc0,
@@ -446,7 +444,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "TI SuperSparc 50", /* STP1020PGA */
         .iu_version = 0x40000000, /* SuperSPARC 3.x */
-        .fpu_version = 0 << 17,
+        .fpu_version = 0 << FSR_VER_SHIFT,
         .mmu_version = 0x01000800, /* SuperSPARC 3.x, no MXCC */
         .mmu_bm = 0x00002000,
         .mmu_ctpr_mask = 0xffffffc0,
@@ -459,7 +457,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "TI SuperSparc 51",
         .iu_version = 0x40000000, /* SuperSPARC 3.x */
-        .fpu_version = 0 << 17,
+        .fpu_version = 0 << FSR_VER_SHIFT,
         .mmu_version = 0x01000000, /* SuperSPARC 3.x, MXCC */
         .mmu_bm = 0x00002000,
         .mmu_ctpr_mask = 0xffffffc0,
@@ -473,7 +471,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "TI SuperSparc 60", /* STP1020APGA */
         .iu_version = 0x40000000, /* SuperSPARC 3.x */
-        .fpu_version = 0 << 17,
+        .fpu_version = 0 << FSR_VER_SHIFT,
         .mmu_version = 0x01000800, /* SuperSPARC 3.x, no MXCC */
         .mmu_bm = 0x00002000,
         .mmu_ctpr_mask = 0xffffffc0,
@@ -486,7 +484,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "TI SuperSparc 61",
         .iu_version = 0x44000000, /* SuperSPARC 3.x */
-        .fpu_version = 0 << 17,
+        .fpu_version = 0 << FSR_VER_SHIFT,
         .mmu_version = 0x01000000, /* SuperSPARC 3.x, MXCC */
         .mmu_bm = 0x00002000,
         .mmu_ctpr_mask = 0xffffffc0,
@@ -500,7 +498,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "TI SuperSparc II",
         .iu_version = 0x40000000, /* SuperSPARC II 1.x */
-        .fpu_version = 0 << 17,
+        .fpu_version = 0 << FSR_VER_SHIFT,
         .mmu_version = 0x08000000, /* SuperSPARC II 1.x, MXCC */
         .mmu_bm = 0x00002000,
         .mmu_ctpr_mask = 0xffffffc0,
@@ -514,7 +512,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "LEON2",
         .iu_version = 0xf2000000,
-        .fpu_version = 4 << 17, /* FPU version 4 (Meiko) */
+        .fpu_version = 4 << FSR_VER_SHIFT, /* FPU version 4 (Meiko) */
         .mmu_version = 0xf2000000,
         .mmu_bm = 0x00004000,
         .mmu_ctpr_mask = 0x007ffff0,
@@ -527,7 +525,7 @@ static const sparc_def_t sparc_defs[] = {
     {
         .name = "LEON3",
         .iu_version = 0xf3000000,
-        .fpu_version = 4 << 17, /* FPU version 4 (Meiko) */
+        .fpu_version = 4 << FSR_VER_SHIFT, /* FPU version 4 (Meiko) */
         .mmu_version = 0xf3000000,
         .mmu_bm = 0x00000000,
         .mmu_ctpr_mask = 0xfffffffc,
@@ -576,9 +574,10 @@ void sparc_cpu_list(void)
 {
     unsigned int i;
 
+    qemu_printf("Available CPU types:\n");
     for (i = 0; i < ARRAY_SIZE(sparc_defs); i++) {
-        qemu_printf("Sparc %16s IU " TARGET_FMT_lx
-                    " FPU %08x MMU %08x NWINS %d ",
+        qemu_printf(" %-20s (IU " TARGET_FMT_lx
+                    " FPU %08x MMU %08x NWINS %d) ",
                     sparc_defs[i].name,
                     sparc_defs[i].iu_version,
                     sparc_defs[i].fpu_version,
@@ -613,8 +612,7 @@ static void cpu_print_cc(FILE *f, uint32_t cc)
 
 static void sparc_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 {
-    SPARCCPU *cpu = SPARC_CPU(cs);
-    CPUSPARCState *env = &cpu->env;
+    CPUSPARCState *env = cpu_env(cs);
     int i, x;
 
     qemu_fprintf(f, "pc: " TARGET_FMT_lx "  npc: " TARGET_FMT_lx "\n", env->pc,
@@ -670,7 +668,7 @@ static void sparc_cpu_dump_state(CPUState *cs, FILE *f, int flags)
                  env->cansave, env->canrestore, env->otherwin, env->wstate,
                  env->cleanwin, env->nwindows - 1 - env->cwp);
     qemu_fprintf(f, "fsr: " TARGET_FMT_lx " y: " TARGET_FMT_lx " fprs: %016x\n",
-                 env->fsr, env->y, env->fprs);
+                 cpu_get_fsr(env), env->y, env->fprs);
 
 #else
     qemu_fprintf(f, "psr: %08x (icc: ", cpu_get_psr(env));
@@ -679,7 +677,7 @@ static void sparc_cpu_dump_state(CPUState *cs, FILE *f, int flags)
                  env->psrps ? 'P' : '-', env->psret ? 'E' : '-',
                  env->wim);
     qemu_fprintf(f, "fsr: " TARGET_FMT_lx " y: " TARGET_FMT_lx "\n",
-                 env->fsr, env->y);
+                 cpu_get_fsr(env), env->y);
 #endif
     qemu_fprintf(f, "\n");
 }
@@ -711,11 +709,36 @@ static void sparc_cpu_synchronize_from_tb(CPUState *cs,
 
 static bool sparc_cpu_has_work(CPUState *cs)
 {
-    SPARCCPU *cpu = SPARC_CPU(cs);
-    CPUSPARCState *env = &cpu->env;
-
     return (cs->interrupt_request & CPU_INTERRUPT_HARD) &&
-           cpu_interrupts_enabled(env);
+           cpu_interrupts_enabled(cpu_env(cs));
+}
+
+static int sparc_cpu_mmu_index(CPUState *cs, bool ifetch)
+{
+    CPUSPARCState *env = cpu_env(cs);
+
+#ifndef TARGET_SPARC64
+    if ((env->mmuregs[0] & MMU_E) == 0) { /* MMU disabled */
+        return MMU_PHYS_IDX;
+    } else {
+        return env->psrs;
+    }
+#else
+    /* IMMU or DMMU disabled.  */
+    if (ifetch
+        ? (env->lsu & IMMU_E) == 0 || (env->pstate & PS_RED) != 0
+        : (env->lsu & DMMU_E) == 0) {
+        return MMU_PHYS_IDX;
+    } else if (cpu_hypervisor_mode(env)) {
+        return MMU_PHYS_IDX;
+    } else if (env->tl > 0) {
+        return MMU_NUCLEUS_IDX;
+    } else if (cpu_supervisor_mode(env)) {
+        return MMU_KERNEL_IDX;
+    } else {
+        return MMU_USER_IDX;
+    }
+#endif
 }
 
 static char *sparc_cpu_type_name(const char *cpu_model)
@@ -749,8 +772,7 @@ static void sparc_cpu_realizefn(DeviceState *dev, Error **errp)
     CPUState *cs = CPU(dev);
     SPARCCPUClass *scc = SPARC_CPU_GET_CLASS(dev);
     Error *local_err = NULL;
-    SPARCCPU *cpu = SPARC_CPU(dev);
-    CPUSPARCState *env = &cpu->env;
+    CPUSPARCState *env = cpu_env(cs);
 
 #if defined(CONFIG_USER_ONLY)
     /* We are emulating the kernel, which will trap and emulate float128. */
@@ -758,7 +780,6 @@ static void sparc_cpu_realizefn(DeviceState *dev, Error **errp)
 #endif
 
     env->version = env->def.iu_version;
-    env->fsr = env->def.fpu_version;
     env->nwindows = env->def.nwindows;
 #if !defined(TARGET_SPARC64)
     env->mmuregs[0] |= env->def.mmu_version;
@@ -770,6 +791,7 @@ static void sparc_cpu_realizefn(DeviceState *dev, Error **errp)
     env->version |= env->def.maxtl << 8;
     env->version |= env->def.nwindows - 1;
 #endif
+    cpu_put_fsr(env, 0);
 
     cpu_exec_realizefn(cs, &local_err);
     if (local_err != NULL) {
@@ -874,7 +896,7 @@ static const struct SysemuCPUOps sparc_sysemu_ops = {
 #ifdef CONFIG_TCG
 #include "hw/core/tcg-cpu-ops.h"
 
-static const struct TCGCPUOps sparc_tcg_ops = {
+static const TCGCPUOps sparc_tcg_ops = {
     .initialize = sparc_tcg_init,
     .synchronize_from_tb = sparc_cpu_synchronize_from_tb,
     .restore_state_to_opc = sparc_restore_state_to_opc,
@@ -906,6 +928,7 @@ static void sparc_cpu_class_init(ObjectClass *oc, void *data)
     cc->class_by_name = sparc_cpu_class_by_name;
     cc->parse_features = sparc_cpu_parse_features;
     cc->has_work = sparc_cpu_has_work;
+    cc->mmu_index = sparc_cpu_mmu_index;
     cc->dump_state = sparc_cpu_dump_state;
 #if !defined(TARGET_SPARC64) && !defined(CONFIG_USER_ONLY)
     cc->memory_rw_debug = sparc_cpu_memory_rw_debug;

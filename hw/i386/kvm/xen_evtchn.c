@@ -240,7 +240,7 @@ static const VMStateDescription xen_evtchn_port_vmstate = {
     .name = "xen_evtchn_port",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(vcpu, XenEvtchnPort),
         VMSTATE_UINT16(type, XenEvtchnPort),
         VMSTATE_UINT16(u.val, XenEvtchnPort),
@@ -255,7 +255,7 @@ static const VMStateDescription xen_evtchn_vmstate = {
     .needed = xen_evtchn_is_needed,
     .pre_load = xen_evtchn_pre_load,
     .post_load = xen_evtchn_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(callback_param, XenEvtchnState),
         VMSTATE_UINT32(nr_ports, XenEvtchnState),
         VMSTATE_STRUCT_VARRAY_UINT32(port_table, XenEvtchnState, nr_ports, 1,
@@ -371,7 +371,7 @@ static int set_callback_pci_intx(XenEvtchnState *s, uint64_t param)
         return 0;
     }
 
-    pdev = pci_find_device(pcms->bus, bus, devfn);
+    pdev = pci_find_device(pcms->pcibus, bus, devfn);
     if (!pdev) {
         return 0;
     }
@@ -425,7 +425,7 @@ void xen_evtchn_set_callback_level(int level)
      * effect immediately. That just leaves interdomain loopback as the case
      * which uses the BH.
      */
-    if (!qemu_mutex_iothread_locked()) {
+    if (!bql_locked()) {
         qemu_bh_schedule(s->gsi_bh);
         return;
     }
@@ -459,7 +459,7 @@ int xen_evtchn_set_callback_param(uint64_t param)
      * We need the BQL because set_callback_pci_intx() may call into PCI code,
      * and because we may need to manipulate the old and new GSI levels.
      */
-    assert(qemu_mutex_iothread_locked());
+    assert(bql_locked());
     qemu_mutex_lock(&s->port_lock);
 
     switch (type) {
@@ -1037,7 +1037,7 @@ static int close_port(XenEvtchnState *s, evtchn_port_t port,
     XenEvtchnPort *p = &s->port_table[port];
 
     /* Because it *might* be a PIRQ port */
-    assert(qemu_mutex_iothread_locked());
+    assert(bql_locked());
 
     switch (p->type) {
     case EVTCHNSTAT_closed:
@@ -1097,14 +1097,14 @@ static int close_port(XenEvtchnState *s, evtchn_port_t port,
 int xen_evtchn_soft_reset(void)
 {
     XenEvtchnState *s = xen_evtchn_singleton;
-    bool flush_kvm_routes;
+    bool flush_kvm_routes = false;
     int i;
 
     if (!s) {
         return -ENOTSUP;
     }
 
-    assert(qemu_mutex_iothread_locked());
+    assert(bql_locked());
 
     qemu_mutex_lock(&s->port_lock);
 
@@ -1127,7 +1127,7 @@ int xen_evtchn_reset_op(struct evtchn_reset *reset)
         return -ESRCH;
     }
 
-    QEMU_IOTHREAD_LOCK_GUARD();
+    BQL_LOCK_GUARD();
     return xen_evtchn_soft_reset();
 }
 
@@ -1145,7 +1145,7 @@ int xen_evtchn_close_op(struct evtchn_close *close)
         return -EINVAL;
     }
 
-    QEMU_IOTHREAD_LOCK_GUARD();
+    BQL_LOCK_GUARD();
     qemu_mutex_lock(&s->port_lock);
 
     ret = close_port(s, close->port, &flush_kvm_routes);
@@ -1272,7 +1272,7 @@ int xen_evtchn_bind_pirq_op(struct evtchn_bind_pirq *pirq)
         return -EINVAL;
     }
 
-    QEMU_IOTHREAD_LOCK_GUARD();
+    BQL_LOCK_GUARD();
 
     if (s->pirq[pirq->pirq].port) {
         return -EBUSY;
@@ -1601,7 +1601,7 @@ bool xen_evtchn_set_gsi(int gsi, int level)
     XenEvtchnState *s = xen_evtchn_singleton;
     int pirq;
 
-    assert(qemu_mutex_iothread_locked());
+    assert(bql_locked());
 
     if (!s || gsi < 0 || gsi >= IOAPIC_NUM_PINS) {
         return false;
@@ -1712,7 +1712,7 @@ void xen_evtchn_snoop_msi(PCIDevice *dev, bool is_msix, unsigned int vector,
         return;
     }
 
-    assert(qemu_mutex_iothread_locked());
+    assert(bql_locked());
 
     pirq = msi_pirq_target(addr, data);
 
@@ -1749,7 +1749,7 @@ int xen_evtchn_translate_pirq_msi(struct kvm_irq_routing_entry *route,
         return 1; /* Not a PIRQ */
     }
 
-    assert(qemu_mutex_iothread_locked());
+    assert(bql_locked());
 
     pirq = msi_pirq_target(address, data);
     if (!pirq || pirq >= s->nr_pirqs) {
@@ -1796,7 +1796,7 @@ bool xen_evtchn_deliver_pirq_msi(uint64_t address, uint32_t data)
         return false;
     }
 
-    assert(qemu_mutex_iothread_locked());
+    assert(bql_locked());
 
     pirq = msi_pirq_target(address, data);
     if (!pirq || pirq >= s->nr_pirqs) {
@@ -1824,7 +1824,7 @@ int xen_physdev_map_pirq(struct physdev_map_pirq *map)
         return -ENOTSUP;
     }
 
-    QEMU_IOTHREAD_LOCK_GUARD();
+    BQL_LOCK_GUARD();
     QEMU_LOCK_GUARD(&s->port_lock);
 
     if (map->domid != DOMID_SELF && map->domid != xen_domid) {
@@ -1884,7 +1884,7 @@ int xen_physdev_unmap_pirq(struct physdev_unmap_pirq *unmap)
         return -EINVAL;
     }
 
-    QEMU_IOTHREAD_LOCK_GUARD();
+    BQL_LOCK_GUARD();
     qemu_mutex_lock(&s->port_lock);
 
     if (!pirq_inuse(s, pirq)) {
@@ -1924,7 +1924,7 @@ int xen_physdev_eoi_pirq(struct physdev_eoi *eoi)
         return -ENOTSUP;
     }
 
-    QEMU_IOTHREAD_LOCK_GUARD();
+    BQL_LOCK_GUARD();
     QEMU_LOCK_GUARD(&s->port_lock);
 
     if (!pirq_inuse(s, pirq)) {
@@ -1956,7 +1956,7 @@ int xen_physdev_query_pirq(struct physdev_irq_status_query *query)
         return -ENOTSUP;
     }
 
-    QEMU_IOTHREAD_LOCK_GUARD();
+    BQL_LOCK_GUARD();
     QEMU_LOCK_GUARD(&s->port_lock);
 
     if (!pirq_inuse(s, pirq)) {

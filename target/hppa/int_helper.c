@@ -28,7 +28,7 @@
 static void eval_interrupt(HPPACPU *cpu)
 {
     CPUState *cs = CPU(cpu);
-    if (cpu->env.cr[CR_EIRR] & cpu->env.cr[CR_EIEM]) {
+    if (cpu->env.cr[CR_EIRR]) {
         cpu_interrupt(cs, CPU_INTERRUPT_HARD);
     } else {
         cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
@@ -84,17 +84,9 @@ void hppa_cpu_alarm_timer(void *opaque)
 void HELPER(write_eirr)(CPUHPPAState *env, target_ulong val)
 {
     env->cr[CR_EIRR] &= ~val;
-    qemu_mutex_lock_iothread();
+    bql_lock();
     eval_interrupt(env_archcpu(env));
-    qemu_mutex_unlock_iothread();
-}
-
-void HELPER(write_eiem)(CPUHPPAState *env, target_ulong val)
-{
-    env->cr[CR_EIEM] = val;
-    qemu_mutex_lock_iothread();
-    eval_interrupt(env_archcpu(env));
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
 }
 
 void hppa_cpu_do_interrupt(CPUState *cs)
@@ -115,14 +107,10 @@ void hppa_cpu_do_interrupt(CPUState *cs)
 
     /* step 3 */
     /*
-     * For pa1.x, IIASQ is simply a copy of IASQ.
-     * For pa2.0, IIASQ is the top bits of the virtual address,
-     *            or zero if translation is disabled.
+     * IIASQ is the top bits of the virtual address, or zero if translation
+     * is disabled -- with PSW_W == 0, this will reduce to the space.
      */
-    if (!hppa_is_pa20(env)) {
-        env->cr[CR_IIASQ] = env->iasq_f >> 32;
-        env->cr_back[0] = env->iasq_b >> 32;
-    } else if (old_psw & PSW_C) {
+    if (old_psw & PSW_C) {
         env->cr[CR_IIASQ] =
             hppa_form_gva_psw(old_psw, env->iasq_f, env->iaoq_f) >> 32;
         env->cr_back[0] =
@@ -131,8 +119,14 @@ void hppa_cpu_do_interrupt(CPUState *cs)
         env->cr[CR_IIASQ] = 0;
         env->cr_back[0] = 0;
     }
-    env->cr[CR_IIAOQ] = env->iaoq_f;
-    env->cr_back[1] = env->iaoq_b;
+    /* IIAOQ is the full offset for wide mode, or 32 bits for narrow mode. */
+    if (old_psw & PSW_W) {
+        env->cr[CR_IIAOQ] = env->iaoq_f;
+        env->cr_back[1] = env->iaoq_b;
+    } else {
+        env->cr[CR_IIAOQ] = (uint32_t)env->iaoq_f;
+        env->cr_back[1] = (uint32_t)env->iaoq_b;
+    }
 
     if (old_psw & PSW_Q) {
         /* step 5 */
@@ -280,7 +274,9 @@ bool hppa_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
     }
 
     /* If interrupts are requested and enabled, raise them.  */
-    if ((env->psw & PSW_I) && (interrupt_request & CPU_INTERRUPT_HARD)) {
+    if ((interrupt_request & CPU_INTERRUPT_HARD)
+        && (env->psw & PSW_I)
+        && (env->cr[CR_EIRR] & env->cr[CR_EIEM])) {
         cs->exception_index = EXCP_EXT_INTERRUPT;
         hppa_cpu_do_interrupt(cs);
         return true;

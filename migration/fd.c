@@ -17,6 +17,7 @@
 #include "qemu/osdep.h"
 #include "channel.h"
 #include "fd.h"
+#include "file.h"
 #include "migration.h"
 #include "monitor/monitor.h"
 #include "io/channel-util.h"

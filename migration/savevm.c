@@ -245,6 +245,7 @@ static bool should_validate_capability(int capability)
     /* Validate only new capabilities to keep compatibility. */
     switch (capability) {
     case MIGRATION_CAPABILITY_X_IGNORE_SHARED:
+    case MIGRATION_CAPABILITY_MAPPED_RAM:
         return true;
     default:
         return false;
@@ -438,7 +439,7 @@ static const VMStateDescription vmstate_target_page_bits = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = vmstate_target_page_bits_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(target_page_bits, SaveState),
         VMSTATE_END_OF_LIST()
     }
@@ -454,7 +455,7 @@ static const VMStateDescription vmstate_capabilites = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = vmstate_capabilites_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32_V(caps_count, SaveState, 1),
         VMSTATE_VARRAY_UINT32_ALLOC(capabilities, SaveState, caps_count, 1,
                                     vmstate_info_capability,
@@ -499,7 +500,7 @@ static const VMStateDescription vmstate_uuid = {
     .minimum_version_id = 1,
     .needed = vmstate_uuid_needed,
     .post_load = vmstate_uuid_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY_V(uuid.data, SaveState, sizeof(QemuUUID), 1),
         VMSTATE_END_OF_LIST()
     }
@@ -512,12 +513,12 @@ static const VMStateDescription vmstate_configuration = {
     .post_load = configuration_post_load,
     .pre_save = configuration_pre_save,
     .post_save = configuration_post_save,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(len, SaveState),
         VMSTATE_VBUFFER_ALLOC_UINT32(name, SaveState, 0, NULL, len),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription *[]) {
+    .subsections = (const VMStateDescription * const []) {
         &vmstate_target_page_bits,
         &vmstate_capabilites,
         &vmstate_uuid,
@@ -551,11 +552,11 @@ static void dump_vmstate_vmsf(FILE *out_file, const VMStateField *field,
 }
 
 static void dump_vmstate_vmss(FILE *out_file,
-                              const VMStateDescription **subsection,
+                              const VMStateDescription *subsection,
                               int indent)
 {
-    if (*subsection != NULL) {
-        dump_vmstate_vmsd(out_file, *subsection, indent, true);
+    if (subsection != NULL) {
+        dump_vmstate_vmsd(out_file, subsection, indent, true);
     }
 }
 
@@ -597,7 +598,7 @@ static void dump_vmstate_vmsd(FILE *out_file,
         fprintf(out_file, "\n%*s]", indent, "");
     }
     if (vmsd->subsections != NULL) {
-        const VMStateDescription **subsection = vmsd->subsections;
+        const VMStateDescription * const *subsection = vmsd->subsections;
         bool first;
 
         fprintf(out_file, ",\n%*s\"Subsections\": [\n", indent, "");
@@ -606,7 +607,7 @@ static void dump_vmstate_vmsd(FILE *out_file,
             if (!first) {
                 fprintf(out_file, ",\n");
             }
-            dump_vmstate_vmss(out_file, subsection, indent + 2);
+            dump_vmstate_vmss(out_file, *subsection, indent + 2);
             subsection++;
             first = false;
         }
@@ -831,7 +832,7 @@ void unregister_savevm(VMStateIf *obj, const char *idstr, void *opaque)
 static void vmstate_check(const VMStateDescription *vmsd)
 {
     const VMStateField *field = vmsd->fields;
-    const VMStateDescription **subsection = vmsd->subsections;
+    const VMStateDescription * const *subsection = vmsd->subsections;
 
     if (field) {
         while (field->name) {
@@ -1316,7 +1317,7 @@ void qemu_savevm_state_setup(QEMUFile *f)
     MigrationState *ms = migrate_get_current();
     SaveStateEntry *se;
     Error *local_err = NULL;
-    int ret;
+    int ret = 0;
 
     json_writer_int64(ms->vmdesc, "page_size", qemu_target_page_size());
     json_writer_start_array(ms->vmdesc, "devices");
@@ -1348,6 +1349,10 @@ void qemu_savevm_state_setup(QEMUFile *f)
             qemu_file_set_error(f, ret);
             break;
         }
+    }
+
+    if (ret) {
+        return;
     }
 
     if (precopy_notify(PRECOPY_NOTIFY_SETUP, &local_err)) {
@@ -1389,7 +1394,8 @@ int qemu_savevm_state_resume_prepare(MigrationState *s)
 int qemu_savevm_state_iterate(QEMUFile *f, bool postcopy)
 {
     SaveStateEntry *se;
-    int ret = 1;
+    bool all_finished = true;
+    int ret;
 
     trace_savevm_state_iterate();
     QTAILQ_FOREACH(se, &savevm_state.handlers, entry) {
@@ -1430,16 +1436,12 @@ int qemu_savevm_state_iterate(QEMUFile *f, bool postcopy)
                          "%d(%s): %d",
                          se->section_id, se->idstr, ret);
             qemu_file_set_error(f, ret);
-        }
-        if (ret <= 0) {
-            /* Do not proceed to the next vmstate before this one reported
-               completion of the current stage. This serializes the migration
-               and reduces the probability that a faster changing state is
-               synchronized over and over again. */
-            break;
+            return ret;
+        } else if (!ret) {
+            all_finished = false;
         }
     }
-    return ret;
+    return all_finished;
 }
 
 static bool should_send_vmdesc(void)
@@ -1704,7 +1706,7 @@ static int qemu_savevm_state(QEMUFile *f, Error **errp)
     MigrationState *ms = migrate_get_current();
     MigrationStatus status;
 
-    if (migration_is_running(ms->state)) {
+    if (migration_is_running()) {
         error_setg(errp, QERR_MIGRATION_ACTIVE);
         return -EINVAL;
     }
@@ -2171,8 +2173,6 @@ static void loadvm_postcopy_handle_run_bh(void *opaque)
         runstate_set(RUN_STATE_PAUSED);
     }
 
-    qemu_bh_delete(mis->bh);
-
     trace_vmstate_downtime_checkpoint("dst-postcopy-bh-vm-started");
 }
 
@@ -2188,8 +2188,7 @@ static int loadvm_postcopy_handle_run(MigrationIncomingState *mis)
     }
 
     postcopy_state_set(POSTCOPY_INCOMING_RUNNING);
-    mis->bh = qemu_bh_new(loadvm_postcopy_handle_run_bh, mis);
-    qemu_bh_schedule(mis->bh);
+    migration_bh_schedule(loadvm_postcopy_handle_run_bh, mis);
 
     /* We need to finish reading the stream from the package
      * and also stop reading anything more from the stream that loaded the
@@ -2342,6 +2341,27 @@ static int loadvm_handle_cmd_packaged(MigrationIncomingState *mis)
     trace_loadvm_handle_cmd_packaged_received(ret);
 
     QEMUFile *packf = qemu_file_new_input(QIO_CHANNEL(bioc));
+
+    /*
+     * Before loading the guest states, ensure that the preempt channel has
+     * been ready to use, as some of the states (e.g. via virtio_load) might
+     * trigger page faults that will be handled through the preempt channel.
+     * So yield to the main thread in the case that the channel create event
+     * hasn't been dispatched.
+     *
+     * TODO: if we can move migration loadvm out of main thread, then we
+     * won't block main thread from polling the accept() fds.  We can drop
+     * this as a whole when that is done.
+     */
+    do {
+        if (!migrate_postcopy_preempt() || !qemu_in_coroutine() ||
+            mis->postcopy_qemufile_dst) {
+            break;
+        }
+
+        aio_co_schedule(qemu_get_current_aio_context(), qemu_coroutine_self());
+        qemu_coroutine_yield();
+    } while (1);
 
     ret = qemu_loadvm_state_main(packf, mis);
     trace_loadvm_handle_cmd_packaged_main(ret);
@@ -3046,10 +3066,9 @@ bool save_snapshot(const char *name, bool overwrite, const char *vmstate,
     QEMUSnapshotInfo sn1, *sn = &sn1;
     int ret = -1, ret2;
     QEMUFile *f;
-    int saved_vm_running;
+    RunState saved_state = runstate_get();
     uint64_t vm_state_size;
     g_autoptr(GDateTime) now = g_date_time_new_now_local();
-    AioContext *aio_context;
 
     GLOBAL_STATE_CODE();
 
@@ -3092,16 +3111,11 @@ bool save_snapshot(const char *name, bool overwrite, const char *vmstate,
     if (bs == NULL) {
         return false;
     }
-    aio_context = bdrv_get_aio_context(bs);
-
-    saved_vm_running = runstate_is_running();
 
     global_state_store();
     vm_stop(RUN_STATE_SAVE_VM);
 
     bdrv_drain_all_begin();
-
-    aio_context_acquire(aio_context);
 
     memset(sn, 0, sizeof(*sn));
 
@@ -3139,14 +3153,6 @@ bool save_snapshot(const char *name, bool overwrite, const char *vmstate,
         goto the_end;
     }
 
-    /* The bdrv_all_create_snapshot() call that follows acquires the AioContext
-     * for itself.  BDRV_POLL_WHILE() does not support nested locking because
-     * it only releases the lock once.  Therefore synchronous I/O will deadlock
-     * unless we release the AioContext before bdrv_all_create_snapshot().
-     */
-    aio_context_release(aio_context);
-    aio_context = NULL;
-
     ret = bdrv_all_create_snapshot(sn, bs, vm_state_size,
                                    has_devices, devices, errp);
     if (ret < 0) {
@@ -3157,15 +3163,9 @@ bool save_snapshot(const char *name, bool overwrite, const char *vmstate,
     ret = 0;
 
  the_end:
-    if (aio_context) {
-        aio_context_release(aio_context);
-    }
-
     bdrv_drain_all_end();
 
-    if (saved_vm_running) {
-        vm_start();
-    }
+    vm_resume(saved_state);
     return ret == 0;
 }
 
@@ -3258,7 +3258,6 @@ bool load_snapshot(const char *name, const char *vmstate,
     QEMUSnapshotInfo sn;
     QEMUFile *f;
     int ret;
-    AioContext *aio_context;
     MigrationIncomingState *mis = migration_incoming_get_current();
 
     if (!bdrv_all_can_snapshot(has_devices, devices, errp)) {
@@ -3278,12 +3277,9 @@ bool load_snapshot(const char *name, const char *vmstate,
     if (!bs_vm_state) {
         return false;
     }
-    aio_context = bdrv_get_aio_context(bs_vm_state);
 
     /* Don't even try to load empty VM states */
-    aio_context_acquire(aio_context);
     ret = bdrv_snapshot_find(bs_vm_state, &sn, name);
-    aio_context_release(aio_context);
     if (ret < 0) {
         return false;
     } else if (sn.vm_state_size == 0) {
@@ -3320,10 +3316,8 @@ bool load_snapshot(const char *name, const char *vmstate,
         ret = -EINVAL;
         goto err_drain;
     }
-    aio_context_acquire(aio_context);
     ret = qemu_loadvm_state(f);
     migration_incoming_state_destroy();
-    aio_context_release(aio_context);
 
     bdrv_drain_all_end();
 
@@ -3337,6 +3331,14 @@ bool load_snapshot(const char *name, const char *vmstate,
 err_drain:
     bdrv_drain_all_end();
     return false;
+}
+
+void load_snapshot_resume(RunState state)
+{
+    vm_resume(state);
+    if (state == RUN_STATE_RUNNING && runstate_get() == RUN_STATE_SUSPENDED) {
+        qemu_system_wakeup_request(QEMU_WAKEUP_REASON_OTHER, &error_abort);
+    }
 }
 
 bool delete_snapshot(const char *name, bool has_devices,
@@ -3403,16 +3405,15 @@ static void snapshot_load_job_bh(void *opaque)
 {
     Job *job = opaque;
     SnapshotJob *s = container_of(job, SnapshotJob, common);
-    int orig_vm_running;
+    RunState orig_state = runstate_get();
 
     job_progress_set_remaining(&s->common, 1);
 
-    orig_vm_running = runstate_is_running();
     vm_stop(RUN_STATE_RESTORE_VM);
 
     s->ret = load_snapshot(s->tag, s->vmstate, true, s->devices, s->errp);
-    if (s->ret && orig_vm_running) {
-        vm_start();
+    if (s->ret) {
+        load_snapshot_resume(orig_state);
     }
 
     job_progress_update(&s->common, 1);

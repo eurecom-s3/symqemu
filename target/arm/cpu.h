@@ -25,7 +25,10 @@
 #include "hw/registerfields.h"
 #include "cpu-qom.h"
 #include "exec/cpu-defs.h"
+#include "exec/gdbstub.h"
 #include "qapi/qapi-types-common.h"
+#include "target/arm/multiprocessing.h"
+#include "target/arm/gtimer.h"
 
 /* ARM processors have a weak memory model */
 #define TCG_GUEST_DEFAULT_MO      (0)
@@ -72,21 +75,6 @@
 #define ARMV7M_EXCP_PENDSV  14
 #define ARMV7M_EXCP_SYSTICK 15
 
-/* For M profile, some registers are banked secure vs non-secure;
- * these are represented as a 2-element array where the first element
- * is the non-secure copy and the second is the secure copy.
- * When the CPU does not have implement the security extension then
- * only the first element is used.
- * This means that the copy for the current security state can be
- * accessed via env->registerfield[env->v7m.secure] (whether the security
- * extension is implemented or not).
- */
-enum {
-    M_REG_NS = 0,
-    M_REG_S = 1,
-    M_REG_NUM_BANKS = 2,
-};
-
 /* ARM-specific interrupt pending bits.  */
 #define CPU_INTERRUPT_FIQ   CPU_INTERRUPT_TGT_EXT_1
 #define CPU_INTERRUPT_VIRQ  CPU_INTERRUPT_TGT_EXT_2
@@ -107,12 +95,6 @@ enum {
 #define offsetofhigh32(S, M) (offsetof(S, M) + sizeof(uint32_t))
 #endif
 
-/* Meanings of the ARMCPU object's four inbound GPIO lines */
-#define ARM_CPU_IRQ 0
-#define ARM_CPU_FIQ 1
-#define ARM_CPU_VIRQ 2
-#define ARM_CPU_VFIQ 3
-
 /* ARM-specific extra insn start words:
  * 1: Conditional execution bits
  * 2: Partial exception syndrome for data aborts
@@ -120,12 +102,12 @@ enum {
 #define TARGET_INSN_START_EXTRA_WORDS 2
 
 /* The 2nd extra word holding syndrome info for data aborts does not use
- * the upper 6 bits nor the lower 14 bits. We mask and shift it down to
+ * the upper 6 bits nor the lower 13 bits. We mask and shift it down to
  * help the sleb128 encoder do a better job.
  * When restoring the CPU state, we shift it back up.
  */
 #define ARM_INSN_START_WORD2_MASK ((1 << 26) - 1)
-#define ARM_INSN_START_WORD2_SHIFT 14
+#define ARM_INSN_START_WORD2_SHIFT 13
 
 /* We currently assume float and double are IEEE single and double
    precision respectively.
@@ -136,41 +118,27 @@ enum {
  */
 
 /**
- * DynamicGDBXMLInfo:
- * @desc: Contains the XML descriptions.
- * @num: Number of the registers in this XML seen by GDB.
+ * DynamicGDBFeatureInfo:
+ * @desc: Contains the feature descriptions.
  * @data: A union with data specific to the set of registers
  *    @cpregs_keys: Array that contains the corresponding Key of
  *                  a given cpreg with the same order of the cpreg
  *                  in the XML description.
  */
-typedef struct DynamicGDBXMLInfo {
-    char *desc;
-    int num;
+typedef struct DynamicGDBFeatureInfo {
+    GDBFeature desc;
     union {
         struct {
             uint32_t *keys;
         } cpregs;
     } data;
-} DynamicGDBXMLInfo;
+} DynamicGDBFeatureInfo;
 
 /* CPU state for each instance of a generic timer (in cp15 c14) */
 typedef struct ARMGenericTimer {
     uint64_t cval; /* Timer CompareValue register */
     uint64_t ctl; /* Timer Control register */
 } ARMGenericTimer;
-
-#define GTIMER_PHYS     0
-#define GTIMER_VIRT     1
-#define GTIMER_HYP      2
-#define GTIMER_SEC      3
-#define GTIMER_HYPVIRT  4
-#define NUM_GTIMERS     5
-
-#define VTCR_NSW (1u << 29)
-#define VTCR_NSA (1u << 30)
-#define VSTCR_SW VTCR_NSW
-#define VSTCR_SA VTCR_NSA
 
 /* Define a maximum sized vector register.
  * For 32-bit, this is a 128-bit NEON/AdvSIMD register.
@@ -484,6 +452,7 @@ typedef struct CPUArchState {
         uint64_t c14_cntkctl; /* Timer Control register */
         uint64_t cnthctl_el2; /* Counter/Timer Hyp Control register */
         uint64_t cntvoff_el2; /* Counter Virtual Offset register */
+        uint64_t cntpoff_el2; /* Counter Physical Offset register */
         ARMGenericTimer c14_timer[NUM_GTIMERS];
         uint32_t c15_cpar; /* XScale Coprocessor Access Register */
         uint32_t c15_ticonfig; /* TI925T configuration byte.  */
@@ -547,6 +516,9 @@ typedef struct CPUArchState {
         uint64_t gpccr_el3;
         uint64_t gptbr_el3;
         uint64_t mfar_el3;
+
+        /* NV2 register */
+        uint64_t vncr_el2;
     } cp15;
 
     struct {
@@ -880,10 +852,10 @@ struct ArchCPU {
     uint64_t *cpreg_vmstate_values;
     int32_t cpreg_vmstate_array_len;
 
-    DynamicGDBXMLInfo dyn_sysreg_xml;
-    DynamicGDBXMLInfo dyn_svereg_xml;
-    DynamicGDBXMLInfo dyn_m_systemreg_xml;
-    DynamicGDBXMLInfo dyn_m_secextreg_xml;
+    DynamicGDBFeatureInfo dyn_sysreg_feature;
+    DynamicGDBFeatureInfo dyn_svereg_feature;
+    DynamicGDBFeatureInfo dyn_m_systemreg_feature;
+    DynamicGDBFeatureInfo dyn_m_secextreg_feature;
 
     /* Timers used by the generic (architected) timer */
     QEMUTimer *gt_timer[NUM_GTIMERS];
@@ -1170,7 +1142,7 @@ void arm_cpu_post_init(Object *obj);
     (ARM_AFF0_MASK | ARM_AFF1_MASK | ARM_AFF2_MASK | ARM_AFF3_MASK)
 #define ARM64_AFFINITY_INVALID (~ARM64_AFFINITY_MASK)
 
-uint64_t arm_cpu_mp_affinity(int idx, uint8_t clustersz);
+uint64_t arm_build_mp_affinity(int idx, uint8_t clustersz);
 
 #ifndef CONFIG_USER_ONLY
 extern const VMStateDescription vmstate_arm_cpu;
@@ -1184,12 +1156,6 @@ hwaddr arm_cpu_get_phys_page_attrs_debug(CPUState *cpu, vaddr addr,
 
 int arm_cpu_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg);
 int arm_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
-
-/* Returns the dynamically generated XML for the gdb stub.
- * Returns a pointer to the XML contents for the specified XML file or NULL
- * if the XML name doesn't match the predefined one.
- */
-const char *arm_gdb_get_dynamic_xml(CPUState *cpu, const char *xmlname);
 
 int arm_cpu_write_elf64_note(WriteCoreDumpFunction f, CPUState *cs,
                              int cpuid, DumpState *s);
@@ -1407,73 +1373,6 @@ void pmu_init(ARMCPU *cpu);
 #define SCTLR_SPINTMASK (1ULL << 62) /* FEAT_NMI */
 #define SCTLR_TIDCP   (1ULL << 63) /* FEAT_TIDCP1 */
 
-/* Bit definitions for CPACR (AArch32 only) */
-FIELD(CPACR, CP10, 20, 2)
-FIELD(CPACR, CP11, 22, 2)
-FIELD(CPACR, TRCDIS, 28, 1)    /* matches CPACR_EL1.TTA */
-FIELD(CPACR, D32DIS, 30, 1)    /* up to v7; RAZ in v8 */
-FIELD(CPACR, ASEDIS, 31, 1)
-
-/* Bit definitions for CPACR_EL1 (AArch64 only) */
-FIELD(CPACR_EL1, ZEN, 16, 2)
-FIELD(CPACR_EL1, FPEN, 20, 2)
-FIELD(CPACR_EL1, SMEN, 24, 2)
-FIELD(CPACR_EL1, TTA, 28, 1)   /* matches CPACR.TRCDIS */
-
-/* Bit definitions for HCPTR (AArch32 only) */
-FIELD(HCPTR, TCP10, 10, 1)
-FIELD(HCPTR, TCP11, 11, 1)
-FIELD(HCPTR, TASE, 15, 1)
-FIELD(HCPTR, TTA, 20, 1)
-FIELD(HCPTR, TAM, 30, 1)       /* matches CPTR_EL2.TAM */
-FIELD(HCPTR, TCPAC, 31, 1)     /* matches CPTR_EL2.TCPAC */
-
-/* Bit definitions for CPTR_EL2 (AArch64 only) */
-FIELD(CPTR_EL2, TZ, 8, 1)      /* !E2H */
-FIELD(CPTR_EL2, TFP, 10, 1)    /* !E2H, matches HCPTR.TCP10 */
-FIELD(CPTR_EL2, TSM, 12, 1)    /* !E2H */
-FIELD(CPTR_EL2, ZEN, 16, 2)    /* E2H */
-FIELD(CPTR_EL2, FPEN, 20, 2)   /* E2H */
-FIELD(CPTR_EL2, SMEN, 24, 2)   /* E2H */
-FIELD(CPTR_EL2, TTA, 28, 1)
-FIELD(CPTR_EL2, TAM, 30, 1)    /* matches HCPTR.TAM */
-FIELD(CPTR_EL2, TCPAC, 31, 1)  /* matches HCPTR.TCPAC */
-
-/* Bit definitions for CPTR_EL3 (AArch64 only) */
-FIELD(CPTR_EL3, EZ, 8, 1)
-FIELD(CPTR_EL3, TFP, 10, 1)
-FIELD(CPTR_EL3, ESM, 12, 1)
-FIELD(CPTR_EL3, TTA, 20, 1)
-FIELD(CPTR_EL3, TAM, 30, 1)
-FIELD(CPTR_EL3, TCPAC, 31, 1)
-
-#define MDCR_MTPME    (1U << 28)
-#define MDCR_TDCC     (1U << 27)
-#define MDCR_HLP      (1U << 26)  /* MDCR_EL2 */
-#define MDCR_SCCD     (1U << 23)  /* MDCR_EL3 */
-#define MDCR_HCCD     (1U << 23)  /* MDCR_EL2 */
-#define MDCR_EPMAD    (1U << 21)
-#define MDCR_EDAD     (1U << 20)
-#define MDCR_TTRF     (1U << 19)
-#define MDCR_STE      (1U << 18)  /* MDCR_EL3 */
-#define MDCR_SPME     (1U << 17)  /* MDCR_EL3 */
-#define MDCR_HPMD     (1U << 17)  /* MDCR_EL2 */
-#define MDCR_SDD      (1U << 16)
-#define MDCR_SPD      (3U << 14)
-#define MDCR_TDRA     (1U << 11)
-#define MDCR_TDOSA    (1U << 10)
-#define MDCR_TDA      (1U << 9)
-#define MDCR_TDE      (1U << 8)
-#define MDCR_HPME     (1U << 7)
-#define MDCR_TPM      (1U << 6)
-#define MDCR_TPMCR    (1U << 5)
-#define MDCR_HPMN     (0x1fU)
-
-/* Not all of the MDCR_EL3 bits are present in the 32-bit SDCR */
-#define SDCR_VALID_MASK (MDCR_MTPME | MDCR_TDCC | MDCR_SCCD | \
-                         MDCR_EPMAD | MDCR_EDAD | MDCR_TTRF | \
-                         MDCR_STE | MDCR_SPME | MDCR_SPD)
-
 #define CPSR_M (0x1fU)
 #define CPSR_T (1U << 5)
 #define CPSR_F (1U << 6)
@@ -1519,41 +1418,6 @@ FIELD(CPTR_EL3, TCPAC, 31, 1)
 #define XPSR_N CPSR_N
 #define XPSR_NZCV CPSR_NZCV
 #define XPSR_IT CPSR_IT
-
-#define TTBCR_N      (7U << 0) /* TTBCR.EAE==0 */
-#define TTBCR_T0SZ   (7U << 0) /* TTBCR.EAE==1 */
-#define TTBCR_PD0    (1U << 4)
-#define TTBCR_PD1    (1U << 5)
-#define TTBCR_EPD0   (1U << 7)
-#define TTBCR_IRGN0  (3U << 8)
-#define TTBCR_ORGN0  (3U << 10)
-#define TTBCR_SH0    (3U << 12)
-#define TTBCR_T1SZ   (3U << 16)
-#define TTBCR_A1     (1U << 22)
-#define TTBCR_EPD1   (1U << 23)
-#define TTBCR_IRGN1  (3U << 24)
-#define TTBCR_ORGN1  (3U << 26)
-#define TTBCR_SH1    (1U << 28)
-#define TTBCR_EAE    (1U << 31)
-
-FIELD(VTCR, T0SZ, 0, 6)
-FIELD(VTCR, SL0, 6, 2)
-FIELD(VTCR, IRGN0, 8, 2)
-FIELD(VTCR, ORGN0, 10, 2)
-FIELD(VTCR, SH0, 12, 2)
-FIELD(VTCR, TG0, 14, 2)
-FIELD(VTCR, PS, 16, 3)
-FIELD(VTCR, VS, 19, 1)
-FIELD(VTCR, HA, 21, 1)
-FIELD(VTCR, HD, 22, 1)
-FIELD(VTCR, HWU59, 25, 1)
-FIELD(VTCR, HWU60, 26, 1)
-FIELD(VTCR, HWU61, 27, 1)
-FIELD(VTCR, HWU62, 28, 1)
-FIELD(VTCR, NSW, 29, 1)
-FIELD(VTCR, NSA, 30, 1)
-FIELD(VTCR, DS, 32, 1)
-FIELD(VTCR, SL2, 33, 1)
 
 /* Bit definitions for ARMv8 SPSR (PSTATE) format.
  * Only these are valid when in AArch64 mode; in
@@ -1762,21 +1626,6 @@ static inline void xpsr_write(CPUARMState *env, uint32_t val, uint32_t mask)
 #define HCR_TWEDEN    (1ULL << 59)
 #define HCR_TWEDEL    MAKE_64BIT_MASK(60, 4)
 
-#define HCRX_ENAS0    (1ULL << 0)
-#define HCRX_ENALS    (1ULL << 1)
-#define HCRX_ENASR    (1ULL << 2)
-#define HCRX_FNXS     (1ULL << 3)
-#define HCRX_FGTNXS   (1ULL << 4)
-#define HCRX_SMPME    (1ULL << 5)
-#define HCRX_TALLINT  (1ULL << 6)
-#define HCRX_VINMI    (1ULL << 7)
-#define HCRX_VFNMI    (1ULL << 8)
-#define HCRX_CMOW     (1ULL << 9)
-#define HCRX_MCE2     (1ULL << 10)
-#define HCRX_MSCEN    (1ULL << 11)
-
-#define HPFAR_NS      (1ULL << 63)
-
 #define SCR_NS                (1ULL << 0)
 #define SCR_IRQ               (1ULL << 1)
 #define SCR_FIQ               (1ULL << 2)
@@ -1814,12 +1663,6 @@ static inline void xpsr_write(CPUARMState *env, uint32_t val, uint32_t mask)
 #define SCR_ENTP2             (1ULL << 41)
 #define SCR_GPF               (1ULL << 48)
 #define SCR_NSE               (1ULL << 62)
-
-#define HSTR_TTEE (1 << 16)
-#define HSTR_TJDBX (1 << 17)
-
-#define CNTHCTL_CNTVMASK      (1 << 18)
-#define CNTHCTL_CNTPMASK      (1 << 19)
 
 /* Return the current FPSCR value.  */
 uint32_t vfp_get_fpscr(CPUARMState *env);
@@ -2739,7 +2582,6 @@ static inline bool access_secure_reg(CPUARMState *env)
                        (arm_is_secure(_env) && !arm_el_is_aa64((_env), 3)), \
                        (_val))
 
-void arm_cpu_list(void);
 uint32_t arm_phys_excp_target_el(CPUState *cs, uint32_t excp_idx,
                                  uint32_t cur_el, bool secure);
 
@@ -2836,13 +2678,9 @@ bool write_cpustate_to_list(ARMCPU *cpu, bool kvm_sync);
 #define ARM_CPUID_TI915T      0x54029152
 #define ARM_CPUID_TI925T      0x54029252
 
-#define ARM_CPU_TYPE_SUFFIX "-" TYPE_ARM_CPU
-#define ARM_CPU_TYPE_NAME(name) (name ARM_CPU_TYPE_SUFFIX)
 #define CPU_RESOLVING_TYPE TYPE_ARM_CPU
 
 #define TYPE_ARM_HOST_CPU "host-" TYPE_ARM_CPU
-
-#define cpu_list arm_cpu_list
 
 /* ARM has the following "translation regimes" (as the ARM ARM calls them):
  *
@@ -3237,17 +3075,26 @@ FIELD(TBFLAG_A64, PSTATE_ZA, 23, 1)
 FIELD(TBFLAG_A64, SVL, 24, 4)
 /* Indicates that SME Streaming mode is active, and SMCR_ELx.FA64 is not. */
 FIELD(TBFLAG_A64, SME_TRAP_NONSTREAMING, 28, 1)
-FIELD(TBFLAG_A64, FGT_ERET, 29, 1)
+FIELD(TBFLAG_A64, TRAP_ERET, 29, 1)
 FIELD(TBFLAG_A64, NAA, 30, 1)
 FIELD(TBFLAG_A64, ATA0, 31, 1)
+FIELD(TBFLAG_A64, NV, 32, 1)
+FIELD(TBFLAG_A64, NV1, 33, 1)
+FIELD(TBFLAG_A64, NV2, 34, 1)
+/* Set if FEAT_NV2 RAM accesses use the EL2&0 translation regime */
+FIELD(TBFLAG_A64, NV2_MEM_E20, 35, 1)
+/* Set if FEAT_NV2 RAM accesses are big-endian */
+FIELD(TBFLAG_A64, NV2_MEM_BE, 36, 1)
 
 /*
- * Helpers for using the above.
+ * Helpers for using the above. Note that only the A64 accessors use
+ * FIELD_DP64() and FIELD_EX64(), because in the other cases the flags
+ * word either is or might be 32 bits only.
  */
 #define DP_TBFLAG_ANY(DST, WHICH, VAL) \
     (DST.flags = FIELD_DP32(DST.flags, TBFLAG_ANY, WHICH, VAL))
 #define DP_TBFLAG_A64(DST, WHICH, VAL) \
-    (DST.flags2 = FIELD_DP32(DST.flags2, TBFLAG_A64, WHICH, VAL))
+    (DST.flags2 = FIELD_DP64(DST.flags2, TBFLAG_A64, WHICH, VAL))
 #define DP_TBFLAG_A32(DST, WHICH, VAL) \
     (DST.flags2 = FIELD_DP32(DST.flags2, TBFLAG_A32, WHICH, VAL))
 #define DP_TBFLAG_M32(DST, WHICH, VAL) \
@@ -3256,23 +3103,10 @@ FIELD(TBFLAG_A64, ATA0, 31, 1)
     (DST.flags2 = FIELD_DP32(DST.flags2, TBFLAG_AM32, WHICH, VAL))
 
 #define EX_TBFLAG_ANY(IN, WHICH)   FIELD_EX32(IN.flags, TBFLAG_ANY, WHICH)
-#define EX_TBFLAG_A64(IN, WHICH)   FIELD_EX32(IN.flags2, TBFLAG_A64, WHICH)
+#define EX_TBFLAG_A64(IN, WHICH)   FIELD_EX64(IN.flags2, TBFLAG_A64, WHICH)
 #define EX_TBFLAG_A32(IN, WHICH)   FIELD_EX32(IN.flags2, TBFLAG_A32, WHICH)
 #define EX_TBFLAG_M32(IN, WHICH)   FIELD_EX32(IN.flags2, TBFLAG_M32, WHICH)
 #define EX_TBFLAG_AM32(IN, WHICH)  FIELD_EX32(IN.flags2, TBFLAG_AM32, WHICH)
-
-/**
- * cpu_mmu_index:
- * @env: The cpu environment
- * @ifetch: True for code access, false for data access.
- *
- * Return the core mmu index for the current translation regime.
- * This function is used by generic TCG code paths.
- */
-static inline int cpu_mmu_index(CPUARMState *env, bool ifetch)
-{
-    return EX_TBFLAG_ANY(env->hflags, MMUIDX);
-}
 
 /**
  * sve_vq

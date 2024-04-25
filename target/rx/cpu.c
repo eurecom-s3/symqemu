@@ -64,11 +64,16 @@ static bool rx_cpu_has_work(CPUState *cs)
         (CPU_INTERRUPT_HARD | CPU_INTERRUPT_FIR);
 }
 
+static int riscv_cpu_mmu_index(CPUState *cs, bool ifunc)
+{
+    return 0;
+}
+
 static void rx_cpu_reset_hold(Object *obj)
 {
-    RXCPU *cpu = RX_CPU(obj);
-    RXCPUClass *rcc = RX_CPU_GET_CLASS(cpu);
-    CPURXState *env = &cpu->env;
+    CPUState *cs = CPU(obj);
+    RXCPUClass *rcc = RX_CPU_GET_CLASS(obj);
+    CPURXState *env = cpu_env(cs);
     uint32_t *resetvec;
 
     if (rcc->parent_phases.hold) {
@@ -87,22 +92,6 @@ static void rx_cpu_reset_hold(Object *obj)
     env->fpsw = 0;
     set_flush_to_zero(1, &env->fp_status);
     set_flush_inputs_to_zero(1, &env->fp_status);
-}
-
-static void rx_cpu_list_entry(gpointer data, gpointer user_data)
-{
-    ObjectClass *oc = data;
-
-    qemu_printf("  %s\n", object_class_get_name(oc));
-}
-
-void rx_cpu_list(void)
-{
-    GSList *list;
-    list = object_class_get_list_sorted(TYPE_RX_CPU, false);
-    qemu_printf("Available CPUs:\n");
-    g_slist_foreach(list, rx_cpu_list_entry, NULL);
-    g_slist_free(list);
 }
 
 static ObjectClass *rx_cpu_class_by_name(const char *cpu_model)
@@ -194,7 +183,7 @@ static const struct SysemuCPUOps rx_sysemu_ops = {
 
 #include "hw/core/tcg-cpu-ops.h"
 
-static const struct TCGCPUOps rx_tcg_ops = {
+static const TCGCPUOps rx_tcg_ops = {
     .initialize = rx_translate_init,
     .synchronize_from_tb = rx_cpu_synchronize_from_tb,
     .restore_state_to_opc = rx_restore_state_to_opc,
@@ -220,6 +209,7 @@ static void rx_cpu_class_init(ObjectClass *klass, void *data)
 
     cc->class_by_name = rx_cpu_class_by_name;
     cc->has_work = rx_cpu_has_work;
+    cc->mmu_index = riscv_cpu_mmu_index;
     cc->dump_state = rx_cpu_dump_state;
     cc->set_pc = rx_cpu_set_pc;
     cc->get_pc = rx_cpu_get_pc;
@@ -231,7 +221,6 @@ static void rx_cpu_class_init(ObjectClass *klass, void *data)
     cc->gdb_write_register = rx_cpu_gdb_write_register;
     cc->disas_set_info = rx_cpu_disas_set_info;
 
-    cc->gdb_num_core_regs = 26;
     cc->gdb_core_xml_file = "rx-core.xml";
     cc->tcg_ops = &rx_tcg_ops;
 }

@@ -858,6 +858,27 @@ static void test_vm_prepare(const char *params, test_data *data)
     g_free(args);
 }
 
+static void process_smbios_tables_noexit(test_data *data)
+{
+    /*
+     * TODO: make SMBIOS tests work with UEFI firmware,
+     * Bug on uefi-test-tools to provide entry point:
+     * https://bugs.launchpad.net/qemu/+bug/1821884
+     */
+    if (!(data->uefi_fl1 && data->uefi_fl2)) {
+        SmbiosEntryPointType ep_type = test_smbios_entry_point(data);
+        test_smbios_structs(data, ep_type);
+    }
+}
+
+static void test_smbios(const char *params, test_data *data)
+{
+    test_vm_prepare(params, data);
+    boot_sector_test(data->qts);
+    process_smbios_tables_noexit(data);
+    qtest_quit(data->qts);
+}
+
 static void process_acpi_tables_noexit(test_data *data)
 {
     test_acpi_load_tables(data);
@@ -868,15 +889,7 @@ static void process_acpi_tables_noexit(test_data *data)
         test_acpi_asl(data);
     }
 
-    /*
-     * TODO: make SMBIOS tests work with UEFI firmware,
-     * Bug on uefi-test-tools to provide entry point:
-     * https://bugs.launchpad.net/qemu/+bug/1821884
-     */
-    if (!(data->uefi_fl1 && data->uefi_fl2)) {
-        SmbiosEntryPointType ep_type = test_smbios_entry_point(data);
-        test_smbios_structs(data, ep_type);
-    }
+    process_smbios_tables_noexit(data);
 }
 
 static void process_acpi_tables(test_data *data)
@@ -1015,7 +1028,7 @@ static void test_acpi_q35_tcg(void)
     free_test_data(&data);
 }
 
-static void test_acpi_q35_tcg_type4_count(void)
+static void test_acpi_q35_kvm_type4_count(void)
 {
     test_data data = {
         .machine = MACHINE_Q35,
@@ -1031,7 +1044,7 @@ static void test_acpi_q35_tcg_type4_count(void)
     free_test_data(&data);
 }
 
-static void test_acpi_q35_tcg_core_count(void)
+static void test_acpi_q35_kvm_core_count(void)
 {
     test_data data = {
         .machine = MACHINE_Q35,
@@ -1048,7 +1061,7 @@ static void test_acpi_q35_tcg_core_count(void)
     free_test_data(&data);
 }
 
-static void test_acpi_q35_tcg_core_count2(void)
+static void test_acpi_q35_kvm_core_count2(void)
 {
     test_data data = {
         .machine = MACHINE_Q35,
@@ -1065,7 +1078,7 @@ static void test_acpi_q35_tcg_core_count2(void)
     free_test_data(&data);
 }
 
-static void test_acpi_q35_tcg_thread_count(void)
+static void test_acpi_q35_kvm_thread_count(void)
 {
     test_data data = {
         .machine = MACHINE_Q35,
@@ -1082,7 +1095,7 @@ static void test_acpi_q35_tcg_thread_count(void)
     free_test_data(&data);
 }
 
-static void test_acpi_q35_tcg_thread_count2(void)
+static void test_acpi_q35_kvm_thread_count2(void)
 {
     test_data data = {
         .machine = MACHINE_Q35,
@@ -2064,6 +2077,50 @@ static void test_acpi_q35_pvpanic_isa(void)
     free_test_data(&data);
 }
 
+static void test_acpi_pc_smbios_options(void)
+{
+    uint8_t req_type11[] = { 11 };
+    test_data data = {
+        .machine = MACHINE_PC,
+        .variant = ".pc_smbios_options",
+        .required_struct_types = req_type11,
+        .required_struct_types_len = ARRAY_SIZE(req_type11),
+    };
+
+    test_smbios("-smbios type=11,value=TEST", &data);
+    free_test_data(&data);
+}
+
+static void test_acpi_pc_smbios_blob(void)
+{
+    uint8_t req_type11[] = { 11 };
+    test_data data = {
+        .machine = MACHINE_PC,
+        .variant = ".pc_smbios_blob",
+        .required_struct_types = req_type11,
+        .required_struct_types_len = ARRAY_SIZE(req_type11),
+    };
+
+    test_smbios("-machine smbios-entry-point-type=32 "
+                "-smbios file=tests/data/smbios/type11_blob", &data);
+    free_test_data(&data);
+}
+
+static void test_acpi_isapc_smbios_legacy(void)
+{
+    uint8_t req_type11[] = { 1, 11 };
+    test_data data = {
+        .machine = "isapc",
+        .variant = ".pc_smbios_legacy",
+        .required_struct_types = req_type11,
+        .required_struct_types_len = ARRAY_SIZE(req_type11),
+    };
+
+    test_smbios("-smbios file=tests/data/smbios/type11_blob.legacy "
+                "-smbios type=1,family=TEST", &data);
+    free_test_data(&data);
+}
+
 static void test_oem_fields(test_data *data)
 {
     int i;
@@ -2215,6 +2272,12 @@ int main(int argc, char *argv[])
 #ifdef CONFIG_POSIX
             qtest_add_func("acpi/piix4/acpierst", test_acpi_piix4_acpi_erst);
 #endif
+            qtest_add_func("acpi/piix4/smbios-options",
+                           test_acpi_pc_smbios_options);
+            qtest_add_func("acpi/piix4/smbios-blob",
+                           test_acpi_pc_smbios_blob);
+            qtest_add_func("acpi/piix4/smbios-legacy",
+                           test_acpi_isapc_smbios_legacy);
         }
         if (qtest_has_machine(MACHINE_Q35)) {
             qtest_add_func("acpi/q35", test_acpi_q35_tcg);
@@ -2262,15 +2325,15 @@ int main(int argc, char *argv[])
                 qtest_add_func("acpi/q35/kvm/xapic", test_acpi_q35_kvm_xapic);
                 qtest_add_func("acpi/q35/kvm/dmar", test_acpi_q35_kvm_dmar);
                 qtest_add_func("acpi/q35/type4-count",
-                               test_acpi_q35_tcg_type4_count);
+                               test_acpi_q35_kvm_type4_count);
                 qtest_add_func("acpi/q35/core-count",
-                               test_acpi_q35_tcg_core_count);
+                               test_acpi_q35_kvm_core_count);
                 qtest_add_func("acpi/q35/core-count2",
-                               test_acpi_q35_tcg_core_count2);
+                               test_acpi_q35_kvm_core_count2);
                 qtest_add_func("acpi/q35/thread-count",
-                               test_acpi_q35_tcg_thread_count);
+                               test_acpi_q35_kvm_thread_count);
                 qtest_add_func("acpi/q35/thread-count2",
-                               test_acpi_q35_tcg_thread_count2);
+                               test_acpi_q35_kvm_thread_count2);
             }
             if (qtest_has_device("virtio-iommu-pci")) {
                 qtest_add_func("acpi/q35/viot", test_acpi_q35_viot);

@@ -474,8 +474,7 @@ static int can_sync_regs(CPUState *cs, int regs)
 
 int kvm_arch_put_registers(CPUState *cs, int level)
 {
-    S390CPU *cpu = S390_CPU(cs);
-    CPUS390XState *env = &cpu->env;
+    CPUS390XState *env = cpu_env(cs);
     struct kvm_fpu fpu = {};
     int r;
     int i;
@@ -601,8 +600,7 @@ int kvm_arch_put_registers(CPUState *cs, int level)
 
 int kvm_arch_get_registers(CPUState *cs)
 {
-    S390CPU *cpu = S390_CPU(cs);
-    CPUS390XState *env = &cpu->env;
+    CPUS390XState *env = cpu_env(cs);
     struct kvm_fpu fpu;
     int i, r;
 
@@ -1923,7 +1921,7 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
     S390CPU *cpu = S390_CPU(cs);
     int ret = 0;
 
-    qemu_mutex_lock_iothread();
+    bql_lock();
 
     kvm_cpu_synchronize_state(cs);
 
@@ -1947,7 +1945,7 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
             fprintf(stderr, "Unknown KVM exit: %d\n", run->exit_reason);
             break;
     }
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
 
     if (ret == 0) {
         ret = EXCP_INTERRUPT;

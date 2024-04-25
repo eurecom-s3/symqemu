@@ -94,6 +94,17 @@ static bool hppa_cpu_has_work(CPUState *cs)
     return cs->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
 }
 
+static int hppa_cpu_mmu_index(CPUState *cs, bool ifetch)
+{
+    CPUHPPAState *env = cpu_env(cs);
+
+    if (env->psw & (ifetch ? PSW_C : PSW_D)) {
+        return PRIV_P_TO_MMU_IDX(env->iaoq_f & 3, env->psw & PSW_P);
+    }
+    /* mmu disabled */
+    return env->psw & PSW_W ? MMU_ABS_W_IDX : MMU_ABS_IDX;
+}
+
 static void hppa_cpu_disas_set_info(CPUState *cs, disassemble_info *info)
 {
     info->mach = bfd_mach_hppa20;
@@ -110,9 +121,10 @@ void hppa_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
     CPUHPPAState *env = &cpu->env;
 
     cs->exception_index = EXCP_UNALIGN;
+    cpu_restore_state(cs, retaddr);
     hppa_set_ior_and_isr(env, addr, MMU_IDX_MMU_DISABLED(mmu_idx));
 
-    cpu_loop_exit_restore(cs, retaddr);
+    cpu_loop_exit(cs);
 }
 #endif /* CONFIG_USER_ONLY */
 
@@ -156,38 +168,8 @@ static void hppa_cpu_initfn(Object *obj)
 static ObjectClass *hppa_cpu_class_by_name(const char *cpu_model)
 {
     g_autofree char *typename = g_strconcat(cpu_model, "-cpu", NULL);
-    ObjectClass *oc = object_class_by_name(typename);
 
-    if (oc &&
-        !object_class_is_abstract(oc) &&
-        object_class_dynamic_cast(oc, TYPE_HPPA_CPU)) {
-        return oc;
-    }
-    return NULL;
-}
-
-static void hppa_cpu_list_entry(gpointer data, gpointer user_data)
-{
-    ObjectClass *oc = data;
-    CPUClass *cc = CPU_CLASS(oc);
-    const char *tname = object_class_get_name(oc);
-    g_autofree char *name = g_strndup(tname, strchr(tname, '-') - tname);
-
-    if (cc->deprecation_note) {
-        qemu_printf("  %s (deprecated)\n", name);
-    } else {
-        qemu_printf("  %s\n", name);
-    }
-}
-
-void hppa_cpu_list(void)
-{
-    GSList *list;
-
-    list = object_class_get_list_sorted(TYPE_HPPA_CPU, false);
-    qemu_printf("Available CPUs:\n");
-    g_slist_foreach(list, hppa_cpu_list_entry, NULL);
-    g_slist_free(list);
+    return object_class_by_name(typename);
 }
 
 #ifndef CONFIG_USER_ONLY
@@ -200,7 +182,7 @@ static const struct SysemuCPUOps hppa_sysemu_ops = {
 
 #include "hw/core/tcg-cpu-ops.h"
 
-static const struct TCGCPUOps hppa_tcg_ops = {
+static const TCGCPUOps hppa_tcg_ops = {
     .initialize = hppa_translate_init,
     .synchronize_from_tb = hppa_cpu_synchronize_from_tb,
     .restore_state_to_opc = hppa_restore_state_to_opc,
@@ -210,6 +192,7 @@ static const struct TCGCPUOps hppa_tcg_ops = {
     .cpu_exec_interrupt = hppa_cpu_exec_interrupt,
     .do_interrupt = hppa_cpu_do_interrupt,
     .do_unaligned_access = hppa_cpu_do_unaligned_access,
+    .do_transaction_failed = hppa_cpu_do_transaction_failed,
 #endif /* !CONFIG_USER_ONLY */
 };
 
@@ -224,6 +207,7 @@ static void hppa_cpu_class_init(ObjectClass *oc, void *data)
 
     cc->class_by_name = hppa_cpu_class_by_name;
     cc->has_work = hppa_cpu_has_work;
+    cc->mmu_index = hppa_cpu_mmu_index;
     cc->dump_state = hppa_cpu_dump_state;
     cc->set_pc = hppa_cpu_set_pc;
     cc->get_pc = hppa_cpu_get_pc;

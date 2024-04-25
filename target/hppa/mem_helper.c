@@ -152,6 +152,49 @@ static HPPATLBEntry *hppa_alloc_tlb_ent(CPUHPPAState *env)
     return ent;
 }
 
+#define ACCESS_ID_MASK 0xffff
+
+/* Return the set of protections allowed by a PID match. */
+static int match_prot_id_1(uint32_t access_id, uint32_t prot_id)
+{
+    if (((access_id ^ (prot_id >> 1)) & ACCESS_ID_MASK) == 0) {
+        return (prot_id & 1
+                ? PAGE_EXEC | PAGE_READ
+                : PAGE_EXEC | PAGE_READ | PAGE_WRITE);
+    }
+    return 0;
+}
+
+static int match_prot_id32(CPUHPPAState *env, uint32_t access_id)
+{
+    int r, i;
+
+    for (i = CR_PID1; i <= CR_PID4; ++i) {
+        r = match_prot_id_1(access_id, env->cr[i]);
+        if (r) {
+            return r;
+        }
+    }
+    return 0;
+}
+
+static int match_prot_id64(CPUHPPAState *env, uint32_t access_id)
+{
+    int r, i;
+
+    for (i = CR_PID1; i <= CR_PID4; ++i) {
+        r = match_prot_id_1(access_id, env->cr[i]);
+        if (r) {
+            return r;
+        }
+        r = match_prot_id_1(access_id, env->cr[i] >> 32);
+        if (r) {
+            return r;
+        }
+    }
+    return 0;
+}
+
 int hppa_get_physical_address(CPUHPPAState *env, vaddr addr, int mmu_idx,
                               int type, hwaddr *pphys, int *pprot,
                               HPPATLBEntry **tlb_entry)
@@ -224,29 +267,30 @@ int hppa_get_physical_address(CPUHPPAState *env, vaddr addr, int mmu_idx,
         break;
     }
 
-    /* access_id == 0 means public page and no check is performed */
-    if (ent->access_id && MMU_IDX_TO_P(mmu_idx)) {
-        /* If bits [31:1] match, and bit 0 is set, suppress write.  */
-        int match = ent->access_id * 2 + 1;
-
-        if (match == env->cr[CR_PID1] || match == env->cr[CR_PID2] ||
-            match == env->cr[CR_PID3] || match == env->cr[CR_PID4]) {
-            prot &= PAGE_READ | PAGE_EXEC;
-            if (type == PAGE_WRITE) {
-                ret = EXCP_DMPI;
-                goto egress;
-            }
-        }
-    }
-
-    /* No guest access type indicates a non-architectural access from
-       within QEMU.  Bypass checks for access, D, B and T bits.  */
+    /*
+     * No guest access type indicates a non-architectural access from
+     * within QEMU.  Bypass checks for access, D, B, P and T bits.
+     */
     if (type == 0) {
         goto egress;
     }
 
+    /* access_id == 0 means public page and no check is performed */
+    if (ent->access_id && MMU_IDX_TO_P(mmu_idx)) {
+        int access_prot = (hppa_is_pa20(env)
+                           ? match_prot_id64(env, ent->access_id)
+                           : match_prot_id32(env, ent->access_id));
+        if (unlikely(!(type & access_prot))) {
+            /* Not allowed -- Inst/Data Memory Protection Id Fault. */
+            ret = type & PAGE_EXEC ? EXCP_IMP : EXCP_DMPI;
+            goto egress;
+        }
+        /* Otherwise exclude permissions not allowed (i.e WD). */
+        prot &= access_prot;
+    }
+
     if (unlikely(!(prot & type))) {
-        /* The access isn't allowed -- Inst/Data Memory Protection Fault.  */
+        /* Not allowed -- Inst/Data Memory Access Rights Fault. */
         ret = (type & PAGE_EXEC) ? EXCP_IMP : EXCP_DMAR;
         goto egress;
     }
@@ -348,9 +392,29 @@ raise_exception_with_ior(CPUHPPAState *env, int excp, uintptr_t retaddr,
     CPUState *cs = env_cpu(env);
 
     cs->exception_index = excp;
+    cpu_restore_state(cs, retaddr);
     hppa_set_ior_and_isr(env, addr, mmu_disabled);
 
-    cpu_loop_exit_restore(cs, retaddr);
+    cpu_loop_exit(cs);
+}
+
+void hppa_cpu_do_transaction_failed(CPUState *cs, hwaddr physaddr,
+                                     vaddr addr, unsigned size,
+                                     MMUAccessType access_type,
+                                     int mmu_idx, MemTxAttrs attrs,
+                                     MemTxResult response, uintptr_t retaddr)
+{
+    CPUHPPAState *env = cpu_env(cs);
+
+    qemu_log_mask(LOG_GUEST_ERROR, "HPMC at " TARGET_FMT_lx ":" TARGET_FMT_lx
+                " while accessing I/O at %#08" HWADDR_PRIx "\n",
+                env->iasq_f, env->iaoq_f, physaddr);
+
+    /* FIXME: Enable HPMC exceptions when firmware has clean device probing */
+    if (0) {
+        raise_exception_with_ior(env, EXCP_HPMC, retaddr, addr,
+                                 MMU_IDX_MMU_DISABLED(mmu_idx));
+    }
 }
 
 bool hppa_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
@@ -518,7 +582,6 @@ void HELPER(iitlbt_pa20)(CPUHPPAState *env, target_ulong r1, target_ulong r2)
 /* Purge (Insn/Data) TLB. */
 static void ptlb_work(CPUState *cpu, run_on_cpu_data data)
 {
-    CPUHPPAState *env = cpu_env(cpu);
     vaddr start = data.target_ptr;
     vaddr end;
 
@@ -532,7 +595,7 @@ static void ptlb_work(CPUState *cpu, run_on_cpu_data data)
     end = (vaddr)TARGET_PAGE_SIZE << (2 * end);
     end = start + end - 1;
 
-    hppa_flush_tlb_range(env, start, end);
+    hppa_flush_tlb_range(cpu_env(cpu), start, end);
 }
 
 /* This is local to the current cpu. */
@@ -646,7 +709,7 @@ int hppa_artype_for_page(CPUHPPAState *env, target_ulong vaddr)
 void HELPER(diag_btlb)(CPUHPPAState *env)
 {
     unsigned int phys_page, len, slot;
-    int mmu_idx = cpu_mmu_index(env, 0);
+    int mmu_idx = cpu_mmu_index(env_cpu(env), 0);
     uintptr_t ra = GETPC();
     HPPATLBEntry *btlb;
     uint64_t virt_page;
@@ -665,7 +728,7 @@ void HELPER(diag_btlb)(CPUHPPAState *env)
     case 0:
         /* return BTLB parameters */
         qemu_log_mask(CPU_LOG_MMU, "PDC_BLOCK_TLB: PDC_BTLB_INFO\n");
-        vaddr = probe_access(env, env->gr[24], 4 * sizeof(target_ulong),
+        vaddr = probe_access(env, env->gr[24], 4 * sizeof(uint32_t),
                              MMU_DATA_STORE, mmu_idx, ra);
         if (vaddr == NULL) {
             env->gr[28] = -10; /* invalid argument */

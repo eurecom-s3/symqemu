@@ -21,7 +21,9 @@
 #include "qemu/module.h"
 #include "qemu/log.h"
 #include "target/arm/idau.h"
+#include "target/arm/cpu.h"
 #include "target/arm/cpu-features.h"
+#include "target/arm/cpu-qom.h"
 #include "migration/vmstate.h"
 
 /* Bitbanded IO.  Each word corresponds to a single bit.  */
@@ -256,6 +258,8 @@ static void armv7m_instance_init(Object *obj)
     object_initialize_child(obj, "nvic", &s->nvic, TYPE_NVIC);
     object_property_add_alias(obj, "num-irq",
                               OBJECT(&s->nvic), "num-irq");
+    object_property_add_alias(obj, "num-prio-bits",
+                              OBJECT(&s->nvic), "num-prio-bits");
 
     object_initialize_child(obj, "systick-reg-ns", &s->systick[M_REG_NS],
                             TYPE_SYSTICK);
@@ -318,12 +322,6 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
             return;
         }
     }
-    if (object_property_find(OBJECT(s->cpu), "start-powered-off")) {
-        if (!object_property_set_bool(OBJECT(s->cpu), "start-powered-off",
-                                      s->start_powered_off, errp)) {
-            return;
-        }
-    }
     if (object_property_find(OBJECT(s->cpu), "vfp")) {
         if (!object_property_set_bool(OBJECT(s->cpu), "vfp", s->vfp, errp)) {
             return;
@@ -334,6 +332,8 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
             return;
         }
     }
+    object_property_set_bool(OBJECT(s->cpu), "start-powered-off",
+                             s->start_powered_off, &error_abort);
 
     /*
      * Real M-profile hardware can be configured with a different number of
@@ -559,7 +559,7 @@ static const VMStateDescription vmstate_armv7m = {
     .name = "armv7m",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_CLOCK(refclk, ARMv7MState),
         VMSTATE_CLOCK(cpuclk, ARMv7MState),
         VMSTATE_END_OF_LIST()

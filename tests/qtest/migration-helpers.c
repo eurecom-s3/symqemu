@@ -24,26 +24,19 @@
  */
 #define MIGRATION_STATUS_WAIT_TIMEOUT 120
 
-bool migrate_watch_for_stop(QTestState *who, const char *name,
-                            QDict *event, void *opaque)
-{
-    bool *seen = opaque;
-
-    if (g_str_equal(name, "STOP")) {
-        *seen = true;
-        return true;
-    }
-
-    return false;
-}
-
-bool migrate_watch_for_resume(QTestState *who, const char *name,
+bool migrate_watch_for_events(QTestState *who, const char *name,
                               QDict *event, void *opaque)
 {
-    bool *seen = opaque;
+    QTestMigrationState *state = opaque;
 
-    if (g_str_equal(name, "RESUME")) {
-        *seen = true;
+    if (g_str_equal(name, "STOP")) {
+        state->stop_seen = true;
+        return true;
+    } else if (g_str_equal(name, "SUSPEND")) {
+        state->suspend_seen = true;
+        return true;
+    } else if (g_str_equal(name, "RESUME")) {
+        state->resume_seen = true;
         return true;
     }
 
@@ -118,6 +111,12 @@ void migrate_incoming_qmp(QTestState *to, const char *uri, const char *fmt, ...)
 
     rsp = qtest_qmp(to, "{ 'execute': 'migrate-incoming', 'arguments': %p}",
                     args);
+
+    if (!qdict_haskey(rsp, "return")) {
+        g_autoptr(GString) s = qobject_to_json_pretty(QOBJECT(rsp), true);
+        g_test_message("%s", s->str);
+    }
+
     g_assert(qdict_haskey(rsp, "return"));
     qobject_unref(rsp);
 
@@ -291,4 +290,36 @@ char *resolve_machine_version(const char *alias, const char *var1,
     }
 
     return find_common_machine_version(machine_name, var1, var2);
+}
+
+typedef struct {
+    char *name;
+    void (*func)(void);
+} MigrationTest;
+
+static void migration_test_destroy(gpointer data)
+{
+    MigrationTest *test = (MigrationTest *)data;
+
+    g_free(test->name);
+    g_free(test);
+}
+
+static void migration_test_wrapper(const void *data)
+{
+    MigrationTest *test = (MigrationTest *)data;
+
+    g_test_message("Running /%s%s", qtest_get_arch(), test->name);
+    test->func();
+}
+
+void migration_test_add(const char *path, void (*fn)(void))
+{
+    MigrationTest *test = g_new0(MigrationTest, 1);
+
+    test->func = fn;
+    test->name = g_strdup(path);
+
+    qtest_add_data_func_full(path, test, migration_test_wrapper,
+                             migration_test_destroy);
 }

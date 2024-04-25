@@ -300,7 +300,6 @@ static SegmentCache whpx_seg_h2q(const WHV_X64_SEGMENT_REGISTER *hs)
 /* X64 Extended Control Registers */
 static void whpx_set_xcrs(CPUState *cpu)
 {
-    CPUX86State *env = cpu_env(cpu);
     HRESULT hr;
     struct whpx_state *whpx = &whpx_global;
     WHV_REGISTER_VALUE xcr0;
@@ -311,7 +310,7 @@ static void whpx_set_xcrs(CPUState *cpu)
     }
 
     /* Only xcr0 is supported by the hypervisor currently */
-    xcr0.Reg64 = env->xcr0;
+    xcr0.Reg64 = cpu_env(cpu)->xcr0;
     hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
         whpx->partition, cpu->cpu_index, &xcr0_name, 1, &xcr0);
     if (FAILED(hr)) {
@@ -321,7 +320,6 @@ static void whpx_set_xcrs(CPUState *cpu)
 
 static int whpx_set_tsc(CPUState *cpu)
 {
-    CPUX86State *env = cpu_env(cpu);
     WHV_REGISTER_NAME tsc_reg = WHvX64RegisterTsc;
     WHV_REGISTER_VALUE tsc_val;
     HRESULT hr;
@@ -345,7 +343,7 @@ static int whpx_set_tsc(CPUState *cpu)
         }
     }
 
-    tsc_val.Reg64 = env->tsc;
+    tsc_val.Reg64 = cpu_env(cpu)->tsc;
     hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
         whpx->partition, cpu->cpu_index, &tsc_reg, 1, &tsc_val);
     if (FAILED(hr)) {
@@ -556,7 +554,6 @@ static void whpx_set_registers(CPUState *cpu, int level)
 
 static int whpx_get_tsc(CPUState *cpu)
 {
-    CPUX86State *env = cpu_env(cpu);
     WHV_REGISTER_NAME tsc_reg = WHvX64RegisterTsc;
     WHV_REGISTER_VALUE tsc_val;
     HRESULT hr;
@@ -569,14 +566,13 @@ static int whpx_get_tsc(CPUState *cpu)
         return -1;
     }
 
-    env->tsc = tsc_val.Reg64;
+    cpu_env(cpu)->tsc = tsc_val.Reg64;
     return 0;
 }
 
 /* X64 Extended Control Registers */
 static void whpx_get_xcrs(CPUState *cpu)
 {
-    CPUX86State *env = cpu_env(cpu);
     HRESULT hr;
     struct whpx_state *whpx = &whpx_global;
     WHV_REGISTER_VALUE xcr0;
@@ -594,7 +590,7 @@ static void whpx_get_xcrs(CPUState *cpu)
         return;
     }
 
-    env->xcr0 = xcr0.Reg64;
+    cpu_env(cpu)->xcr0 = xcr0.Reg64;
 }
 
 static void whpx_get_registers(CPUState *cpu)
@@ -1324,7 +1320,7 @@ static int whpx_first_vcpu_starting(CPUState *cpu)
     struct whpx_state *whpx = &whpx_global;
     HRESULT hr;
 
-    g_assert(qemu_mutex_iothread_locked());
+    g_assert(bql_locked());
 
     if (!QTAILQ_EMPTY(&cpu->breakpoints) ||
             (whpx->breakpoints.breakpoints &&
@@ -1400,8 +1396,7 @@ static vaddr whpx_vcpu_get_pc(CPUState *cpu, bool exit_context_valid)
 {
     if (cpu->vcpu_dirty) {
         /* The CPU registers have been modified by other parts of QEMU. */
-        CPUArchState *env = cpu_env(cpu);
-        return env->eip;
+        return cpu_env(cpu)->eip;
     } else if (exit_context_valid) {
         /*
          * The CPU registers have not been modified by neither other parts
@@ -1439,18 +1434,17 @@ static vaddr whpx_vcpu_get_pc(CPUState *cpu, bool exit_context_valid)
 
 static int whpx_handle_halt(CPUState *cpu)
 {
-    CPUX86State *env = cpu_env(cpu);
     int ret = 0;
 
-    qemu_mutex_lock_iothread();
+    bql_lock();
     if (!((cpu->interrupt_request & CPU_INTERRUPT_HARD) &&
-          (env->eflags & IF_MASK)) &&
+          (cpu_env(cpu)->eflags & IF_MASK)) &&
         !(cpu->interrupt_request & CPU_INTERRUPT_NMI)) {
         cpu->exception_index = EXCP_HLT;
         cpu->halted = true;
         ret = 1;
     }
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
 
     return ret;
 }
@@ -1472,7 +1466,7 @@ static void whpx_vcpu_pre_run(CPUState *cpu)
     memset(&new_int, 0, sizeof(new_int));
     memset(reg_values, 0, sizeof(reg_values));
 
-    qemu_mutex_lock_iothread();
+    bql_lock();
 
     /* Inject NMI */
     if (!vcpu->interruption_pending &&
@@ -1563,7 +1557,7 @@ static void whpx_vcpu_pre_run(CPUState *cpu)
         reg_count += 1;
     }
 
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
     vcpu->ready_for_pic_interrupt = false;
 
     if (reg_count) {
@@ -1590,9 +1584,9 @@ static void whpx_vcpu_post_run(CPUState *cpu)
     uint64_t tpr = vcpu->exit_ctx.VpContext.Cr8;
     if (vcpu->tpr != tpr) {
         vcpu->tpr = tpr;
-        qemu_mutex_lock_iothread();
+        bql_lock();
         cpu_set_apic_tpr(x86_cpu->apic_state, whpx_cr8_to_apic_tpr(vcpu->tpr));
-        qemu_mutex_unlock_iothread();
+        bql_unlock();
     }
 
     vcpu->interruption_pending =
@@ -1652,7 +1646,7 @@ static int whpx_vcpu_run(CPUState *cpu)
     WhpxStepMode exclusive_step_mode = WHPX_STEP_NONE;
     int ret;
 
-    g_assert(qemu_mutex_iothread_locked());
+    g_assert(bql_locked());
 
     if (whpx->running_cpus++ == 0) {
         /* Insert breakpoints into memory, update exception exit bitmap. */
@@ -1690,7 +1684,7 @@ static int whpx_vcpu_run(CPUState *cpu)
         }
     }
 
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
 
     if (exclusive_step_mode != WHPX_STEP_NONE) {
         start_exclusive();
@@ -2028,9 +2022,9 @@ static int whpx_vcpu_run(CPUState *cpu)
             error_report("WHPX: Unexpected VP exit code %d",
                          vcpu->exit_ctx.ExitReason);
             whpx_get_registers(cpu);
-            qemu_mutex_lock_iothread();
+            bql_lock();
             qemu_system_guest_panicked(cpu_get_crash_info(cpu));
-            qemu_mutex_unlock_iothread();
+            bql_unlock();
             break;
         }
 
@@ -2055,7 +2049,7 @@ static int whpx_vcpu_run(CPUState *cpu)
         cpu_exec_end(cpu);
     }
 
-    qemu_mutex_lock_iothread();
+    bql_lock();
     current_cpu = cpu;
 
     if (--whpx->running_cpus == 0) {

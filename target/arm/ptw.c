@@ -95,7 +95,10 @@ static const uint8_t pamax_map[] = {
     [6] = 52,
 };
 
-/* The cpu-specific constant value of PAMax; also used by hw/arm/virt. */
+/*
+ * The cpu-specific constant value of PAMax; also used by hw/arm/virt.
+ * Note that machvirt_init calls this on a CPU that is inited but not realized!
+ */
 unsigned int arm_pamax(ARMCPU *cpu)
 {
     if (arm_feature(&cpu->env, ARM_FEATURE_AARCH64)) {
@@ -110,13 +113,8 @@ unsigned int arm_pamax(ARMCPU *cpu)
         return pamax_map[parange];
     }
 
-    /*
-     * In machvirt_init, we call arm_pamax on a cpu that is not fully
-     * initialized, so we can't rely on the propagation done in realize.
-     */
-    if (arm_feature(&cpu->env, ARM_FEATURE_LPAE) ||
-        arm_feature(&cpu->env, ARM_FEATURE_V7VE)) {
-        /* v7 with LPAE */
+    if (arm_feature(&cpu->env, ARM_FEATURE_LPAE)) {
+        /* v7 or v8 with LPAE */
         return 40;
     }
     /* Anything else */
@@ -473,6 +471,16 @@ static bool granule_protection_check(CPUARMState *env, uint64_t paddress,
     return false;
 }
 
+static bool S1_attrs_are_device(uint8_t attrs)
+{
+    /*
+     * This slightly under-decodes the MAIR_ELx field:
+     * 0b0000dd01 is Device with FEAT_XS, otherwise UNPREDICTABLE;
+     * 0b0000dd1x is UNPREDICTABLE.
+     */
+    return (attrs & 0xf0) == 0;
+}
+
 static bool S2_attrs_are_device(uint64_t hcr, uint8_t attrs)
 {
     /*
@@ -713,8 +721,68 @@ static uint64_t arm_casq_ptw(CPUARMState *env, uint64_t old_val,
     void *host = ptw->out_host;
 
     if (unlikely(!host)) {
-        fi->type = ARMFault_UnsuppAtomicUpdate;
-        return 0;
+        /* Page table in MMIO Memory Region */
+        CPUState *cs = env_cpu(env);
+        MemTxAttrs attrs = {
+            .space = ptw->out_space,
+            .secure = arm_space_is_secure(ptw->out_space),
+        };
+        AddressSpace *as = arm_addressspace(cs, attrs);
+        MemTxResult result = MEMTX_OK;
+        bool need_lock = !bql_locked();
+
+        if (need_lock) {
+            bql_lock();
+        }
+        if (ptw->out_be) {
+            cur_val = address_space_ldq_be(as, ptw->out_phys, attrs, &result);
+            if (unlikely(result != MEMTX_OK)) {
+                fi->type = ARMFault_SyncExternalOnWalk;
+                fi->ea = arm_extabort_type(result);
+                if (need_lock) {
+                    bql_unlock();
+                }
+                return old_val;
+            }
+            if (cur_val == old_val) {
+                address_space_stq_be(as, ptw->out_phys, new_val, attrs, &result);
+                if (unlikely(result != MEMTX_OK)) {
+                    fi->type = ARMFault_SyncExternalOnWalk;
+                    fi->ea = arm_extabort_type(result);
+                    if (need_lock) {
+                        bql_unlock();
+                    }
+                    return old_val;
+                }
+                cur_val = new_val;
+            }
+        } else {
+            cur_val = address_space_ldq_le(as, ptw->out_phys, attrs, &result);
+            if (unlikely(result != MEMTX_OK)) {
+                fi->type = ARMFault_SyncExternalOnWalk;
+                fi->ea = arm_extabort_type(result);
+                if (need_lock) {
+                    bql_unlock();
+                }
+                return old_val;
+            }
+            if (cur_val == old_val) {
+                address_space_stq_le(as, ptw->out_phys, new_val, attrs, &result);
+                if (unlikely(result != MEMTX_OK)) {
+                    fi->type = ARMFault_SyncExternalOnWalk;
+                    fi->ea = arm_extabort_type(result);
+                    if (need_lock) {
+                        bql_unlock();
+                    }
+                    return old_val;
+                }
+                cur_val = new_val;
+            }
+        }
+        if (need_lock) {
+            bql_unlock();
+        }
+        return cur_val;
     }
 
     /*
@@ -772,9 +840,9 @@ static uint64_t arm_casq_ptw(CPUARMState *env, uint64_t old_val,
 #if !TCG_OVERSIZED_GUEST
 # error "Unexpected configuration"
 #endif
-    bool locked = qemu_mutex_iothread_locked();
+    bool locked = bql_locked();
     if (!locked) {
-       qemu_mutex_lock_iothread();
+        bql_lock();
     }
     if (ptw->out_be) {
         cur_val = ldq_be_p(host);
@@ -788,7 +856,7 @@ static uint64_t arm_casq_ptw(CPUARMState *env, uint64_t old_val,
         }
     }
     if (!locked) {
-        qemu_mutex_unlock_iothread();
+        bql_unlock();
     }
 #endif
 
@@ -1581,6 +1649,12 @@ static bool lpae_block_desc_valid(ARMCPU *cpu, bool ds,
     }
 }
 
+static bool nv_nv1_enabled(CPUARMState *env, S1Translate *ptw)
+{
+    uint64_t hcr = arm_hcr_el2_eff_secstate(env, ptw->in_space);
+    return (hcr & (HCR_NV | HCR_NV1)) == (HCR_NV | HCR_NV1);
+}
+
 /**
  * get_phys_addr_lpae: perform one stage of page table walk, LPAE format
  *
@@ -1620,6 +1694,7 @@ static bool get_phys_addr_lpae(CPUARMState *env, S1Translate *ptw,
     bool aarch64 = arm_el_is_aa64(env, el);
     uint64_t descriptor, new_descriptor;
     ARMSecuritySpace out_space;
+    bool device;
 
     /* TODO: This code does not support shareability levels. */
     if (aarch64) {
@@ -1989,6 +2064,21 @@ static bool get_phys_addr_lpae(CPUARMState *env, S1Translate *ptw,
         xn = extract64(attrs, 54, 1);
         pxn = extract64(attrs, 53, 1);
 
+        if (el == 1 && nv_nv1_enabled(env, ptw)) {
+            /*
+             * With FEAT_NV, when HCR_EL2.{NV,NV1} == {1,1}, the block/page
+             * descriptor bit 54 holds PXN, 53 is RES0, and the effective value
+             * of UXN is 0. Similarly for bits 59 and 60 in table descriptors
+             * (which we have already folded into bits 53 and 54 of attrs).
+             * AP[1] (descriptor bit 6, our ap bit 0) is treated as 0.
+             * Similarly, APTable[0] from the table descriptor is treated as 0;
+             * we already folded this into AP[1] and squashing that to 0 does
+             * the right thing.
+             */
+            pxn = xn;
+            xn = 0;
+            ap &= ~1;
+        }
         /*
          * Note that we modified ptw->in_space earlier for NSTable, but
          * result->f.attrs retains a copy of the original security space.
@@ -2027,6 +2117,12 @@ static bool get_phys_addr_lpae(CPUARMState *env, S1Translate *ptw,
     if (regime_is_stage2(mmu_idx)) {
         result->cacheattrs.is_s2_format = true;
         result->cacheattrs.attrs = extract32(attrs, 2, 4);
+        /*
+         * Security state does not really affect HCR_EL2.FWB;
+         * we only need to filter FWB for aa32 or other FEAT.
+         */
+        device = S2_attrs_are_device(arm_hcr_el2_eff(env),
+                                     result->cacheattrs.attrs);
     } else {
         /* Index into MAIR registers for cache attributes */
         uint8_t attrindx = extract32(attrs, 2, 3);
@@ -2039,6 +2135,28 @@ static bool get_phys_addr_lpae(CPUARMState *env, S1Translate *ptw,
         if (aarch64 && cpu_isar_feature(aa64_bti, cpu)) {
             result->f.extra.arm.guarded = extract64(attrs, 50, 1); /* GP */
         }
+        device = S1_attrs_are_device(result->cacheattrs.attrs);
+    }
+
+    /*
+     * Enable alignment checks on Device memory.
+     *
+     * Per R_XCHFJ, this check is mis-ordered. The correct ordering
+     * for alignment, permission, and stage 2 faults should be:
+     *    - Alignment fault caused by the memory type
+     *    - Permission fault
+     *    - A stage 2 fault on the memory access
+     * but due to the way the TCG softmmu TLB operates, we will have
+     * implicitly done the permission check and the stage2 lookup in
+     * finding the TLB entry, so the alignment check cannot be done sooner.
+     *
+     * In v7, for a CPU without the Virtualization Extensions this
+     * access is UNPREDICTABLE; we choose to make it take the alignment
+     * fault as is required for a v7VE CPU. (QEMU doesn't emulate any
+     * CPUs with ARM_FEATURE_LPAE but not ARM_FEATURE_V7VE anyway.)
+     */
+    if (device) {
+        result->f.tlb_fill_flags |= TLB_CHECK_ALIGNED;
     }
 
     /*

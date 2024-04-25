@@ -478,7 +478,7 @@ static const VMStateDescription vmstate_parallel_isa = {
     .name = "parallel_isa",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields      = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8(state.dataw, ISAParallelState),
         VMSTATE_UINT8(state.datar, ISAParallelState),
         VMSTATE_UINT8(state.status, ISAParallelState),
@@ -532,7 +532,7 @@ static void parallel_isa_realizefn(DeviceState *dev, Error **errp)
         s->status = dummy;
     }
 
-    isa_register_portio_list(isadev, &s->portio_list, base,
+    isa_register_portio_list(isadev, &isa->portio_list, base,
                              (s->hw_driver
                               ? &isa_parallel_portio_hw_list[0]
                               : &isa_parallel_portio_sw_list[0]),

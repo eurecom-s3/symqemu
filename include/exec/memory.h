@@ -43,7 +43,7 @@ typedef struct IOMMUMemoryRegionClass IOMMUMemoryRegionClass;
 DECLARE_OBJ_CHECKERS(IOMMUMemoryRegion, IOMMUMemoryRegionClass,
                      IOMMU_MEMORY_REGION, TYPE_IOMMU_MEMORY_REGION)
 
-#define TYPE_RAM_DISCARD_MANAGER "qemu:ram-discard-manager"
+#define TYPE_RAM_DISCARD_MANAGER "ram-discard-manager"
 typedef struct RamDiscardManagerClass RamDiscardManagerClass;
 typedef struct RamDiscardManager RamDiscardManager;
 DECLARE_OBJ_CHECKERS(RamDiscardManager, RamDiscardManagerClass,
@@ -1288,8 +1288,10 @@ void memory_region_init_io(MemoryRegion *mr,
  *
  * Note that this function does not do anything to cause the data in the
  * RAM memory region to be migrated; that is the responsibility of the caller.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_ram_nomigrate(MemoryRegion *mr,
+bool memory_region_init_ram_nomigrate(MemoryRegion *mr,
                                       Object *owner,
                                       const char *name,
                                       uint64_t size,
@@ -1310,8 +1312,10 @@ void memory_region_init_ram_nomigrate(MemoryRegion *mr,
  *
  * Note that this function does not do anything to cause the data in the
  * RAM memory region to be migrated; that is the responsibility of the caller.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_ram_flags_nomigrate(MemoryRegion *mr,
+bool memory_region_init_ram_flags_nomigrate(MemoryRegion *mr,
                                             Object *owner,
                                             const char *name,
                                             uint64_t size,
@@ -1338,8 +1342,10 @@ void memory_region_init_ram_flags_nomigrate(MemoryRegion *mr,
  *
  * Note that this function does not do anything to cause the data in the
  * RAM memory region to be migrated; that is the responsibility of the caller.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_resizeable_ram(MemoryRegion *mr,
+bool memory_region_init_resizeable_ram(MemoryRegion *mr,
                                        Object *owner,
                                        const char *name,
                                        uint64_t size,
@@ -1370,8 +1376,10 @@ void memory_region_init_resizeable_ram(MemoryRegion *mr,
  *
  * Note that this function does not do anything to cause the data in the
  * RAM memory region to be migrated; that is the responsibility of the caller.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_ram_from_file(MemoryRegion *mr,
+bool memory_region_init_ram_from_file(MemoryRegion *mr,
                                       Object *owner,
                                       const char *name,
                                       uint64_t size,
@@ -1398,8 +1406,10 @@ void memory_region_init_ram_from_file(MemoryRegion *mr,
  *
  * Note that this function does not do anything to cause the data in the
  * RAM memory region to be migrated; that is the responsibility of the caller.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_ram_from_fd(MemoryRegion *mr,
+bool memory_region_init_ram_from_fd(MemoryRegion *mr,
                                     Object *owner,
                                     const char *name,
                                     uint64_t size,
@@ -1494,8 +1504,10 @@ void memory_region_init_alias(MemoryRegion *mr,
  *        must be unique within any device
  * @size: size of the region.
  * @errp: pointer to Error*, to store an error if it happens.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_rom_nomigrate(MemoryRegion *mr,
+bool memory_region_init_rom_nomigrate(MemoryRegion *mr,
                                       Object *owner,
                                       const char *name,
                                       uint64_t size,
@@ -1517,8 +1529,10 @@ void memory_region_init_rom_nomigrate(MemoryRegion *mr,
  *        must be unique within any device
  * @size: size of the region.
  * @errp: pointer to Error*, to store an error if it happens.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_rom_device_nomigrate(MemoryRegion *mr,
+bool memory_region_init_rom_device_nomigrate(MemoryRegion *mr,
                                              Object *owner,
                                              const MemoryRegionOps *ops,
                                              void *opaque,
@@ -1576,8 +1590,10 @@ void memory_region_init_iommu(void *_iommu_mr,
  * give the RAM block a unique name for migration purposes.
  * We should lift this restriction and allow arbitrary Objects.
  * If you pass a non-NULL non-device @owner then we will assert.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_ram(MemoryRegion *mr,
+bool memory_region_init_ram(MemoryRegion *mr,
                             Object *owner,
                             const char *name,
                             uint64_t size,
@@ -1603,8 +1619,10 @@ void memory_region_init_ram(MemoryRegion *mr,
  *        must be unique within any device
  * @size: size of the region.
  * @errp: pointer to Error*, to store an error if it happens.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_rom(MemoryRegion *mr,
+bool memory_region_init_rom(MemoryRegion *mr,
                             Object *owner,
                             const char *name,
                             uint64_t size,
@@ -1634,8 +1652,10 @@ void memory_region_init_rom(MemoryRegion *mr,
  *        must be unique within any device
  * @size: size of the region.
  * @errp: pointer to Error*, to store an error if it happens.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void memory_region_init_rom_device(MemoryRegion *mr,
+bool memory_region_init_rom_device(MemoryRegion *mr,
                                    Object *owner,
                                    const MemoryRegionOps *ops,
                                    void *opaque,
@@ -1962,7 +1982,7 @@ int memory_region_get_fd(MemoryRegion *mr);
  *
  * Use with care; by the time this function returns, the returned pointer is
  * not protected by RCU anymore.  If the caller is not within an RCU critical
- * section and does not hold the iothread lock, it must have other means of
+ * section and does not hold the BQL, it must have other means of
  * protecting the pointer, such as a reference to the region that includes
  * the incoming ram_addr_t.
  *
@@ -1979,7 +1999,7 @@ MemoryRegion *memory_region_from_host(void *ptr, ram_addr_t *offset);
  *
  * Use with care; by the time this function returns, the returned pointer is
  * not protected by RCU anymore.  If the caller is not within an RCU critical
- * section and does not hold the iothread lock, it must have other means of
+ * section and does not hold the BQL, it must have other means of
  * protecting the pointer, such as a reference to the region that includes
  * the incoming ram_addr_t.
  *
@@ -3126,7 +3146,7 @@ int ram_block_discard_require(bool state);
 
 /*
  * See ram_block_discard_require(): only inhibit technologies that disable
- * uncoordinated discarding of pages in RAM blocks, allowing co-existance with
+ * uncoordinated discarding of pages in RAM blocks, allowing co-existence with
  * technologies that only inhibit uncoordinated discards (via the
  * RamDiscardManager).
  */

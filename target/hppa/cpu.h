@@ -281,22 +281,16 @@ static inline int HPPA_BTLB_ENTRIES(CPUHPPAState *env)
     return hppa_is_pa20(env) ? 0 : PA10_BTLB_FIXED + PA10_BTLB_VARIABLE;
 }
 
-static inline int cpu_mmu_index(CPUHPPAState *env, bool ifetch)
-{
-#ifdef CONFIG_USER_ONLY
-    return MMU_USER_IDX;
-#else
-    if (env->psw & (ifetch ? PSW_C : PSW_D)) {
-        return PRIV_P_TO_MMU_IDX(env->iaoq_f & 3, env->psw & PSW_P);
-    }
-    /* mmu disabled */
-    return env->psw & PSW_W ? MMU_ABS_W_IDX : MMU_ABS_IDX;
-#endif
-}
-
 void hppa_translate_init(void);
 
 #define CPU_RESOLVING_TYPE TYPE_HPPA_CPU
+
+static inline uint64_t gva_offset_mask(target_ulong psw)
+{
+    return (psw & PSW_W
+            ? MAKE_64BIT_MASK(0, 62)
+            : MAKE_64BIT_MASK(0, 32));
+}
 
 static inline target_ulong hppa_form_gva_psw(target_ulong psw, uint64_t spc,
                                              target_ulong off)
@@ -304,8 +298,7 @@ static inline target_ulong hppa_form_gva_psw(target_ulong psw, uint64_t spc,
 #ifdef CONFIG_USER_ONLY
     return off;
 #else
-    off &= psw & PSW_W ? MAKE_64BIT_MASK(0, 62) : MAKE_64BIT_MASK(0, 32);
-    return spc | off;
+    return spc | (off & gva_offset_mask(psw));
 #endif
 }
 
@@ -394,6 +387,11 @@ bool hppa_cpu_exec_interrupt(CPUState *cpu, int int_req);
 int hppa_get_physical_address(CPUHPPAState *env, vaddr addr, int mmu_idx,
                               int type, hwaddr *pphys, int *pprot,
                               HPPATLBEntry **tlb_entry);
+void hppa_cpu_do_transaction_failed(CPUState *cs, hwaddr physaddr,
+                                     vaddr addr, unsigned size,
+                                     MMUAccessType access_type,
+                                     int mmu_idx, MemTxAttrs attrs,
+                                     MemTxResult response, uintptr_t retaddr);
 extern const MemoryRegionOps hppa_io_eir_ops;
 extern const VMStateDescription vmstate_hppa_cpu;
 void hppa_cpu_alarm_timer(void *);
@@ -402,8 +400,5 @@ int hppa_artype_for_page(CPUHPPAState *env, target_ulong vaddr);
 G_NORETURN void hppa_dynamic_excp(CPUHPPAState *env, int excp, uintptr_t ra);
 
 #define CPU_RESOLVING_TYPE TYPE_HPPA_CPU
-
-#define cpu_list hppa_cpu_list
-void hppa_cpu_list(void);
 
 #endif /* HPPA_CPU_H */

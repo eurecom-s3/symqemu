@@ -101,7 +101,7 @@ if have_block
   }
   if gnutls.found() and \
      tasn1.found() and \
-     targetos != 'windows'
+     host_os != 'windows'
     tests += {
       'test-crypto-tlscredsx509': ['crypto-tls-x509-helpers.c', 'pkix_asn1_tab.c',
                                    tasn1, crypto, gnutls],
@@ -116,7 +116,7 @@ if have_block
   if xts == 'private'
     tests += {'test-crypto-xts': [crypto, io]}
   endif
-  if targetos != 'windows'
+  if host_os != 'windows'
     tests += {
       'test-image-locking': [testblock],
       'test-nested-aio-poll': [testblock],
@@ -151,7 +151,7 @@ if have_system
   # are not runnable under TSan due to a known issue.
   # https://github.com/google/sanitizers/issues/1116
   if not get_option('tsan')
-    if targetos != 'windows'
+    if host_os != 'windows'
         tests += {
           'test-char': ['socket-helpers.c', qom, io, chardev]
         }
@@ -163,7 +163,7 @@ if have_system
   endif
 endif
 
-if have_ga and targetos == 'linux'
+if have_ga and host_os == 'linux'
   tests += {'test-qga': ['../qtest/libqmp.c']}
   test_deps += {'test-qga': qga}
 endif
@@ -173,8 +173,12 @@ test_env.set('G_TEST_SRCDIR', meson.current_source_dir())
 test_env.set('G_TEST_BUILDDIR', meson.current_build_dir())
 
 slow_tests = {
-  'test-crypto-tlscredsx509': 45,
-  'test-crypto-tlssession': 45
+  'test-aio-multithread' : 120,
+  'test-bufferiszero': 60,
+  'test-crypto-block' : 300,
+  'test-crypto-tlscredsx509': 90,
+  'test-crypto-tlssession': 90,
+  'test-replication': 60,
 }
 
 foreach test_name, extra: tests

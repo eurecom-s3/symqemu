@@ -728,7 +728,7 @@ For example to setup the HPPA ports builds of Debian::
     EXECUTABLE=(pwd)/qemu-hppa V=1
 
 The ``DEB_`` variables are substitutions used by
-``debian-boostrap.pre`` which is called to do the initial debootstrap
+``debian-bootstrap.pre`` which is called to do the initial debootstrap
 of the rootfs before it is copied into the container. The second stage
 is run as part of the build. The final image will be tagged as
 ``qemu/debian-sid-hppa``.
@@ -1345,6 +1345,17 @@ the environment.
 
 The definition of *large* is a bit arbitrary here, but it usually means an
 asset which occupies at least 1GB of size on disk when uncompressed.
+
+SPEED
+^^^^^
+Tests which have a long runtime will not be run unless ``SPEED=slow`` is
+exported on the environment.
+
+The definition of *long* is a bit arbitrary here, and it depends on the
+usefulness of the test too. A unique test is worth spending more time on,
+small variations on existing tests perhaps less so. As a rough guide,
+a test or set of similar tests which take more than 100 seconds to
+complete.
 
 AVOCADO_ALLOW_UNTRUSTED_CODE
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

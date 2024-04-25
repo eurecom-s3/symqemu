@@ -36,6 +36,7 @@
 #include "hw/misc/aspeed_lpc.h"
 #include "hw/misc/unimp.h"
 #include "hw/misc/aspeed_peci.h"
+#include "hw/fsi/aspeed_apb2opb.h"
 #include "hw/char/serial.h"
 
 #define ASPEED_SPIS_NUM  2
@@ -90,6 +91,7 @@ struct AspeedSoCState {
     UnimplementedDeviceState udc;
     UnimplementedDeviceState sgpiom;
     UnimplementedDeviceState jtag[ASPEED_JTAG_NUM];
+    AspeedAPB2OPBState fsi[2];
 };
 
 #define TYPE_ASPEED_SOC "aspeed-soc"
@@ -128,7 +130,8 @@ struct AspeedSoCClass {
     DeviceClass parent_class;
 
     const char *name;
-    const char *cpu_type;
+    /** valid_cpu_types: NULL terminated array of a single CPU type. */
+    const char * const *valid_cpu_types;
     uint32_t silicon_rev;
     uint64_t sram_size;
     uint64_t secsram_size;
@@ -137,16 +140,19 @@ struct AspeedSoCClass {
     int wdts_num;
     int macs_num;
     int uarts_num;
+    int uarts_base;
     const int *irqmap;
     const hwaddr *memmap;
     uint32_t num_cpus;
     qemu_irq (*get_irq)(AspeedSoCState *s, int dev);
 };
 
+const char *aspeed_soc_cpu_type(AspeedSoCClass *sc);
 
 enum {
     ASPEED_DEV_SPI_BOOT,
     ASPEED_DEV_IOMEM,
+    ASPEED_DEV_UART0,
     ASPEED_DEV_UART1,
     ASPEED_DEV_UART2,
     ASPEED_DEV_UART3,
@@ -214,9 +220,9 @@ enum {
     ASPEED_DEV_SGPIOM,
     ASPEED_DEV_JTAG0,
     ASPEED_DEV_JTAG1,
+    ASPEED_DEV_FSI1,
+    ASPEED_DEV_FSI2,
 };
-
-#define ASPEED_SOC_SPI_BOOT_ADDR 0x0
 
 qemu_irq aspeed_soc_get_irq(AspeedSoCState *s, int dev);
 bool aspeed_soc_uart_realize(AspeedSoCState *s, Error **errp);
@@ -228,5 +234,20 @@ void aspeed_mmio_map_unimplemented(AspeedSoCState *s, SysBusDevice *dev,
                                    uint64_t size);
 void aspeed_board_init_flashes(AspeedSMCState *s, const char *flashtype,
                                unsigned int count, int unit0);
+
+static inline int aspeed_uart_index(int uart_dev)
+{
+    return uart_dev - ASPEED_DEV_UART0;
+}
+
+static inline int aspeed_uart_first(AspeedSoCClass *sc)
+{
+    return aspeed_uart_index(sc->uarts_base);
+}
+
+static inline int aspeed_uart_last(AspeedSoCClass *sc)
+{
+    return aspeed_uart_first(sc) + sc->uarts_num - 1;
+}
 
 #endif /* ASPEED_SOC_H */

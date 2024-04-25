@@ -1457,7 +1457,7 @@ DISAS_INSN(undef)
      * for the 680x0 series, as well as those that are implemented
      * but actually illegal for CPU32 or pre-68020.
      */
-    qemu_log_mask(LOG_UNIMP, "Illegal instruction: %04x @ %08x\n",
+    qemu_log_mask(LOG_UNIMP, "Illegal instruction: %04x @ %" VADDR_PRIx "\n",
                   insn, s->base.pc_next);
     gen_exception(s, s->base.pc_next, EXCP_ILLEGAL);
 }
@@ -4686,7 +4686,7 @@ static void gen_load_fcr(DisasContext *s, TCGv res, int reg)
         tcg_gen_movi_i32(res, 0);
         break;
     case M68K_FPSR:
-        tcg_gen_ld_i32(res, tcg_env, offsetof(CPUM68KState, fpsr));
+        gen_helper_get_fpsr(res, tcg_env);
         break;
     case M68K_FPCR:
         tcg_gen_ld_i32(res, tcg_env, offsetof(CPUM68KState, fpcr));
@@ -4700,7 +4700,7 @@ static void gen_store_fcr(DisasContext *s, TCGv val, int reg)
     case M68K_FPIAR:
         break;
     case M68K_FPSR:
-        tcg_gen_st_i32(val, tcg_env, offsetof(CPUM68KState, fpsr));
+        gen_helper_set_fpsr(tcg_env, val);
         break;
     case M68K_FPCR:
         gen_helper_set_fpcr(tcg_env, val);
@@ -5129,46 +5129,44 @@ undef:
 static void gen_fcc_cond(DisasCompare *c, DisasContext *s, int cond)
 {
     TCGv fpsr;
+    int imm = 0;
 
-    c->v2 = tcg_constant_i32(0);
     /* TODO: Raise BSUN exception.  */
     fpsr = tcg_temp_new();
     gen_load_fcr(s, fpsr, M68K_FPSR);
+    c->v1 = fpsr;
+
     switch (cond) {
     case 0:  /* False */
     case 16: /* Signaling False */
-        c->v1 = c->v2;
         c->tcond = TCG_COND_NEVER;
         break;
     case 1:  /* EQual Z */
     case 17: /* Signaling EQual Z */
-        c->v1 = tcg_temp_new();
-        tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_Z);
-        c->tcond = TCG_COND_NE;
+        imm = FPSR_CC_Z;
+        c->tcond = TCG_COND_TSTNE;
         break;
     case 2:  /* Ordered Greater Than !(A || Z || N) */
     case 18: /* Greater Than !(A || Z || N) */
-        c->v1 = tcg_temp_new();
-        tcg_gen_andi_i32(c->v1, fpsr,
-                         FPSR_CC_A | FPSR_CC_Z | FPSR_CC_N);
-        c->tcond = TCG_COND_EQ;
+        imm = FPSR_CC_A | FPSR_CC_Z | FPSR_CC_N;
+        c->tcond = TCG_COND_TSTEQ;
         break;
     case 3:  /* Ordered Greater than or Equal Z || !(A || N) */
     case 19: /* Greater than or Equal Z || !(A || N) */
         c->v1 = tcg_temp_new();
         tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_A);
         tcg_gen_shli_i32(c->v1, c->v1, ctz32(FPSR_CC_N) - ctz32(FPSR_CC_A));
-        tcg_gen_andi_i32(fpsr, fpsr, FPSR_CC_Z | FPSR_CC_N);
         tcg_gen_or_i32(c->v1, c->v1, fpsr);
         tcg_gen_xori_i32(c->v1, c->v1, FPSR_CC_N);
-        c->tcond = TCG_COND_NE;
+        imm = FPSR_CC_Z | FPSR_CC_N;
+        c->tcond = TCG_COND_TSTNE;
         break;
     case 4:  /* Ordered Less Than !(!N || A || Z); */
     case 20: /* Less Than !(!N || A || Z); */
         c->v1 = tcg_temp_new();
         tcg_gen_xori_i32(c->v1, fpsr, FPSR_CC_N);
-        tcg_gen_andi_i32(c->v1, c->v1, FPSR_CC_N | FPSR_CC_A | FPSR_CC_Z);
-        c->tcond = TCG_COND_EQ;
+        imm = FPSR_CC_N | FPSR_CC_A | FPSR_CC_Z;
+        c->tcond = TCG_COND_TSTEQ;
         break;
     case 5:  /* Ordered Less than or Equal Z || (N && !A) */
     case 21: /* Less than or Equal Z || (N && !A) */
@@ -5176,49 +5174,45 @@ static void gen_fcc_cond(DisasCompare *c, DisasContext *s, int cond)
         tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_A);
         tcg_gen_shli_i32(c->v1, c->v1, ctz32(FPSR_CC_N) - ctz32(FPSR_CC_A));
         tcg_gen_andc_i32(c->v1, fpsr, c->v1);
-        tcg_gen_andi_i32(c->v1, c->v1, FPSR_CC_Z | FPSR_CC_N);
-        c->tcond = TCG_COND_NE;
+        imm = FPSR_CC_Z | FPSR_CC_N;
+        c->tcond = TCG_COND_TSTNE;
         break;
     case 6:  /* Ordered Greater or Less than !(A || Z) */
     case 22: /* Greater or Less than !(A || Z) */
-        c->v1 = tcg_temp_new();
-        tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_A | FPSR_CC_Z);
-        c->tcond = TCG_COND_EQ;
+        imm = FPSR_CC_A | FPSR_CC_Z;
+        c->tcond = TCG_COND_TSTEQ;
         break;
     case 7:  /* Ordered !A */
     case 23: /* Greater, Less or Equal !A */
-        c->v1 = tcg_temp_new();
-        tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_A);
-        c->tcond = TCG_COND_EQ;
+        imm = FPSR_CC_A;
+        c->tcond = TCG_COND_TSTEQ;
         break;
     case 8:  /* Unordered A */
     case 24: /* Not Greater, Less or Equal A */
-        c->v1 = tcg_temp_new();
-        tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_A);
-        c->tcond = TCG_COND_NE;
+        imm = FPSR_CC_A;
+        c->tcond = TCG_COND_TSTNE;
         break;
     case 9:  /* Unordered or Equal A || Z */
     case 25: /* Not Greater or Less then A || Z */
-        c->v1 = tcg_temp_new();
-        tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_A | FPSR_CC_Z);
-        c->tcond = TCG_COND_NE;
+        imm = FPSR_CC_A | FPSR_CC_Z;
+        c->tcond = TCG_COND_TSTNE;
         break;
     case 10: /* Unordered or Greater Than A || !(N || Z)) */
     case 26: /* Not Less or Equal A || !(N || Z)) */
         c->v1 = tcg_temp_new();
         tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_Z);
         tcg_gen_shli_i32(c->v1, c->v1, ctz32(FPSR_CC_N) - ctz32(FPSR_CC_Z));
-        tcg_gen_andi_i32(fpsr, fpsr, FPSR_CC_A | FPSR_CC_N);
         tcg_gen_or_i32(c->v1, c->v1, fpsr);
         tcg_gen_xori_i32(c->v1, c->v1, FPSR_CC_N);
-        c->tcond = TCG_COND_NE;
+        imm = FPSR_CC_A | FPSR_CC_N;
+        c->tcond = TCG_COND_TSTNE;
         break;
     case 11: /* Unordered or Greater or Equal A || Z || !N */
     case 27: /* Not Less Than A || Z || !N */
         c->v1 = tcg_temp_new();
-        tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_A | FPSR_CC_Z | FPSR_CC_N);
-        tcg_gen_xori_i32(c->v1, c->v1, FPSR_CC_N);
-        c->tcond = TCG_COND_NE;
+        tcg_gen_xori_i32(c->v1, fpsr, FPSR_CC_N);
+        imm = FPSR_CC_A | FPSR_CC_Z | FPSR_CC_N;
+        c->tcond = TCG_COND_TSTNE;
         break;
     case 12: /* Unordered or Less Than A || (N && !Z) */
     case 28: /* Not Greater than or Equal A || (N && !Z) */
@@ -5226,27 +5220,25 @@ static void gen_fcc_cond(DisasCompare *c, DisasContext *s, int cond)
         tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_Z);
         tcg_gen_shli_i32(c->v1, c->v1, ctz32(FPSR_CC_N) - ctz32(FPSR_CC_Z));
         tcg_gen_andc_i32(c->v1, fpsr, c->v1);
-        tcg_gen_andi_i32(c->v1, c->v1, FPSR_CC_A | FPSR_CC_N);
-        c->tcond = TCG_COND_NE;
+        imm = FPSR_CC_A | FPSR_CC_N;
+        c->tcond = TCG_COND_TSTNE;
         break;
     case 13: /* Unordered or Less or Equal A || Z || N */
     case 29: /* Not Greater Than A || Z || N */
-        c->v1 = tcg_temp_new();
-        tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_A | FPSR_CC_Z | FPSR_CC_N);
-        c->tcond = TCG_COND_NE;
+        imm = FPSR_CC_A | FPSR_CC_Z | FPSR_CC_N;
+        c->tcond = TCG_COND_TSTNE;
         break;
     case 14: /* Not Equal !Z */
     case 30: /* Signaling Not Equal !Z */
-        c->v1 = tcg_temp_new();
-        tcg_gen_andi_i32(c->v1, fpsr, FPSR_CC_Z);
-        c->tcond = TCG_COND_EQ;
+        imm = FPSR_CC_Z;
+        c->tcond = TCG_COND_TSTEQ;
         break;
     case 15: /* True */
     case 31: /* Signaling True */
-        c->v1 = c->v2;
         c->tcond = TCG_COND_ALWAYS;
         break;
     }
+    c->v2 = tcg_constant_i32(imm);
 }
 
 static void gen_fjmpcc(DisasContext *s, int cond, TCGLabel *l1)
@@ -6088,7 +6080,7 @@ static const TranslatorOps m68k_tr_ops = {
 };
 
 void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb, int *max_insns,
-                           target_ulong pc, void *host_pc)
+                           vaddr pc, void *host_pc)
 {
     DisasContext dc;
     translator_loop(cpu, tb, max_insns, pc, host_pc, &m68k_tr_ops, &dc.base);
@@ -6108,8 +6100,7 @@ static double floatx80_to_double(CPUM68KState *env, uint16_t high, uint64_t low)
 
 void m68k_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 {
-    M68kCPU *cpu = M68K_CPU(cs);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(cs);
     int i;
     uint16_t sr;
     for (i = 0; i < 8; i++) {

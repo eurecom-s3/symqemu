@@ -319,6 +319,7 @@ typedef struct CPUArchState {
     uint64_t CSR_PWCH;
     uint64_t CSR_STLBPS;
     uint64_t CSR_RVACFG;
+    uint64_t CSR_CPUID;
     uint64_t CSR_PRCFG1;
     uint64_t CSR_PRCFG2;
     uint64_t CSR_PRCFG3;
@@ -350,16 +351,14 @@ typedef struct CPUArchState {
     uint64_t CSR_DBG;
     uint64_t CSR_DERA;
     uint64_t CSR_DSAVE;
-    uint64_t CSR_CPUID;
 
 #ifndef CONFIG_USER_ONLY
     LoongArchTLB  tlb[LOONGARCH_TLB_MAX];
 
-    AddressSpace address_space_iocsr;
-    MemoryRegion system_iocsr;
-    MemoryRegion iocsr_mem;
+    AddressSpace *address_space_iocsr;
     bool load_elf;
     uint64_t elf_address;
+    uint32_t mp_state;
     /* Store ipistate to access from this struct */
     DeviceState *ipistate;
 #endif
@@ -380,6 +379,8 @@ struct ArchCPU {
 
     /* 'compatible' string for this CPU for Linux device trees */
     const char *dtb_compatible;
+    /* used by KVM_REG_LOONGARCH_COUNTER ioctl to access guest time counters */
+    uint64_t kvm_state_counter;
 };
 
 /**
@@ -403,21 +404,9 @@ struct LoongArchCPUClass {
  */
 #define MMU_PLV_KERNEL   0
 #define MMU_PLV_USER     3
-#define MMU_IDX_KERNEL   MMU_PLV_KERNEL
-#define MMU_IDX_USER     MMU_PLV_USER
-#define MMU_IDX_DA       4
-
-static inline int cpu_mmu_index(CPULoongArchState *env, bool ifetch)
-{
-#ifdef CONFIG_USER_ONLY
-    return MMU_IDX_USER;
-#else
-    if (FIELD_EX64(env->CSR_CRMD, CSR_CRMD, PG)) {
-        return FIELD_EX64(env->CSR_CRMD, CSR_CRMD, PLV);
-    }
-    return MMU_IDX_DA;
-#endif
-}
+#define MMU_KERNEL_IDX   MMU_PLV_KERNEL
+#define MMU_USER_IDX     MMU_PLV_USER
+#define MMU_DA_IDX       4
 
 static inline bool is_la64(CPULoongArchState *env)
 {
@@ -465,10 +454,6 @@ static inline void cpu_get_tb_cpu_state(CPULoongArchState *env, vaddr *pc,
     *flags |= FIELD_EX64(env->CSR_EUEN, CSR_EUEN, ASXE) * HW_FLAGS_EUEN_ASXE;
     *flags |= is_va32(env) * HW_FLAGS_VA32;
 }
-
-void loongarch_cpu_list(void);
-
-#define cpu_list loongarch_cpu_list
 
 #include "exec/cpu-all.h"
 

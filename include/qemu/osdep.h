@@ -508,10 +508,17 @@ void qemu_anon_ram_free(void *ptr, size_t size);
 
 #ifdef _WIN32
 #define HAVE_CHARDEV_SERIAL 1
-#elif defined(__linux__) || defined(__sun__) || defined(__FreeBSD__)    \
+#define HAVE_CHARDEV_PARALLEL 1
+#else
+#if defined(__linux__) || defined(__sun__) || defined(__FreeBSD__)   \
     || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__) \
     || defined(__GLIBC__) || defined(__APPLE__)
 #define HAVE_CHARDEV_SERIAL 1
+#endif
+#if defined(__linux__) || defined(__FreeBSD__) \
+    || defined(__FreeBSD_kernel__) || defined(__DragonFly__)
+#define HAVE_CHARDEV_PARALLEL 1
+#endif
 #endif
 
 #if defined(__HAIKU__)
@@ -547,6 +554,14 @@ int madvise(char *, size_t, int);
 #  define QEMU_VMALLOC_ALIGN (256 * 4096)
 #elif defined(__linux__) && defined(__sparc__)
 #  define QEMU_VMALLOC_ALIGN MAX(qemu_real_host_page_size(), SHMLBA)
+#elif defined(__linux__) && defined(__loongarch__)
+   /*
+    * For transparent hugepage optimization, it has better be huge page
+    * aligned. LoongArch host system supports two kinds of pagesize: 4K
+    * and 16K, here calculate huge page size from host page size
+    */
+#  define QEMU_VMALLOC_ALIGN (qemu_real_host_page_size() * \
+                         qemu_real_host_page_size() / sizeof(long))
 #else
 #  define QEMU_VMALLOC_ALIGN qemu_real_host_page_size()
 #endif
@@ -672,15 +687,33 @@ typedef struct ThreadContext ThreadContext;
  * @area: start address of the are to preallocate
  * @sz: the size of the area to preallocate
  * @max_threads: maximum number of threads to use
+ * @tc: prealloc context threads pointer, NULL if not in use
+ * @async: request asynchronous preallocation, requires @tc
  * @errp: returns an error if this function fails
  *
  * Preallocate memory (populate/prefault page tables writable) for the virtual
  * memory area starting at @area with the size of @sz. After a successful call,
  * each page in the area was faulted in writable at least once, for example,
  * after allocating file blocks for mapped files.
+ *
+ * When setting @async, allocation might be performed asynchronously.
+ * qemu_finish_async_prealloc_mem() must be called to finish any asynchronous
+ * preallocation.
+ *
+ * Return: true on success, else false setting @errp with error.
  */
-void qemu_prealloc_mem(int fd, char *area, size_t sz, int max_threads,
-                       ThreadContext *tc, Error **errp);
+bool qemu_prealloc_mem(int fd, char *area, size_t sz, int max_threads,
+                       ThreadContext *tc, bool async, Error **errp);
+
+/**
+ * qemu_finish_async_prealloc_mem:
+ * @errp: returns an error if this function fails
+ *
+ * Finish all outstanding asynchronous memory preallocation.
+ *
+ * Return: true on success, else false setting @errp with error.
+ */
+bool qemu_finish_async_prealloc_mem(Error **errp);
 
 /**
  * qemu_get_pid_name:
@@ -778,16 +811,6 @@ static inline int platform_does_not_support_system(const char *command)
     return -1;
 }
 #endif /* !HAVE_SYSTEM_FUNCTION */
-
-/**
- * If the load average was unobtainable, -1 is returned
- */
-#ifndef HAVE_GETLOADAVG_FUNCTION
-static inline int getloadavg(double loadavg[], int nelem)
-{
-    return -1;
-}
-#endif /* !HAVE_GETLOADAVG_FUNCTION */
 
 #ifdef __cplusplus
 }

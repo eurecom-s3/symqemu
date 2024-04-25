@@ -239,9 +239,20 @@ static void virt_init(MachineState *machine)
         param_ptr = param_blob;
 
         BOOTINFO1(param_ptr, BI_MACHTYPE, MACH_VIRT);
-        BOOTINFO1(param_ptr, BI_FPUTYPE, FPU_68040);
-        BOOTINFO1(param_ptr, BI_MMUTYPE, MMU_68040);
-        BOOTINFO1(param_ptr, BI_CPUTYPE, CPU_68040);
+        if (m68k_feature(&cpu->env, M68K_FEATURE_M68020)) {
+            BOOTINFO1(param_ptr, BI_CPUTYPE, CPU_68020);
+        } else if (m68k_feature(&cpu->env, M68K_FEATURE_M68030)) {
+            BOOTINFO1(param_ptr, BI_MMUTYPE, MMU_68030);
+            BOOTINFO1(param_ptr, BI_CPUTYPE, CPU_68030);
+        } else if (m68k_feature(&cpu->env, M68K_FEATURE_M68040)) {
+            BOOTINFO1(param_ptr, BI_FPUTYPE, FPU_68040);
+            BOOTINFO1(param_ptr, BI_MMUTYPE, MMU_68040);
+            BOOTINFO1(param_ptr, BI_CPUTYPE, CPU_68040);
+        } else if (m68k_feature(&cpu->env, M68K_FEATURE_M68060)) {
+            BOOTINFO1(param_ptr, BI_FPUTYPE, FPU_68060);
+            BOOTINFO1(param_ptr, BI_MMUTYPE, MMU_68060);
+            BOOTINFO1(param_ptr, BI_CPUTYPE, CPU_68060);
+        }
         BOOTINFO2(param_ptr, BI_MEMCHUNK, 0, ram_size);
 
         BOOTINFO1(param_ptr, BI_VIRT_QEMU_VERSION,
@@ -346,10 +357,17 @@ type_init(virt_machine_register_types)
     } \
     type_init(machvirt_machine_##major##_##minor##_init);
 
-static void virt_machine_8_2_options(MachineClass *mc)
+static void virt_machine_9_0_options(MachineClass *mc)
 {
 }
-DEFINE_VIRT_MACHINE(8, 2, true)
+DEFINE_VIRT_MACHINE(9, 0, true)
+
+static void virt_machine_8_2_options(MachineClass *mc)
+{
+    virt_machine_9_0_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_8_2, hw_compat_8_2_len);
+}
+DEFINE_VIRT_MACHINE(8, 2, false)
 
 static void virt_machine_8_1_options(MachineClass *mc)
 {

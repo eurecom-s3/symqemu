@@ -49,7 +49,6 @@ typedef struct DisasContext {
     bool mrp;
     bool nan2008;
     bool abs2008;
-    bool saar;
     bool mi;
     int gi;
 } DisasContext;
@@ -202,7 +201,8 @@ extern TCGv bcond;
     do {                                                                      \
         if (MIPS_DEBUG_DISAS) {                                               \
             qemu_log_mask(CPU_LOG_TB_IN_ASM,                                  \
-                          TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x\n", \
+                          "%016" VADDR_PRIx                                   \
+                          ": %08x Invalid %s %03x %03x %03x\n",               \
                           ctx->base.pc_next, ctx->opcode, op,                 \
                           ctx->opcode >> 26, ctx->opcode & 0x3F,              \
                           ((ctx->opcode >> 16) & 0x1F));                      \

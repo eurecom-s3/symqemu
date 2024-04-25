@@ -33,12 +33,12 @@ system_ss.add(when: 'CONFIG_MARVELL_88W8618', if_true: files('mv88w8618_eth.c'))
 system_ss.add(when: 'CONFIG_CADENCE', if_true: files('cadence_gem.c'))
 system_ss.add(when: 'CONFIG_STELLARIS_ENET', if_true: files('stellaris_enet.c'))
 system_ss.add(when: 'CONFIG_LANCE', if_true: files('lance.c'))
-system_ss.add(when: 'CONFIG_LASI_I82596', if_true: files('lasi_i82596.c'))
+system_ss.add(when: 'CONFIG_LASI_82596', if_true: files('lasi_i82596.c'))
 system_ss.add(when: 'CONFIG_I82596_COMMON', if_true: files('i82596.c'))
 system_ss.add(when: 'CONFIG_SUNHME', if_true: files('sunhme.c'))
 system_ss.add(when: 'CONFIG_FTGMAC100', if_true: files('ftgmac100.c'))
 system_ss.add(when: 'CONFIG_SUNGEM', if_true: files('sungem.c'))
-system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_emc.c'))
+system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_emc.c', 'npcm_gmac.c'))
 
 system_ss.add(when: 'CONFIG_ETRAXFS', if_true: files('etraxfs_eth.c'))
 system_ss.add(when: 'CONFIG_COLDFIRE', if_true: files('mcf_fec.c'))
@@ -50,7 +50,6 @@ specific_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('virtio-net.c'))
 
 if have_vhost_net
   system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost_net.c'), if_false: files('vhost_net-stub.c'))
-  system_ss.add(when: 'CONFIG_ALL', if_true: files('vhost_net-stub.c'))
 else
   system_ss.add(files('vhost_net-stub.c'))
 endif
@@ -69,7 +68,6 @@ system_ss.add(when: 'CONFIG_ROCKER', if_true: files(
   'rocker/rocker_of_dpa.c',
   'rocker/rocker_world.c',
 ), if_false: files('rocker/qmp-norocker.c'))
-system_ss.add(when: 'CONFIG_ALL', if_true: files('rocker/qmp-norocker.c'))
 system_ss.add(files('rocker/rocker-hmp-cmds.c'))
 
 subdir('can')

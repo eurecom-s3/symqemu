@@ -7,11 +7,9 @@
  * COPYING file in the top-level directory.
  */
 
-#include <stdint.h>
-
 #include "qemu/osdep.h"
+
 #include "qemu/bswap.h"
-#include "qemu/typedefs.h"
 #include "qemu/error-report.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
@@ -206,7 +204,7 @@ CXLRetCode cxl_event_clear_records(CXLDeviceState *cxlds,
      * record that will not be cleared when Clear Event Records is executed,
      * the device shall return the Invalid Handle return code and shall not
      * clear any of the specified event records."
-     *   -- CXL 3.0 8.2.9.2.3
+     *   -- CXL r3.1 Section 8.2.9.2.3: Clear Event Records (0101h)
      */
     entry = cxl_event_get_head(log);
     for (nr = 0; entry && nr < pl->nr_recs; nr++) {

@@ -170,8 +170,7 @@ static void iothread_set_aio_context_params(EventLoopBase *base, Error **errp)
     }
 
     aio_context_set_aio_params(iothread->ctx,
-                               iothread->parent_obj.aio_max_batch,
-                               errp);
+                               iothread->parent_obj.aio_max_batch);
 
     aio_context_set_thread_pool_params(iothread->ctx, base->thread_pool_min,
                                        base->thread_pool_max, errp);
@@ -405,6 +404,5 @@ IOThread *iothread_by_id(const char *id)
 
 bool qemu_in_iothread(void)
 {
-    return qemu_get_current_aio_context() == qemu_get_aio_context() ?
-                    false : true;
+    return qemu_get_current_aio_context() != qemu_get_aio_context();
 }

@@ -31,7 +31,7 @@
 #include "hw/i386/fw_cfg.h"
 #include "hw/i386/vmport.h"
 #include "sysemu/cpus.h"
-#include "hw/ide/internal.h"
+#include "hw/ide/ide-bus.h"
 #include "hw/timer/hpet.h"
 #include "hw/loader.h"
 #include "hw/rtc/mc146818rtc.h"
@@ -77,6 +77,9 @@
     { "qemu32-" TYPE_X86_CPU, "model-id", "QEMU Virtual CPU version " v, },\
     { "qemu64-" TYPE_X86_CPU, "model-id", "QEMU Virtual CPU version " v, },\
     { "athlon-" TYPE_X86_CPU, "model-id", "QEMU Virtual CPU version " v, },
+
+GlobalProperty pc_compat_8_2[] = {};
+const size_t pc_compat_8_2_len = G_N_ELEMENTS(pc_compat_8_2);
 
 GlobalProperty pc_compat_8_1[] = {};
 const size_t pc_compat_8_1_len = G_N_ELEMENTS(pc_compat_8_1);
@@ -396,8 +399,8 @@ static int boot_device2nibble(char boot_device)
     return 0;
 }
 
-static void set_boot_dev(MC146818RtcState *s, const char *boot_device,
-                         Error **errp)
+static void set_boot_dev(PCMachineState *pcms, MC146818RtcState *s,
+                         const char *boot_device, Error **errp)
 {
 #define PC_MAX_BOOT_DEVICES 3
     int nbds, bds[3] = { 0, };
@@ -417,12 +420,15 @@ static void set_boot_dev(MC146818RtcState *s, const char *boot_device,
         }
     }
     mc146818rtc_set_cmos_data(s, 0x3d, (bds[1] << 4) | bds[0]);
-    mc146818rtc_set_cmos_data(s, 0x38, (bds[2] << 4) | (fd_bootchk ? 0x0 : 0x1));
+    mc146818rtc_set_cmos_data(s, 0x38, (bds[2] << 4) | !pcms->fd_bootchk);
 }
 
 static void pc_boot_set(void *opaque, const char *boot_device, Error **errp)
 {
-    set_boot_dev(opaque, boot_device, errp);
+    PCMachineState *pcms = opaque;
+    X86MachineState *x86ms = X86_MACHINE(pcms);
+
+    set_boot_dev(pcms, MC146818_RTC(x86ms->rtc), boot_device, errp);
 }
 
 static void pc_cmos_init_floppy(MC146818RtcState *rtc_state, ISADevice *floppy)
@@ -461,11 +467,6 @@ static void pc_cmos_init_floppy(MC146818RtcState *rtc_state, ISADevice *floppy)
     }
     mc146818rtc_set_cmos_data(rtc_state, REG_EQUIPMENT_BYTE, val);
 }
-
-typedef struct pc_cmos_init_late_arg {
-    MC146818RtcState *rtc_state;
-    BusState *idebus[2];
-} pc_cmos_init_late_arg;
 
 typedef struct check_fdc_state {
     ISADevice *floppy;
@@ -527,23 +528,25 @@ static ISADevice *pc_find_fdc0(void)
     return state.floppy;
 }
 
-static void pc_cmos_init_late(void *opaque)
+static void pc_cmos_init_late(PCMachineState *pcms)
 {
-    pc_cmos_init_late_arg *arg = opaque;
-    MC146818RtcState *s = arg->rtc_state;
+    X86MachineState *x86ms = X86_MACHINE(pcms);
+    MC146818RtcState *s = MC146818_RTC(x86ms->rtc);
     int16_t cylinders;
     int8_t heads, sectors;
     int val;
     int i, trans;
 
     val = 0;
-    if (arg->idebus[0] && ide_get_geometry(arg->idebus[0], 0,
-                                           &cylinders, &heads, &sectors) >= 0) {
+    if (pcms->idebus[0] &&
+        ide_get_geometry(pcms->idebus[0], 0,
+                         &cylinders, &heads, &sectors) >= 0) {
         cmos_init_hd(s, 0x19, 0x1b, cylinders, heads, sectors);
         val |= 0xf0;
     }
-    if (arg->idebus[0] && ide_get_geometry(arg->idebus[0], 1,
-                                           &cylinders, &heads, &sectors) >= 0) {
+    if (pcms->idebus[0] &&
+        ide_get_geometry(pcms->idebus[0], 1,
+                         &cylinders, &heads, &sectors) >= 0) {
         cmos_init_hd(s, 0x1a, 0x24, cylinders, heads, sectors);
         val |= 0x0f;
     }
@@ -555,10 +558,11 @@ static void pc_cmos_init_late(void *opaque)
            geometry.  It is always such that: 1 <= sects <= 63, 1
            <= heads <= 16, 1 <= cylinders <= 16383. The BIOS
            geometry can be different if a translation is done. */
-        if (arg->idebus[i / 2] &&
-            ide_get_geometry(arg->idebus[i / 2], i % 2,
+        BusState *idebus = pcms->idebus[i / 2];
+        if (idebus &&
+            ide_get_geometry(idebus, i % 2,
                              &cylinders, &heads, &sectors) >= 0) {
-            trans = ide_get_bios_chs_trans(arg->idebus[i / 2], i % 2) - 1;
+            trans = ide_get_bios_chs_trans(idebus, i % 2) - 1;
             assert((trans & ~3) == 0);
             val |= trans << (i * 2);
         }
@@ -566,18 +570,6 @@ static void pc_cmos_init_late(void *opaque)
     mc146818rtc_set_cmos_data(s, 0x39, val);
 
     pc_cmos_init_floppy(s, pc_find_fdc0());
-
-    qemu_unregister_reset(pc_cmos_init_late, opaque);
-}
-
-void pc_cmos_init(PCMachineState *pcms,
-                  BusState *idebus0, BusState *idebus1,
-                  ISADevice *rtc)
-{
-    int val;
-    static pc_cmos_init_late_arg arg;
-    X86MachineState *x86ms = X86_MACHINE(pcms);
-    MC146818RtcState *s = MC146818_RTC(rtc);
 
     /* various important CMOS locations needed by PC/Bochs bios */
 
@@ -614,26 +606,10 @@ void pc_cmos_init(PCMachineState *pcms,
     mc146818rtc_set_cmos_data(s, 0x5c, val >> 8);
     mc146818rtc_set_cmos_data(s, 0x5d, val >> 16);
 
-    object_property_add_link(OBJECT(pcms), "rtc_state",
-                             TYPE_ISA_DEVICE,
-                             (Object **)&x86ms->rtc,
-                             object_property_allow_set_link,
-                             OBJ_PROP_LINK_STRONG);
-    object_property_set_link(OBJECT(pcms), "rtc_state", OBJECT(s),
-                             &error_abort);
-
-    set_boot_dev(s, MACHINE(pcms)->boot_config.order, &error_fatal);
-
     val = 0;
     val |= 0x02; /* FPU is there */
     val |= 0x04; /* PS/2 mouse installed */
     mc146818rtc_set_cmos_data(s, REG_EQUIPMENT_BYTE, val);
-
-    /* hard drives and FDC */
-    arg.rtc_state = s;
-    arg.idebus[0] = idebus0;
-    arg.idebus[1] = idebus1;
-    qemu_register_reset(pc_cmos_init_late, &arg);
 }
 
 static void handle_a20_line_change(void *opaque, int irq, int level)
@@ -651,15 +627,19 @@ static const int ne2000_io[NE2000_NB_MAX] = { 0x300, 0x320, 0x340, 0x360,
                                               0x280, 0x380 };
 static const int ne2000_irq[NE2000_NB_MAX] = { 9, 10, 11, 3, 4, 5 };
 
-static void pc_init_ne2k_isa(ISABus *bus, NICInfo *nd)
+static gboolean pc_init_ne2k_isa(ISABus *bus, NICInfo *nd, Error **errp)
 {
     static int nb_ne2k = 0;
 
-    if (nb_ne2k == NE2000_NB_MAX)
-        return;
+    if (nb_ne2k == NE2000_NB_MAX) {
+        error_setg(errp,
+                   "maximum number of ISA NE2000 devices exceeded");
+        return false;
+    }
     isa_ne2000_init(bus, ne2000_io[nb_ne2k],
                     ne2000_irq[nb_ne2k], nd);
     nb_ne2k++;
+    return true;
 }
 
 void pc_acpi_smi_interrupt(void *opaque, int irq, int level)
@@ -678,7 +658,7 @@ void pc_machine_done(Notifier *notifier, void *data)
                                         PCMachineState, machine_done);
     X86MachineState *x86ms = X86_MACHINE(pcms);
 
-    cxl_hook_up_pxb_registers(pcms->bus, &pcms->cxl_devices_state,
+    cxl_hook_up_pxb_registers(pcms->pcibus, &pcms->cxl_devices_state,
                               &error_fatal);
 
     if (pcms->cxl_devices_state.is_enabled) {
@@ -688,24 +668,17 @@ void pc_machine_done(Notifier *notifier, void *data)
     /* set the number of CPUs */
     x86_rtc_set_cpus_count(x86ms->rtc, x86ms->boot_cpus);
 
-    fw_cfg_add_extra_pci_roots(pcms->bus, x86ms->fw_cfg);
+    fw_cfg_add_extra_pci_roots(pcms->pcibus, x86ms->fw_cfg);
 
     acpi_setup();
     if (x86ms->fw_cfg) {
-        fw_cfg_build_smbios(MACHINE(pcms), x86ms->fw_cfg);
+        fw_cfg_build_smbios(pcms, x86ms->fw_cfg, pcms->smbios_entry_point_type);
         fw_cfg_build_feature_control(MACHINE(pcms), x86ms->fw_cfg);
         /* update FW_CFG_NB_CPUS to account for -device added CPUs */
         fw_cfg_modify_i16(x86ms->fw_cfg, FW_CFG_NB_CPUS, x86ms->boot_cpus);
     }
-}
 
-void pc_guest_info_init(PCMachineState *pcms)
-{
-    X86MachineState *x86ms = X86_MACHINE(pcms);
-
-    x86ms->apic_xrupt_override = true;
-    pcms->machine_done.notify = pc_machine_done;
-    qemu_add_machine_init_done_notifier(&pcms->machine_done);
+    pc_cmos_init_late(pcms);
 }
 
 /* setup pci memory address space mapping into system address space */
@@ -726,7 +699,8 @@ void xen_load_linux(PCMachineState *pcms)
 
     assert(MACHINE(pcms)->kernel_filename != NULL);
 
-    fw_cfg = fw_cfg_init_io(FW_CFG_IO_BASE);
+    fw_cfg = fw_cfg_init_io_dma(FW_CFG_IO_BASE, FW_CFG_IO_BASE + 4,
+                                &address_space_memory);
     fw_cfg_add_i16(fw_cfg, FW_CFG_NB_CPUS, x86ms->boot_cpus);
     rom_set_fw(fw_cfg);
 
@@ -1188,7 +1162,8 @@ static void pc_superio_init(ISABus *isa_bus, bool create_fdctrl,
     port92 = isa_create_simple(isa_bus, TYPE_PORT92);
 
     a20_line = qemu_allocate_irqs(handle_a20_line_change, first_cpu, 2);
-    i8042_setup_a20_line(i8042, a20_line[0]);
+    qdev_connect_gpio_out_named(DEVICE(i8042),
+                                I8042_A20_LINE, 0, a20_line[0]);
     qdev_connect_gpio_out_named(DEVICE(port92),
                                 PORT92_A20_LINE, 0, a20_line[1]);
     g_free(a20_line);
@@ -1259,15 +1234,17 @@ void pc_basic_device_init(struct PCMachineState *pcms,
         xen_evtchn_create(IOAPIC_NUM_PINS, gsi);
         xen_gnttab_create();
         xen_xenstore_create();
-        if (pcms->bus) {
-            pci_create_simple(pcms->bus, -1, "xen-platform");
+        if (pcms->pcibus) {
+            pci_create_simple(pcms->pcibus, -1, "xen-platform");
         }
-        pcms->xenbus = xen_bus_init();
+        xen_bus_init();
         xen_be_init();
     }
 #endif
 
-    qemu_register_boot_set(pc_boot_set, rtc_state);
+    qemu_register_boot_set(pc_boot_set, pcms);
+    set_boot_dev(pcms, MC146818_RTC(rtc_state),
+                 MACHINE(pcms)->boot_config.order, &error_fatal);
 
     if (!xen_enabled() &&
         (x86ms->pit == ON_OFF_AUTO_AUTO || x86ms->pit == ON_OFF_AUTO_ON)) {
@@ -1290,27 +1267,21 @@ void pc_basic_device_init(struct PCMachineState *pcms,
                     pcms->vmport != ON_OFF_AUTO_ON);
 }
 
-void pc_nic_init(PCMachineClass *pcmc, ISABus *isa_bus, PCIBus *pci_bus,
-                 BusState *xen_bus)
+void pc_nic_init(PCMachineClass *pcmc, ISABus *isa_bus, PCIBus *pci_bus)
 {
     MachineClass *mc = MACHINE_CLASS(pcmc);
-    int i;
+    bool default_is_ne2k = g_str_equal(mc->default_nic, TYPE_ISA_NE2000);
+    NICInfo *nd;
 
     rom_set_order_override(FW_CFG_ORDER_OVERRIDE_NIC);
-    for (i = 0; i < nb_nics; i++) {
-        NICInfo *nd = &nd_table[i];
-        const char *model = nd->model ? nd->model : mc->default_nic;
 
-        if (xen_bus && (!nd->model || g_str_equal(model, "xen-net-device"))) {
-            DeviceState *dev = qdev_new("xen-net-device");
-            qdev_set_nic_properties(dev, nd);
-            qdev_realize_and_unref(dev, xen_bus, &error_fatal);
-        } else if (g_str_equal(model, "ne2k_isa")) {
-            pc_init_ne2k_isa(isa_bus, nd);
-        } else {
-            pci_nic_init_nofail(nd, pci_bus, model, NULL);
-        }
+    while ((nd = qemu_find_nic_info(TYPE_ISA_NE2000, default_is_ne2k, NULL))) {
+        pc_init_ne2k_isa(isa_bus, nd, &error_fatal);
     }
+
+    /* Anything remaining should be a PCI NIC */
+    pci_init_nic_devices(pci_bus, mc->default_nic);
+
     rom_reset_order_override();
 }
 
@@ -1345,7 +1316,7 @@ static void pc_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
     Error *local_err = NULL;
 
     /*
-     * When -no-acpi is used with Q35 machine type, no ACPI is built,
+     * When "acpi=off" is used with the Q35 machine type, no ACPI is built,
      * but pcms->acpi_dev is still created. Check !acpi_enabled in
      * addition to cover this case.
      */
@@ -1393,7 +1364,7 @@ static void pc_memory_unplug_request(HotplugHandler *hotplug_dev,
     X86MachineState *x86ms = X86_MACHINE(hotplug_dev);
 
     /*
-     * When -no-acpi is used with Q35 machine type, no ACPI is built,
+     * When "acpi=off" is used with the Q35 machine type, no ACPI is built,
      * but pcms->acpi_dev is still created. Check !acpi_enabled in
      * addition to cover this case.
      */
@@ -1556,6 +1527,20 @@ static void pc_machine_set_vmport(Object *obj, Visitor *v, const char *name,
     PCMachineState *pcms = PC_MACHINE(obj);
 
     visit_type_OnOffAuto(v, name, &pcms->vmport, errp);
+}
+
+static bool pc_machine_get_fd_bootchk(Object *obj, Error **errp)
+{
+    PCMachineState *pcms = PC_MACHINE(obj);
+
+    return pcms->fd_bootchk;
+}
+
+static void pc_machine_set_fd_bootchk(Object *obj, bool value, Error **errp)
+{
+    PCMachineState *pcms = PC_MACHINE(obj);
+
+    pcms->fd_bootchk = value;
 }
 
 static bool pc_machine_get_smbus(Object *obj, Error **errp)
@@ -1746,18 +1731,19 @@ static void pc_machine_initfn(Object *obj)
 #ifdef CONFIG_HPET
     pcms->hpet_enabled = true;
 #endif
+    pcms->fd_bootchk = true;
     pcms->default_bus_bypass_iommu = false;
 
     pc_system_flash_create(pcms);
     pcms->pcspk = isa_new(TYPE_PC_SPEAKER);
     object_property_add_alias(OBJECT(pcms), "pcspk-audiodev",
                               OBJECT(pcms->pcspk), "audiodev");
-    cxl_machine_init(obj, &pcms->cxl_devices_state);
-}
+    if (pcmc->pci_enabled) {
+        cxl_machine_init(obj, &pcms->cxl_devices_state);
+    }
 
-int pc_machine_kvm_type(MachineState *machine, const char *kvm_type)
-{
-    return 0;
+    pcms->machine_done.notify = pc_machine_done;
+    qemu_add_machine_init_done_notifier(&pcms->machine_done);
 }
 
 static void pc_machine_reset(MachineState *machine, ShutdownCause reason)
@@ -1806,6 +1792,7 @@ static bool pc_hotplug_allowed(MachineState *ms, DeviceState *dev, Error **errp)
 static void pc_machine_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
+    X86MachineClass *x86mc = X86_MACHINE_CLASS(oc);
     PCMachineClass *pcmc = PC_MACHINE_CLASS(oc);
     HotplugHandlerClass *hc = HOTPLUG_HANDLER_CLASS(oc);
 
@@ -1816,7 +1803,6 @@ static void pc_machine_class_init(ObjectClass *oc, void *data)
     pcmc->smbios_uuid_encoded = true;
     pcmc->gigabyte_align = true;
     pcmc->has_reserved_memory = true;
-    pcmc->kvmclock_enabled = true;
     pcmc->enforce_aligned_dimm = true;
     pcmc->enforce_amd_1tb_hole = true;
     /* BIOS ACPI tables: 128K. Other BIOS datastructures: less than 4K reported
@@ -1825,6 +1811,7 @@ static void pc_machine_class_init(ObjectClass *oc, void *data)
     pcmc->pvh_enabled = true;
     pcmc->kvmclock_create_always = true;
     pcmc->resizable_acpi_blob = true;
+    x86mc->apic_xrupt_override = true;
     assert(!mc->get_hotplug_handler);
     mc->get_hotplug_handler = pc_get_hotplug_handler;
     mc->hotplug_allowed = pc_hotplug_allowed;
@@ -1847,7 +1834,7 @@ static void pc_machine_class_init(ObjectClass *oc, void *data)
     mc->nvdimm_supported = true;
     mc->smp_props.dies_supported = true;
     mc->default_ram_id = "pc.ram";
-    pcmc->default_smbios_ep_type = SMBIOS_ENTRY_POINT_TYPE_64;
+    pcmc->default_smbios_ep_type = SMBIOS_ENTRY_POINT_TYPE_AUTO;
 
     object_class_property_add(oc, PC_MACHINE_MAX_RAM_BELOW_4G, "size",
         pc_machine_get_max_ram_below_4g, pc_machine_set_max_ram_below_4g,
@@ -1894,6 +1881,10 @@ static void pc_machine_class_init(ObjectClass *oc, void *data)
         NULL, NULL);
     object_class_property_set_description(oc, PC_MACHINE_SMBIOS_EP,
         "SMBIOS Entry Point type [32, 64]");
+
+    object_class_property_add_bool(oc, "fd-bootchk",
+        pc_machine_get_fd_bootchk,
+        pc_machine_set_fd_bootchk);
 }
 
 static const TypeInfo pc_machine_info = {

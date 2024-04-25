@@ -40,7 +40,6 @@
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bus.h"
 #include "qemu/log.h"
-#include "hw/mips/bios.h"
 #include "hw/ide/pci.h"
 #include "hw/irq.h"
 #include "hw/loader.h"
@@ -59,6 +58,7 @@
 #include "hw/qdev-clock.h"
 #include "target/mips/internal.h"
 #include "trace.h"
+#include "cpu.h"
 
 #define ENVP_PADDR          0x2000
 #define ENVP_VADDR          cpu_mips_phys_to_kseg0(NULL, ENVP_PADDR)
@@ -71,6 +71,7 @@
 #define RESET_ADDRESS       0x1fc00000ULL
 
 #define FLASH_SIZE          0x400000
+#define BIOS_SIZE           (4 * MiB)
 
 #define PIIX4_PCI_DEVFN     PCI_DEVFN(10, 0)
 
@@ -90,6 +91,12 @@ typedef struct {
     SerialMM *uart;
     bool display_inited;
 } MaltaFPGAState;
+
+#if TARGET_BIG_ENDIAN
+#define BIOS_FILENAME "mips_bios.bin"
+#else
+#define BIOS_FILENAME "mipsel_bios.bin"
+#endif
 
 #define TYPE_MIPS_MALTA "mips-malta"
 OBJECT_DECLARE_SIMPLE_TYPE(MaltaState, MIPS_MALTA)
@@ -605,18 +612,9 @@ static MaltaFPGAState *malta_fpga_init(MemoryRegion *address_space,
 /* Network support */
 static void network_init(PCIBus *pci_bus)
 {
-    int i;
-
-    for (i = 0; i < nb_nics; i++) {
-        NICInfo *nd = &nd_table[i];
-        const char *default_devaddr = NULL;
-
-        if (i == 0 && (!nd->model || strcmp(nd->model, "pcnet") == 0))
-            /* The malta board has a PCNet card using PCI SLOT 11 */
-            default_devaddr = "0b";
-
-        pci_nic_init_nofail(nd, pci_bus, "pcnet", default_devaddr);
-    }
+    /* The malta board has a PCNet card using PCI SLOT 11 */
+    pci_init_nic_in_slot(pci_bus, "pcnet", NULL, "0b");
+    pci_init_nic_devices(pci_bus, "pcnet");
 }
 
 static void bl_setup_gt64120_jump_kernel(void **p, uint64_t run_addr,

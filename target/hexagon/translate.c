@@ -234,7 +234,8 @@ static int read_packet_words(CPUHexagonState *env, DisasContext *ctx,
         g_assert(ctx->base.num_insns == 1);
     }
 
-    HEX_DEBUG_LOG("decode_packet: pc = 0x%x\n", ctx->base.pc_next);
+    HEX_DEBUG_LOG("decode_packet: pc = 0x%" VADDR_PRIx "\n",
+                  ctx->base.pc_next);
     HEX_DEBUG_LOG("    words = { ");
     for (int i = 0; i < nwords; i++) {
         HEX_DEBUG_LOG("0x%x, ", words[i]);
@@ -1033,10 +1034,10 @@ static void decode_and_translate_packet(CPUHexagonState *env, DisasContext *ctx)
         return;
     }
 
-    if (decode_packet(nwords, words, &pkt, false) > 0) {
+    ctx->pkt = &pkt;
+    if (decode_packet(ctx, nwords, words, &pkt, false) > 0) {
         pkt.pc = ctx->base.pc_next;
         HEX_DEBUG_PRINT_PKT(&pkt);
-        ctx->pkt = &pkt;
         gen_start_packet(ctx);
         for (i = 0; i < pkt.num_insns; i++) {
             ctx->insn = &pkt.insn[i];
@@ -1154,7 +1155,7 @@ static const TranslatorOps hexagon_tr_ops = {
 };
 
 void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int *max_insns,
-                           target_ulong pc, void *host_pc)
+                           vaddr pc, void *host_pc)
 {
     DisasContext ctx;
 

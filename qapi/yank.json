@@ -49,6 +49,8 @@
 # A yank instance can be yanked with the @yank qmp command to recover
 # from a hanging QEMU.
 #
+# @type: yank instance type
+#
 # Currently implemented yank instances:
 #
 # - nbd block device: Yanking it will shut down the connection to the
@@ -74,21 +76,20 @@
 # Try to recover from hanging QEMU by yanking the specified instances.
 # See @YankInstance for more information.
 #
-# Takes a list of @YankInstance as argument.
+# @instances: the instances to be yanked
 #
-# Returns:
-# - Nothing on success
-# - @DeviceNotFound error, if any of the YankInstances doesn't exist
+# Errors:
+#     - If any of the YankInstances doesn't exist, DeviceNotFound
 #
 # Example:
 #
-# -> { "execute": "yank",
-#      "arguments": {
-#          "instances": [
-#               { "type": "block-node",
-#                 "node-name": "nbd0" }
-#          ] } }
-# <- { "return": {} }
+#     -> { "execute": "yank",
+#          "arguments": {
+#              "instances": [
+#                   { "type": "block-node",
+#                     "node-name": "nbd0" }
+#              ] } }
+#     <- { "return": {} }
 #
 # Since: 6.0
 ##
@@ -105,11 +106,11 @@
 #
 # Example:
 #
-# -> { "execute": "query-yank" }
-# <- { "return": [
-#          { "type": "block-node",
-#            "node-name": "nbd0" }
-#      ] }
+#     -> { "execute": "query-yank" }
+#     <- { "return": [
+#              { "type": "block-node",
+#                "node-name": "nbd0" }
+#          ] }
 #
 # Since: 6.0
 ##

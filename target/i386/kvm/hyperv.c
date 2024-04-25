@@ -45,9 +45,9 @@ void hyperv_x86_synic_update(X86CPU *cpu)
 
 static void async_synic_update(CPUState *cs, run_on_cpu_data data)
 {
-    qemu_mutex_lock_iothread();
+    bql_lock();
     hyperv_x86_synic_update(X86_CPU(cs));
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
 }
 
 int kvm_hv_handle_exit(X86CPU *cpu, struct kvm_hyperv_exit *exit)
@@ -148,4 +148,9 @@ int kvm_hv_handle_exit(X86CPU *cpu, struct kvm_hyperv_exit *exit)
     default:
         return -1;
     }
+}
+
+void hyperv_x86_set_vmbus_recommended_features_enabled(void)
+{
+    hyperv_set_vmbus_recommended_features_enabled();
 }

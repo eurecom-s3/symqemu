@@ -1022,10 +1022,8 @@ static void armsse_realize(DeviceState *dev, Error **errp)
          * later if necessary.
          */
         if (extract32(info->cpuwait_rst, i, 1)) {
-            if (!object_property_set_bool(cpuobj, "start-powered-off", true,
-                                          errp)) {
-                return;
-            }
+            object_property_set_bool(cpuobj, "start-powered-off", true,
+                                     &error_abort);
         }
         if (!s->cpu_fpu[i]) {
             if (!object_property_set_bool(cpuobj, "vfp", false, errp)) {
@@ -1677,7 +1675,7 @@ static const VMStateDescription armsse_vmstate = {
     .name = "iotkit",
     .version_id = 2,
     .minimum_version_id = 2,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_CLOCK(mainclk, ARMSSE),
         VMSTATE_CLOCK(s32kclk, ARMSSE),
         VMSTATE_UINT32(nsccfg, ARMSSE),

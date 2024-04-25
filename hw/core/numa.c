@@ -28,7 +28,6 @@
 #include "sysemu/numa.h"
 #include "exec/cpu-common.h"
 #include "exec/ramlist.h"
-#include "qemu/bitmap.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "qapi/opts-visitor.h"
@@ -36,7 +35,6 @@
 #include "sysemu/qtest.h"
 #include "hw/core/cpu.h"
 #include "hw/mem/pc-dimm.h"
-#include "migration/vmstate.h"
 #include "hw/boards.h"
 #include "hw/mem/memory-device.h"
 #include "qemu/option.h"
@@ -229,7 +227,8 @@ void parse_numa_hmat_lb(NumaState *numa_state, NumaHmatLBOptions *node,
                    node->target, numa_state->num_nodes);
         return;
     }
-    if (!numa_info[node->initiator].has_cpu) {
+    if (!numa_info[node->initiator].has_cpu &&
+        !numa_info[node->initiator].has_gi) {
         error_setg(errp, "Invalid initiator=%d, it isn't an "
                    "initiator proximity domain", node->initiator);
         return;

@@ -35,6 +35,7 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/hostmem.h"
 #include "sysemu/numa.h"
+#include "sysemu/tcg.h"
 #include "sysemu/qtest.h"
 #include "sysemu/reset.h"
 #include "sysemu/runstate.h"
@@ -152,7 +153,7 @@ static const VMStateDescription pre_2_10_vmstate_dummy_icp = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = pre_2_10_vmstate_dummy_icp_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UNUSED(4), /* uint32_t xirr */
         VMSTATE_UNUSED(1), /* uint8_t pending_priority */
         VMSTATE_UNUSED(1), /* uint8_t mfrr */
@@ -233,29 +234,40 @@ static void spapr_dt_pa_features(SpaprMachineState *spapr,
                                  PowerPCCPU *cpu,
                                  void *fdt, int offset)
 {
+    /*
+     * SSO (SAO) ordering is supported on KVM and thread=single hosts,
+     * but not MTTCG, so disable it. To advertise it, a cap would have
+     * to be added, or support implemented for MTTCG.
+     *
+     * Copy/paste is not supported by TCG, so it is not advertised. KVM
+     * can execute them but it has no accelerator drivers which are usable,
+     * so there isn't much need for it anyway.
+     */
+
+    /* These should be kept in sync with pnv */
     uint8_t pa_features_206[] = { 6, 0,
-        0xf6, 0x1f, 0xc7, 0x00, 0x80, 0xc0 };
+        0xf6, 0x1f, 0xc7, 0x00, 0x00, 0xc0 };
     uint8_t pa_features_207[] = { 24, 0,
-        0xf6, 0x1f, 0xc7, 0xc0, 0x80, 0xf0,
+        0xf6, 0x1f, 0xc7, 0xc0, 0x00, 0xf0,
         0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x80, 0x00,
         0x80, 0x00, 0x80, 0x00, 0x00, 0x00 };
     uint8_t pa_features_300[] = { 66, 0,
         /* 0: MMU|FPU|SLB|RUN|DABR|NX, 1: fri[nzpm]|DABRX|SPRG3|SLB0|PP110 */
-        /* 2: VPM|DS205|PPR|DS202|DS206, 3: LSD|URG, SSO, 5: LE|CFAR|EB|LSQ */
-        0xf6, 0x1f, 0xc7, 0xc0, 0x80, 0xf0, /* 0 - 5 */
+        /* 2: VPM|DS205|PPR|DS202|DS206, 3: LSD|URG, 5: LE|CFAR|EB|LSQ */
+        0xf6, 0x1f, 0xc7, 0xc0, 0x00, 0xf0, /* 0 - 5 */
         /* 6: DS207 */
         0x80, 0x00, 0x00, 0x00, 0x00, 0x00, /* 6 - 11 */
         /* 16: Vector */
         0x00, 0x00, 0x00, 0x00, 0x80, 0x00, /* 12 - 17 */
-        /* 18: Vec. Scalar, 20: Vec. XOR, 22: HTM */
+        /* 18: Vec. Scalar, 20: Vec. XOR */
         0x80, 0x00, 0x80, 0x00, 0x00, 0x00, /* 18 - 23 */
         /* 24: Ext. Dec, 26: 64 bit ftrs, 28: PM ftrs */
         0x80, 0x00, 0x80, 0x00, 0x80, 0x00, /* 24 - 29 */
-        /* 30: MMR, 32: LE atomic, 34: EBB + ext EBB */
-        0x80, 0x00, 0x80, 0x00, 0xC0, 0x00, /* 30 - 35 */
-        /* 36: SPR SO, 38: Copy/Paste, 40: Radix MMU */
-        0x80, 0x00, 0x80, 0x00, 0x80, 0x00, /* 36 - 41 */
+        /* 32: LE atomic, 34: EBB + ext EBB */
+        0x00, 0x00, 0x80, 0x00, 0xC0, 0x00, /* 30 - 35 */
+        /* 40: Radix MMU */
+        0x00, 0x00, 0x00, 0x00, 0x80, 0x00, /* 36 - 41 */
         /* 42: PM, 44: PC RA, 46: SC vec'd */
         0x80, 0x00, 0x80, 0x00, 0x80, 0x00, /* 42 - 47 */
         /* 48: SIMD, 50: QP BFP, 52: String */
@@ -264,6 +276,36 @@ static void spapr_dt_pa_features(SpaprMachineState *spapr,
         0x80, 0x00, 0x80, 0x00, 0x80, 0x00, /* 54 - 59 */
         /* 60: NM atomic, 62: RNG */
         0x80, 0x00, 0x80, 0x00, 0x00, 0x00, /* 60 - 65 */
+    };
+    /* 3.1 removes SAO, HTM support */
+    uint8_t pa_features_31[] = { 74, 0,
+        /* 0: MMU|FPU|SLB|RUN|DABR|NX, 1: fri[nzpm]|DABRX|SPRG3|SLB0|PP110 */
+        /* 2: VPM|DS205|PPR|DS202|DS206, 3: LSD|URG, 5: LE|CFAR|EB|LSQ */
+        0xf6, 0x1f, 0xc7, 0xc0, 0x00, 0xf0, /* 0 - 5 */
+        /* 6: DS207 */
+        0x80, 0x00, 0x00, 0x00, 0x00, 0x00, /* 6 - 11 */
+        /* 16: Vector */
+        0x00, 0x00, 0x00, 0x00, 0x80, 0x00, /* 12 - 17 */
+        /* 18: Vec. Scalar, 20: Vec. XOR */
+        0x80, 0x00, 0x80, 0x00, 0x00, 0x00, /* 18 - 23 */
+        /* 24: Ext. Dec, 26: 64 bit ftrs, 28: PM ftrs */
+        0x80, 0x00, 0x80, 0x00, 0x80, 0x00, /* 24 - 29 */
+        /* 32: LE atomic, 34: EBB + ext EBB */
+        0x00, 0x00, 0x80, 0x00, 0xC0, 0x00, /* 30 - 35 */
+        /* 40: Radix MMU */
+        0x00, 0x00, 0x00, 0x00, 0x80, 0x00, /* 36 - 41 */
+        /* 42: PM, 44: PC RA, 46: SC vec'd */
+        0x80, 0x00, 0x80, 0x00, 0x80, 0x00, /* 42 - 47 */
+        /* 48: SIMD, 50: QP BFP, 52: String */
+        0x80, 0x00, 0x80, 0x00, 0x80, 0x00, /* 48 - 53 */
+        /* 54: DecFP, 56: DecI, 58: SHA */
+        0x80, 0x00, 0x80, 0x00, 0x80, 0x00, /* 54 - 59 */
+        /* 60: NM atomic, 62: RNG */
+        0x80, 0x00, 0x80, 0x00, 0x00, 0x00, /* 60 - 65 */
+        /* 68: DEXCR[SBHE|IBRTPDUS|SRAPD|NPHIE|PHIE] */
+        0x00, 0x00, 0xce, 0x00, 0x00, 0x00, /* 66 - 71 */
+        /* 72: [P]HASHST/[P]HASHCHK */
+        0x80, 0x00,                         /* 72 - 73 */
     };
     uint8_t *pa_features = NULL;
     size_t pa_size;
@@ -279,6 +321,10 @@ static void spapr_dt_pa_features(SpaprMachineState *spapr,
     if (ppc_check_compat(cpu, CPU_POWERPC_LOGICAL_3_00, 0, cpu->compat_pvr)) {
         pa_features = pa_features_300;
         pa_size = sizeof(pa_features_300);
+    }
+    if (ppc_check_compat(cpu, CPU_POWERPC_LOGICAL_3_10, 0, cpu->compat_pvr)) {
+        pa_features = pa_features_31;
+        pa_size = sizeof(pa_features_31);
     }
     if (!pa_features) {
         return;
@@ -1304,7 +1350,7 @@ static void emulate_spapr_hypercall(PPCVirtualHypervisor *vhyp,
     CPUPPCState *env = &cpu->env;
 
     /* The TCG path should also be holding the BQL at this point */
-    g_assert(qemu_mutex_iothread_locked());
+    g_assert(bql_locked());
 
     g_assert(!vhyp_cpu_in_nested(cpu));
 
@@ -1362,7 +1408,6 @@ void spapr_init_all_lpcrs(target_ulong value, target_ulong mask)
     }
 }
 
-
 static bool spapr_get_pate(PPCVirtualHypervisor *vhyp, PowerPCCPU *cpu,
                            target_ulong lpid, ppc_v3_pate_t *entry)
 {
@@ -1375,33 +1420,16 @@ static bool spapr_get_pate(PPCVirtualHypervisor *vhyp, PowerPCCPU *cpu,
         /* Copy PATE1:GR into PATE0:HR */
         entry->dw0 = spapr->patb_entry & PATE0_HR;
         entry->dw1 = spapr->patb_entry;
-
+        return true;
     } else {
-        uint64_t patb, pats;
-
-        assert(lpid != 0);
-
-        patb = spapr->nested_ptcr & PTCR_PATB;
-        pats = spapr->nested_ptcr & PTCR_PATS;
-
-        /* Check if partition table is properly aligned */
-        if (patb & MAKE_64BIT_MASK(0, pats + 12)) {
-            return false;
+        if (spapr_nested_api(spapr) == NESTED_API_KVM_HV) {
+            return spapr_get_pate_nested_hv(spapr, cpu, lpid, entry);
+        } else if (spapr_nested_api(spapr) == NESTED_API_PAPR) {
+            return spapr_get_pate_nested_papr(spapr, cpu, lpid, entry);
+        } else {
+            g_assert_not_reached();
         }
-
-        /* Calculate number of entries */
-        pats = 1ull << (pats + 12 - 4);
-        if (pats <= lpid) {
-            return false;
-        }
-
-        /* Grab entry */
-        patb += 16 * lpid;
-        entry->dw0 = ldq_phys(CPU(cpu)->as, patb);
-        entry->dw1 = ldq_phys(CPU(cpu)->as, patb + 8);
     }
-
-    return true;
 }
 
 #define HPTE(_table, _i)   (void *)(((uint64_t *)(_table)) + ((_i) * 2))
@@ -1689,6 +1717,7 @@ static void spapr_machine_reset(MachineState *machine, ShutdownCause reason)
 
     pef_kvm_reset(machine->cgs, &error_fatal);
     spapr_caps_apply(spapr);
+    spapr_nested_reset(spapr);
 
     first_ppc_cpu = POWERPC_CPU(first_cpu);
     if (kvm_enabled() && kvmppc_has_cap_mmu_radix() &&
@@ -1919,7 +1948,7 @@ static const VMStateDescription vmstate_spapr_event_entry = {
     .name = "spapr_event_log_entry",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(summary, SpaprEventLogEntry),
         VMSTATE_UINT32(extended_length, SpaprEventLogEntry),
         VMSTATE_VBUFFER_ALLOC_UINT32(extended_log, SpaprEventLogEntry, 0,
@@ -1933,7 +1962,7 @@ static const VMStateDescription vmstate_spapr_pending_events = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = spapr_pending_events_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_QTAILQ_V(pending_events, SpaprMachineState, 1,
                          vmstate_spapr_event_entry, SpaprEventLogEntry, next),
         VMSTATE_END_OF_LIST()
@@ -1989,7 +2018,7 @@ static const VMStateDescription vmstate_spapr_ov5_cas = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = spapr_ov5_cas_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_STRUCT_POINTER_V(ov5_cas, SpaprMachineState, 1,
                                  vmstate_spapr_ovec, SpaprOptionVector),
         VMSTATE_END_OF_LIST()
@@ -2008,7 +2037,7 @@ static const VMStateDescription vmstate_spapr_patb_entry = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = spapr_patb_entry_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(patb_entry, SpaprMachineState),
         VMSTATE_END_OF_LIST()
     },
@@ -2026,7 +2055,7 @@ static const VMStateDescription vmstate_spapr_irq_map = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = spapr_irq_map_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_BITMAP(irq_map, SpaprMachineState, 0, irq_map_nr),
         VMSTATE_END_OF_LIST()
     },
@@ -2056,7 +2085,7 @@ static const VMStateDescription vmstate_spapr_dtb = {
     .minimum_version_id = 1,
     .needed = spapr_dtb_needed,
     .pre_load = spapr_dtb_pre_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(fdt_initial_size, SpaprMachineState),
         VMSTATE_UINT32(fdt_size, SpaprMachineState),
         VMSTATE_VBUFFER_ALLOC_UINT32(fdt_blob, SpaprMachineState, 0, NULL,
@@ -2094,7 +2123,7 @@ static const VMStateDescription vmstate_spapr_fwnmi = {
     .minimum_version_id = 1,
     .needed = spapr_fwnmi_needed,
     .pre_save = spapr_fwnmi_pre_save,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(fwnmi_system_reset_addr, SpaprMachineState),
         VMSTATE_UINT64(fwnmi_machine_check_addr, SpaprMachineState),
         VMSTATE_INT32(fwnmi_machine_check_interlock, SpaprMachineState),
@@ -2109,7 +2138,7 @@ static const VMStateDescription vmstate_spapr = {
     .pre_load = spapr_pre_load,
     .post_load = spapr_post_load,
     .pre_save = spapr_pre_save,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         /* used to be @next_irq */
         VMSTATE_UNUSED_BUFFER(version_before_3, 0, 4),
 
@@ -2119,7 +2148,7 @@ static const VMStateDescription vmstate_spapr = {
         VMSTATE_PPC_TIMEBASE_V(tb, SpaprMachineState, 2),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription*[]) {
+    .subsections = (const VMStateDescription * const []) {
         &vmstate_spapr_ov5_cas,
         &vmstate_spapr_patb_entry,
         &vmstate_spapr_pending_events,
@@ -2138,6 +2167,7 @@ static const VMStateDescription vmstate_spapr = {
         &vmstate_spapr_cap_fwnmi,
         &vmstate_spapr_fwnmi,
         &vmstate_spapr_cap_rpt_invalidate,
+        &vmstate_spapr_cap_nested_papr,
         NULL
     }
 };
@@ -2796,6 +2826,7 @@ static void spapr_machine_init(MachineState *machine)
     MemoryRegion *sysmem = get_system_memory();
     long load_limit, fw_size;
     Error *resize_hpt_err = NULL;
+    NICInfo *nd;
 
     if (!filename) {
         error_report("Could not find LPAR firmware '%s'", bios_name);
@@ -2996,20 +3027,11 @@ static void spapr_machine_init(MachineState *machine)
 
     phb = spapr_create_default_phb();
 
-    for (i = 0; i < nb_nics; i++) {
-        NICInfo *nd = &nd_table[i];
-
-        if (!nd->model) {
-            nd->model = g_strdup("spapr-vlan");
-        }
-
-        if (g_str_equal(nd->model, "spapr-vlan") ||
-            g_str_equal(nd->model, "ibmveth")) {
-            spapr_vlan_create(spapr->vio_bus, nd);
-        } else {
-            pci_nic_init_nofail(&nd_table[i], phb->bus, nd->model, NULL);
-        }
+    while ((nd = qemu_find_nic_info("spapr-vlan", true, "ibmveth"))) {
+        spapr_vlan_create(spapr->vio_bus, nd);
     }
+
+    pci_init_nic_devices(phb->bus, NULL);
 
     for (i = 0; i <= drive_get_max_bus(IF_SCSI); i++) {
         spapr_vscsi_create(spapr->vio_bus);
@@ -3032,8 +3054,10 @@ static void spapr_machine_init(MachineState *machine)
         }
 
         if (has_vga) {
-            USBBus *usb_bus = usb_bus_find(-1);
+            USBBus *usb_bus;
 
+            usb_bus = USB_BUS(object_resolve_type_unambiguous(TYPE_USB_BUS,
+                                                              &error_abort));
             usb_create_simple(usb_bus, "usb-kbd");
             usb_create_simple(usb_bus, "usb-mouse");
         }
@@ -3487,8 +3511,7 @@ static void spapr_machine_finalizefn(Object *obj)
 void spapr_do_system_reset_on_cpu(CPUState *cs, run_on_cpu_data arg)
 {
     SpaprMachineState *spapr = SPAPR_MACHINE(qdev_get_machine());
-    PowerPCCPU *cpu = POWERPC_CPU(cs);
-    CPUPPCState *env = &cpu->env;
+    CPUPPCState *env = cpu_env(cs);
 
     cpu_synchronize_state(cs);
     /* If FWNMI is inactive, addr will be -1, which will deliver to 0x100 */
@@ -3985,7 +4008,6 @@ static void spapr_core_plug(HotplugHandler *hotplug_dev, DeviceState *dev)
     SpaprMachineClass *smc = SPAPR_MACHINE_CLASS(mc);
     SpaprCpuCore *core = SPAPR_CPU_CORE(OBJECT(dev));
     CPUCore *cc = CPU_CORE(dev);
-    CPUState *cs;
     SpaprDrc *drc;
     CPUArchId *core_slot;
     int index;
@@ -4019,7 +4041,7 @@ static void spapr_core_plug(HotplugHandler *hotplug_dev, DeviceState *dev)
         }
     }
 
-    core_slot->cpu = OBJECT(dev);
+    core_slot->cpu = CPU(dev);
 
     /*
      * Set compatibility mode to match the boot CPU, which was either set
@@ -4035,7 +4057,7 @@ static void spapr_core_plug(HotplugHandler *hotplug_dev, DeviceState *dev)
 
     if (smc->pre_2_10_has_unused_icps) {
         for (i = 0; i < cc->nr_threads; i++) {
-            cs = CPU(core->threads[i]);
+            CPUState *cs = CPU(core->threads[i]);
             pre_2_10_vmstate_unregister_dummy_icp(cs->cpu_index);
         }
     }
@@ -4647,13 +4669,10 @@ static void spapr_machine_class_init(ObjectClass *oc, void *data)
     mc->block_default_type = IF_SCSI;
 
     /*
-     * Setting max_cpus to INT32_MAX. Both KVM and TCG max_cpus values
-     * should be limited by the host capability instead of hardcoded.
-     * max_cpus for KVM guests will be checked in kvm_init(), and TCG
-     * guests are welcome to have as many CPUs as the host are capable
-     * of emulate.
+     * While KVM determines max cpus in kvm_init() using kvm_max_vcpus(),
+     * In TCG the limit is restricted by the range of CPU IPIs available.
      */
-    mc->max_cpus = INT32_MAX;
+    mc->max_cpus = SPAPR_IRQ_NR_IPIS;
 
     mc->no_parallel = 1;
     mc->default_boot_order = "";
@@ -4675,7 +4694,7 @@ static void spapr_machine_class_init(ObjectClass *oc, void *data)
 
     smc->dr_lmb_enabled = true;
     smc->update_dt_enabled = true;
-    mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("power9_v2.2");
+    mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("power10_v2.0");
     mc->has_hotpluggable_cpus = true;
     mc->nvdimm_supported = true;
     smc->resize_hpt_default = SPAPR_RESIZE_HPT_ENABLED;
@@ -4713,6 +4732,7 @@ static void spapr_machine_class_init(ObjectClass *oc, void *data)
     smc->default_caps.caps[SPAPR_CAP_IBS] = SPAPR_CAP_WORKAROUND;
     smc->default_caps.caps[SPAPR_CAP_HPT_MAXPAGESIZE] = 16; /* 64kiB */
     smc->default_caps.caps[SPAPR_CAP_NESTED_KVM_HV] = SPAPR_CAP_OFF;
+    smc->default_caps.caps[SPAPR_CAP_NESTED_PAPR] = SPAPR_CAP_OFF;
     smc->default_caps.caps[SPAPR_CAP_LARGE_DECREMENTER] = SPAPR_CAP_ON;
     smc->default_caps.caps[SPAPR_CAP_CCF_ASSIST] = SPAPR_CAP_ON;
     smc->default_caps.caps[SPAPR_CAP_FWNMI] = SPAPR_CAP_ON;
@@ -4786,14 +4806,25 @@ static void spapr_machine_latest_class_options(MachineClass *mc)
     type_init(spapr_machine_register_##suffix)
 
 /*
- * pseries-8.2
+ * pseries-9.0
  */
-static void spapr_machine_8_2_class_options(MachineClass *mc)
+static void spapr_machine_9_0_class_options(MachineClass *mc)
 {
     /* Defaults for the latest behaviour inherited from the base class */
 }
 
-DEFINE_SPAPR_MACHINE(8_2, "8.2", true);
+DEFINE_SPAPR_MACHINE(9_0, "9.0", true);
+
+/*
+ * pseries-8.2
+ */
+static void spapr_machine_8_2_class_options(MachineClass *mc)
+{
+    spapr_machine_9_0_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_8_2, hw_compat_8_2_len);
+}
+
+DEFINE_SPAPR_MACHINE(8_2, "8.2", false);
 
 /*
  * pseries-8.1
@@ -5083,6 +5114,7 @@ static void spapr_machine_2_11_class_options(MachineClass *mc)
     spapr_machine_2_12_class_options(mc);
     smc->default_caps.caps[SPAPR_CAP_HTM] = SPAPR_CAP_ON;
     compat_props_add(mc->compat_props, hw_compat_2_11, hw_compat_2_11_len);
+    mc->deprecation_reason = "old and not maintained - use a 2.12+ version";
 }
 
 DEFINE_SPAPR_MACHINE(2_11, "2.11", false);

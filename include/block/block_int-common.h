@@ -985,7 +985,9 @@ struct BdrvChildClass {
      * can update its reference.
      */
     int (*update_filename)(BdrvChild *child, BlockDriverState *new_base,
-                           const char *filename, Error **errp);
+                           const char *filename,
+                           bool backing_mask_protocol,
+                           Error **errp);
 
     bool (*change_aio_ctx)(BdrvChild *child, AioContext *ctx,
                            GHashTable *visited, Transaction *tran,
@@ -1191,8 +1193,6 @@ struct BlockDriverState {
 
     /* The error object in use for blocking operations on backing_hd */
     Error *backing_blocker;
-
-    /* Protected by AioContext lock */
 
     /*
      * If we are reading a disk image, give its size in sectors.

@@ -56,6 +56,11 @@ static bool m68k_cpu_has_work(CPUState *cs)
     return cs->interrupt_request & CPU_INTERRUPT_HARD;
 }
 
+static int m68k_cpu_mmu_index(CPUState *cs, bool ifetch)
+{
+    return cpu_env(cs)->sr & SR_S ? MMU_KERNEL_IDX : MMU_USER_IDX;
+}
+
 static void m68k_set_feature(CPUM68KState *env, int feature)
 {
     env->features |= BIT_ULL(feature);
@@ -68,10 +73,9 @@ static void m68k_unset_feature(CPUM68KState *env, int feature)
 
 static void m68k_cpu_reset_hold(Object *obj)
 {
-    CPUState *s = CPU(obj);
-    M68kCPU *cpu = M68K_CPU(s);
-    M68kCPUClass *mcc = M68K_CPU_GET_CLASS(cpu);
-    CPUM68KState *env = &cpu->env;
+    CPUState *cs = CPU(obj);
+    M68kCPUClass *mcc = M68K_CPU_GET_CLASS(obj);
+    CPUM68KState *env = cpu_env(cs);
     floatx80 nan = floatx80_default_nan(NULL);
     int i;
 
@@ -111,16 +115,13 @@ static ObjectClass *m68k_cpu_class_by_name(const char *cpu_model)
     typename = g_strdup_printf(M68K_CPU_TYPE_NAME("%s"), cpu_model);
     oc = object_class_by_name(typename);
     g_free(typename);
-    if (oc != NULL && object_class_dynamic_cast(oc, TYPE_M68K_CPU) == NULL) {
-        return NULL;
-    }
+
     return oc;
 }
 
 static void m5206_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68k_set_feature(env, M68K_FEATURE_CF_ISA_A);
     m68k_set_feature(env, M68K_FEATURE_MOVEFROMSR_PRIV);
@@ -129,8 +130,7 @@ static void m5206_cpu_initfn(Object *obj)
 /* Base feature set, including isns. for m68k family */
 static void m68000_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68k_set_feature(env, M68K_FEATURE_M68K);
     m68k_set_feature(env, M68K_FEATURE_USP);
@@ -139,12 +139,12 @@ static void m68000_cpu_initfn(Object *obj)
 }
 
 /*
- * Adds BKPT, MOVE-from-SR *now priv instr, and MOVEC, MOVES, RTD
+ * Adds BKPT, MOVE-from-SR *now priv instr, and MOVEC, MOVES, RTD,
+ *      format+vector in exception frame.
  */
 static void m68010_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68000_cpu_initfn(obj);
     m68k_set_feature(env, M68K_FEATURE_M68010);
@@ -152,6 +152,7 @@ static void m68010_cpu_initfn(Object *obj)
     m68k_set_feature(env, M68K_FEATURE_BKPT);
     m68k_set_feature(env, M68K_FEATURE_MOVEC);
     m68k_set_feature(env, M68K_FEATURE_MOVEFROMSR_PRIV);
+    m68k_set_feature(env, M68K_FEATURE_EXCEPTION_FORMAT_VEC);
 }
 
 /*
@@ -163,8 +164,7 @@ static void m68010_cpu_initfn(Object *obj)
  */
 static void m68020_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68010_cpu_initfn(obj);
     m68k_unset_feature(env, M68K_FEATURE_M68010);
@@ -194,8 +194,7 @@ static void m68020_cpu_initfn(Object *obj)
  */
 static void m68030_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68020_cpu_initfn(obj);
     m68k_unset_feature(env, M68K_FEATURE_M68020);
@@ -221,8 +220,7 @@ static void m68030_cpu_initfn(Object *obj)
  */
 static void m68040_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68030_cpu_initfn(obj);
     m68k_unset_feature(env, M68K_FEATURE_M68030);
@@ -242,8 +240,7 @@ static void m68040_cpu_initfn(Object *obj)
  */
 static void m68060_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68040_cpu_initfn(obj);
     m68k_unset_feature(env, M68K_FEATURE_M68040);
@@ -256,8 +253,7 @@ static void m68060_cpu_initfn(Object *obj)
 
 static void m5208_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68k_set_feature(env, M68K_FEATURE_CF_ISA_A);
     m68k_set_feature(env, M68K_FEATURE_CF_ISA_APLUSC);
@@ -269,8 +265,7 @@ static void m5208_cpu_initfn(Object *obj)
 
 static void cfv4e_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68k_set_feature(env, M68K_FEATURE_CF_ISA_A);
     m68k_set_feature(env, M68K_FEATURE_CF_ISA_B);
@@ -283,8 +278,7 @@ static void cfv4e_cpu_initfn(Object *obj)
 
 static void any_cpu_initfn(Object *obj)
 {
-    M68kCPU *cpu = M68K_CPU(obj);
-    CPUM68KState *env = &cpu->env;
+    CPUM68KState *env = cpu_env(CPU(obj));
 
     m68k_set_feature(env, M68K_FEATURE_CF_ISA_A);
     m68k_set_feature(env, M68K_FEATURE_CF_ISA_B);
@@ -381,7 +375,7 @@ static const VMStateDescription vmstate_freg_tmp = {
     .name = "freg_tmp",
     .post_load = freg_post_load,
     .pre_save  = freg_pre_save,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(tmp_mant, m68k_FPReg_tmp),
         VMSTATE_UINT16(tmp_exp, m68k_FPReg_tmp),
         VMSTATE_END_OF_LIST()
@@ -390,18 +384,25 @@ static const VMStateDescription vmstate_freg_tmp = {
 
 static const VMStateDescription vmstate_freg = {
     .name = "freg",
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_WITH_TMP(FPReg, m68k_FPReg_tmp, vmstate_freg_tmp),
         VMSTATE_END_OF_LIST()
     }
 };
 
+static int fpu_pre_save(void *opaque)
+{
+    M68kCPU *s = opaque;
+
+    s->env.fpsr = cpu_m68k_get_fpsr(&s->env);
+    return 0;
+}
+
 static int fpu_post_load(void *opaque, int version)
 {
     M68kCPU *s = opaque;
 
-    cpu_m68k_restore_fp_status(&s->env);
-
+    cpu_m68k_set_fpsr(&s->env, s->env.fpsr);
     return 0;
 }
 
@@ -410,8 +411,9 @@ const VMStateDescription vmmstate_fpu = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = fpu_needed,
+    .pre_save = fpu_pre_save,
     .post_load = fpu_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(env.fpcr, M68kCPU),
         VMSTATE_UINT32(env.fpsr, M68kCPU),
         VMSTATE_STRUCT_ARRAY(env.fregs, M68kCPU, 8, 0, vmstate_freg, FPReg),
@@ -432,7 +434,7 @@ const VMStateDescription vmstate_cf_spregs = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = cf_spregs_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64_ARRAY(env.macc, M68kCPU, 4),
         VMSTATE_UINT32(env.macsr, M68kCPU),
         VMSTATE_UINT32(env.mac_mask, M68kCPU),
@@ -454,7 +456,7 @@ const VMStateDescription vmstate_68040_mmu = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = cpu_68040_mmu_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(env.mmu.ar, M68kCPU),
         VMSTATE_UINT32(env.mmu.ssw, M68kCPU),
         VMSTATE_UINT16(env.mmu.tcr, M68kCPU),
@@ -479,7 +481,7 @@ const VMStateDescription vmstate_68040_spregs = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = cpu_68040_spregs_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(env.vbr, M68kCPU),
         VMSTATE_UINT32(env.cacr, M68kCPU),
         VMSTATE_UINT32(env.sfc, M68kCPU),
@@ -492,7 +494,7 @@ static const VMStateDescription vmstate_m68k_cpu = {
     .name = "cpu",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields      = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(env.dregs, M68kCPU, 8),
         VMSTATE_UINT32_ARRAY(env.aregs, M68kCPU, 8),
         VMSTATE_UINT32(env.pc, M68kCPU),
@@ -509,7 +511,7 @@ static const VMStateDescription vmstate_m68k_cpu = {
         VMSTATE_INT32(env.pending_level, M68kCPU),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription * []) {
+    .subsections = (const VMStateDescription * const []) {
         &vmmstate_fpu,
         &vmstate_cf_spregs,
         &vmstate_68040_mmu,
@@ -527,7 +529,7 @@ static const struct SysemuCPUOps m68k_sysemu_ops = {
 
 #include "hw/core/tcg-cpu-ops.h"
 
-static const struct TCGCPUOps m68k_tcg_ops = {
+static const TCGCPUOps m68k_tcg_ops = {
     .initialize = m68k_tcg_init,
     .restore_state_to_opc = m68k_restore_state_to_opc,
 
@@ -553,6 +555,7 @@ static void m68k_cpu_class_init(ObjectClass *c, void *data)
 
     cc->class_by_name = m68k_cpu_class_by_name;
     cc->has_work = m68k_cpu_has_work;
+    cc->mmu_index = m68k_cpu_mmu_index;
     cc->dump_state = m68k_cpu_dump_state;
     cc->set_pc = m68k_cpu_set_pc;
     cc->get_pc = m68k_cpu_get_pc;
@@ -564,7 +567,6 @@ static void m68k_cpu_class_init(ObjectClass *c, void *data)
 #endif
     cc->disas_set_info = m68k_cpu_disas_set_info;
 
-    cc->gdb_num_core_regs = 18;
     cc->tcg_ops = &m68k_tcg_ops;
 }
 

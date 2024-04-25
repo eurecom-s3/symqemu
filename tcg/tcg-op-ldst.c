@@ -130,23 +130,30 @@ static void tcg_gen_req_mo(TCGBar type)
     }
 }
 
+static TCGv_i64 preserve_addr(TCGTemp *addr)\
+{
+    /* Save a copy of the vaddr for use after a load.  */
+    TCGv_i64 temp = tcg_temp_ebb_new_i64();
+    if (tcg_ctx->addr_type == TCG_TYPE_I32) {
+        tcg_gen_extu_i32_i64(temp, temp_tcgv_i32(addr));
+    } else {
+        tcg_gen_mov_i64(temp, temp_tcgv_i64(addr));
+    }
+    return temp;
+}
+
 /* Only required for loads, where value might overlap addr. */
+/*
 static TCGv_i64 plugin_maybe_preserve_addr(TCGTemp *addr)
 {
 #ifdef CONFIG_PLUGIN
     if (tcg_ctx->plugin_insn != NULL) {
-        /* Save a copy of the vaddr for use after a load.  */
-        TCGv_i64 temp = tcg_temp_ebb_new_i64();
-        if (tcg_ctx->addr_type == TCG_TYPE_I32) {
-            tcg_gen_extu_i32_i64(temp, temp_tcgv_i32(addr));
-        } else {
-            tcg_gen_mov_i64(temp, temp_tcgv_i64(addr));
-        }
-        return temp;
+        return preserve_addr(addr);
     }
 #endif
     return NULL;
 }
+*/
 
 static void
 plugin_gen_mem_callbacks(TCGv_i64 copy_addr, TCGTemp *orig_addr, MemOpIdx oi,
@@ -182,14 +189,7 @@ static void tcg_gen_qemu_ld_i32_int(TCGv_i32 val, TCGTemp *addr,
     MemOpIdx orig_oi, oi;
     TCGv_i64 copy_addr;
     TCGOpcode opc;
-    TCGv_i64 load_size, mmu_idx, addr_loc;
-
-    /* Temporary bugfix
-     * On some architectures, the addr and val(ret) params are, for some reasons,
-     * getting optimized after the concrete load operation (ret => addr)
-     * This trick ensure that the addr value is preseved */
-    addr_loc = tcg_temp_new_i64();
-    tcg_gen_mov_i64(addr_loc, temp_tcgv_i64(addr));
+    TCGv_i64 load_size, mmu_idx;
 
     tcg_gen_req_mo(TCG_MO_LD_LD | TCG_MO_ST_LD);
     orig_memop = memop = tcg_canonicalize_memop(memop, 0, 0);
@@ -204,7 +204,7 @@ static void tcg_gen_qemu_ld_i32_int(TCGv_i32 val, TCGTemp *addr,
         oi = make_memop_idx(memop, idx);
     }
 
-    copy_addr = plugin_maybe_preserve_addr(addr);
+    copy_addr = preserve_addr(addr);
     if (tcg_ctx->addr_type == TCG_TYPE_I32) {
         opc = INDEX_op_qemu_ld_a32_i32;
     } else {
@@ -218,7 +218,7 @@ static void tcg_gen_qemu_ld_i32_int(TCGv_i32 val, TCGTemp *addr,
     load_size = tcg_constant_i64(1 << (memop & MO_SIZE));
     mmu_idx = tcg_constant_i64(idx);
     gen_helper_sym_load_guest_i32(tcgv_i32_expr(val), tcg_env,
-                                  addr_loc, tcgv_i64_expr(addr_loc),
+                                  copy_addr, tcgv_i64_expr(copy_addr),
                                   load_size, mmu_idx);
 
     if ((orig_memop ^ memop) & MO_BSWAP) {
@@ -344,7 +344,7 @@ static void tcg_gen_qemu_ld_i64_int(TCGv_i64 val, TCGTemp *addr,
         oi = make_memop_idx(memop, idx);
     }
 
-    copy_addr = plugin_maybe_preserve_addr(addr);
+    copy_addr = preserve_addr(addr);
     if (tcg_ctx->addr_type == TCG_TYPE_I32) {
         opc = INDEX_op_qemu_ld_a32_i64;
     } else {
@@ -358,7 +358,7 @@ static void tcg_gen_qemu_ld_i64_int(TCGv_i64 val, TCGTemp *addr,
     mmu_idx = tcg_constant_i64(idx);
     load_size = tcg_constant_i64(1 << (memop & MO_SIZE));
     gen_helper_sym_load_guest_i64(tcgv_i64_expr(val), tcg_env,
-                                  temp_tcgv_i64(addr), tcgv_i64_expr(temp_tcgv_i64(addr)),
+                                  copy_addr, tcgv_i64_expr(copy_addr),
                                   load_size, mmu_idx);
 
     if ((orig_memop ^ memop) & MO_BSWAP) {

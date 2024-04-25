@@ -948,7 +948,7 @@ static void nios2_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     Nios2CPU *cpu = env_archcpu(env);
     int page_insns;
 
-    dc->mem_idx = cpu_mmu_index(env, false);
+    dc->mem_idx = cpu_mmu_index(cs, false);
     dc->cr_state = cpu->cr_state;
     dc->tb_flags = dc->base.tb->flags;
     dc->eic_present = cpu->eic_present;
@@ -970,7 +970,6 @@ static void nios2_tr_insn_start(DisasContextBase *dcbase, CPUState *cs)
 static void nios2_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
 {
     DisasContext *dc = container_of(dcbase, DisasContext, base);
-    CPUNios2State *env = cpu_env(cs);
     const Nios2Instruction *instr;
     uint32_t code, pc;
     uint8_t op;
@@ -980,7 +979,7 @@ static void nios2_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     dc->base.pc_next = pc + 4;
 
     /* Decode an instruction */
-    code = cpu_ldl_code(env, pc);
+    code = cpu_ldl_code(cpu_env(cs), pc);
     op = get_opcode(code);
 
     if (unlikely(op >= ARRAY_SIZE(i_type_instructions))) {
@@ -1036,7 +1035,7 @@ static const TranslatorOps nios2_tr_ops = {
 };
 
 void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int *max_insns,
-                           target_ulong pc, void *host_pc)
+                           vaddr pc, void *host_pc)
 {
     DisasContext dc;
     translator_loop(cs, tb, max_insns, pc, host_pc, &nios2_tr_ops, &dc.base);

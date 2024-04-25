@@ -1984,7 +1984,13 @@ static int vhost_dev_set_vring_enable(struct vhost_dev *hdev, int enable)
     return hdev->vhost_ops->vhost_set_vring_enable(hdev, enable);
 }
 
-/* Host notifiers must be enabled at this point. */
+/*
+ * Host notifiers must be enabled at this point.
+ *
+ * If @vrings is true, this function will enable all vrings before starting the
+ * device. If it is false, the vring initialization is left to be done by the
+ * caller.
+ */
 int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev, bool vrings)
 {
     int i, r;
@@ -2199,6 +2205,7 @@ int vhost_check_device_state(struct vhost_dev *dev, Error **errp)
 
 int vhost_save_backend_state(struct vhost_dev *dev, QEMUFile *f, Error **errp)
 {
+    ERRP_GUARD();
     /* Maximum chunk size in which to transfer the state */
     const size_t chunk_size = 1 * 1024 * 1024;
     g_autofree void *transfer_buf = NULL;
@@ -2291,6 +2298,7 @@ fail:
 
 int vhost_load_backend_state(struct vhost_dev *dev, QEMUFile *f, Error **errp)
 {
+    ERRP_GUARD();
     size_t transfer_buf_size = 0;
     g_autofree void *transfer_buf = NULL;
     g_autoptr(GError) g_err = NULL;

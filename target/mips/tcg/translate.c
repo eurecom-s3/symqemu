@@ -4585,8 +4585,8 @@ static void gen_compute_branch(DisasContext *ctx, uint32_t opc,
 
     if (ctx->hflags & MIPS_HFLAG_BMASK) {
 #ifdef MIPS_DEBUG_DISAS
-        LOG_DISAS("Branch in delay / forbidden slot at PC 0x"
-                  TARGET_FMT_lx "\n", ctx->base.pc_next);
+        LOG_DISAS("Branch in delay / forbidden slot at PC 0x%016"
+                  VADDR_PRIx "\n", ctx->base.pc_next);
 #endif
         gen_reserved_instruction(ctx);
         goto out;
@@ -5151,17 +5151,6 @@ static void gen_mfhc0(DisasContext *ctx, TCGv arg, int reg, int sel)
             goto cp0_unimplemented;
         }
         break;
-    case CP0_REGISTER_09:
-        switch (sel) {
-        case CP0_REG09__SAAR:
-            CP0_CHECK(ctx->saar);
-            gen_helper_mfhc0_saar(arg, tcg_env);
-            register_name = "SAAR";
-            break;
-        default:
-            goto cp0_unimplemented;
-        }
-        break;
     case CP0_REGISTER_17:
         switch (sel) {
         case CP0_REG17__LLADDR:
@@ -5247,17 +5236,6 @@ static void gen_mthc0(DisasContext *ctx, TCGv arg, int reg, int sel)
             tcg_gen_andi_tl(arg, arg, mask);
             gen_mthc0_entrylo(arg, offsetof(CPUMIPSState, CP0_EntryLo1));
             register_name = "EntryLo1";
-            break;
-        default:
-            goto cp0_unimplemented;
-        }
-        break;
-    case CP0_REGISTER_09:
-        switch (sel) {
-        case CP0_REG09__SAAR:
-            CP0_CHECK(ctx->saar);
-            gen_helper_mthc0_saar(tcg_env, arg);
-            register_name = "SAAR";
             break;
         default:
             goto cp0_unimplemented;
@@ -5674,16 +5652,6 @@ static void gen_mfc0(DisasContext *ctx, TCGv arg, int reg, int sel)
             gen_save_pc(ctx->base.pc_next + 4);
             ctx->base.is_jmp = DISAS_EXIT;
             register_name = "Count";
-            break;
-        case CP0_REG09__SAARI:
-            CP0_CHECK(ctx->saar);
-            gen_mfc0_load32(arg, offsetof(CPUMIPSState, CP0_SAARI));
-            register_name = "SAARI";
-            break;
-        case CP0_REG09__SAAR:
-            CP0_CHECK(ctx->saar);
-            gen_helper_mfc0_saar(arg, tcg_env);
-            register_name = "SAAR";
             break;
         default:
             goto cp0_unimplemented;
@@ -6400,16 +6368,6 @@ static void gen_mtc0(DisasContext *ctx, TCGv arg, int reg, int sel)
         case CP0_REG09__COUNT:
             gen_helper_mtc0_count(tcg_env, arg);
             register_name = "Count";
-            break;
-        case CP0_REG09__SAARI:
-            CP0_CHECK(ctx->saar);
-            gen_helper_mtc0_saari(tcg_env, arg);
-            register_name = "SAARI";
-            break;
-        case CP0_REG09__SAAR:
-            CP0_CHECK(ctx->saar);
-            gen_helper_mtc0_saar(tcg_env, arg);
-            register_name = "SAAR";
             break;
         default:
             goto cp0_unimplemented;
@@ -7175,16 +7133,6 @@ static void gen_dmfc0(DisasContext *ctx, TCGv arg, int reg, int sel)
             ctx->base.is_jmp = DISAS_EXIT;
             register_name = "Count";
             break;
-        case CP0_REG09__SAARI:
-            CP0_CHECK(ctx->saar);
-            gen_mfc0_load32(arg, offsetof(CPUMIPSState, CP0_SAARI));
-            register_name = "SAARI";
-            break;
-        case CP0_REG09__SAAR:
-            CP0_CHECK(ctx->saar);
-            gen_helper_dmfc0_saar(arg, tcg_env);
-            register_name = "SAAR";
-            break;
         default:
             goto cp0_unimplemented;
         }
@@ -7886,16 +7834,6 @@ static void gen_dmtc0(DisasContext *ctx, TCGv arg, int reg, int sel)
         case CP0_REG09__COUNT:
             gen_helper_mtc0_count(tcg_env, arg);
             register_name = "Count";
-            break;
-        case CP0_REG09__SAARI:
-            CP0_CHECK(ctx->saar);
-            gen_helper_mtc0_saari(tcg_env, arg);
-            register_name = "SAARI";
-            break;
-        case CP0_REG09__SAAR:
-            CP0_CHECK(ctx->saar);
-            gen_helper_mtc0_saar(tcg_env, arg);
-            register_name = "SAAR";
             break;
         default:
             goto cp0_unimplemented;
@@ -9061,8 +8999,8 @@ static void gen_compute_branch1_r6(DisasContext *ctx, uint32_t op,
 
     if (ctx->hflags & MIPS_HFLAG_BMASK) {
 #ifdef MIPS_DEBUG_DISAS
-        LOG_DISAS("Branch in delay / forbidden slot at PC 0x" TARGET_FMT_lx
-                  "\n", ctx->base.pc_next);
+        LOG_DISAS("Branch in delay / forbidden slot at PC 0x%016"
+                  VADDR_PRIx "\n", ctx->base.pc_next);
 #endif
         gen_reserved_instruction(ctx);
         return;
@@ -11274,8 +11212,8 @@ static void gen_compute_compact_branch(DisasContext *ctx, uint32_t opc,
 
     if (ctx->hflags & MIPS_HFLAG_BMASK) {
 #ifdef MIPS_DEBUG_DISAS
-        LOG_DISAS("Branch in delay / forbidden slot at PC 0x" TARGET_FMT_lx
-                  "\n", ctx->base.pc_next);
+        LOG_DISAS("Branch in delay / forbidden slot at PC 0x%016"
+                  VADDR_PRIx "\n", ctx->base.pc_next);
 #endif
         gen_reserved_instruction(ctx);
         return;
@@ -15554,7 +15492,7 @@ static const TranslatorOps mips_tr_ops = {
 };
 
 void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int *max_insns,
-                           target_ulong pc, void *host_pc)
+                           vaddr pc, void *host_pc)
 {
     DisasContext ctx;
 
@@ -15628,8 +15566,7 @@ void mips_restore_state_to_opc(CPUState *cs,
                                const TranslationBlock *tb,
                                const uint64_t *data)
 {
-    MIPSCPU *cpu = MIPS_CPU(cs);
-    CPUMIPSState *env = &cpu->env;
+    CPUMIPSState *env = cpu_env(cs);
 
     env->active_tc.PC = data[0];
     env->hflags &= ~MIPS_HFLAG_BMASK;

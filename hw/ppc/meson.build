@@ -31,12 +31,14 @@ ppc_ss.add(when: 'CONFIG_PSERIES', if_true: files(
   'pef.c',
 ))
 ppc_ss.add(when: ['CONFIG_PSERIES', 'CONFIG_TCG'], if_true: files(
-  'spapr_softmmu.c',
+  'spapr_vhyp_mmu.c',
 ))
 ppc_ss.add(when: 'CONFIG_SPAPR_RNG', if_true: files('spapr_rng.c'))
-ppc_ss.add(when: ['CONFIG_PSERIES', 'CONFIG_LINUX'], if_true: files(
-  'spapr_pci_vfio.c',
-))
+if host_os == 'linux'
+  ppc_ss.add(when: 'CONFIG_PSERIES', if_true: files(
+    'spapr_pci_vfio.c',
+  ))
+endif
 
 # IBM PowerNV
 ppc_ss.add(when: 'CONFIG_POWERNV', if_true: files(
@@ -46,11 +48,14 @@ ppc_ss.add(when: 'CONFIG_POWERNV', if_true: files(
   'pnv_i2c.c',
   'pnv_lpc.c',
   'pnv_psi.c',
+  'pnv_chiptod.c',
   'pnv_occ.c',
   'pnv_sbe.c',
   'pnv_bmc.c',
   'pnv_homer.c',
   'pnv_pnor.c',
+  'pnv_nest_pervasive.c',
+  'pnv_n1_chiplet.c',
 ))
 # PowerPC 4xx boards
 ppc_ss.add(when: 'CONFIG_PPC405', if_true: files(
@@ -58,10 +63,9 @@ ppc_ss.add(when: 'CONFIG_PPC405', if_true: files(
   'ppc405_uc.c'))
 ppc_ss.add(when: 'CONFIG_PPC440', if_true: files(
   'ppc440_bamboo.c',
-  'ppc440_pcix.c', 'ppc440_uc.c'))
+  'ppc440_uc.c'))
 ppc_ss.add(when: 'CONFIG_PPC4XX', if_true: files(
   'ppc4xx_devs.c',
-  'ppc4xx_pci.c',
   'ppc4xx_sdram.c'))
 ppc_ss.add(when: 'CONFIG_SAM460EX', if_true: files('sam460ex.c'))
 # PReP
