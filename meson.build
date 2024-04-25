@@ -1083,7 +1083,7 @@ endif
 
 symcc_rt_backend = get_option('symcc_rt_backend')
 
-if not fs.is_file('subprojects/symcc-rt/RuntimeCommon.h')
+if not fs.is_file('subprojects/symcc-rt/include/RuntimeCommon.h')
   error('''Symcc Runtime does not seem to be present.
 Did you initialize the symcc-rt submodule? (git submodule update --init --recursive subprojects/symcc-rt)''')
 endif
@@ -1099,9 +1099,9 @@ symcc_rt_vars.add_cmake_defines({
 
 symcc_rt_proj = cmake.subproject('symcc-rt', options: symcc_rt_vars)
 if get_option('symcc_rt_shared')
-  symcc_rt = symcc_rt_proj.dependency('SymccRtShared')
+  symcc_rt = symcc_rt_proj.dependency('SymCCRtShared')
 else
-  symcc_rt = symcc_rt_proj.dependency('SymccRtStatic')
+  symcc_rt = symcc_rt_proj.dependency('SymCCRtStatic')
 endif
 
 mpathlibs = [libudev]

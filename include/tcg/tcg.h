@@ -412,7 +412,7 @@ typedef struct TCGTemp {
     unsigned int mem_coherent:1;
     unsigned int mem_allocated:1;
     unsigned int temp_allocated:1;
-    unsigned int temp_subindex:1;
+    unsigned int temp_subindex:2;
 
     /* Maximum len of subindex. Must be the same size as temp_subindex */
     unsigned int temp_subindex_len:1;

@@ -1480,12 +1480,13 @@ static bool check_iopl(DisasContext *s)
 /* if d == OR_TMP0, it means memory operand (address in A0) */
 static void gen_op(DisasContext *s1, int op, MemOp ot, int d)
 {
+    /* Invalid lock prefix when destination is not memory or OP_CMPL. */
+    if ((d != OR_TMP0 || op == OP_CMPL) && s1->prefix & PREFIX_LOCK) {
+        gen_illegal_opcode(s1);
+        return;
+    }
+
     if (d != OR_TMP0) {
-        if (s1->prefix & PREFIX_LOCK) {
-            /* Lock prefix when destination is not memory.  */
-            gen_illegal_opcode(s1);
-            return;
-        }
         gen_op_mov_v_reg(s1, ot, s1->T0, d);
     } else if (!(s1->prefix & PREFIX_LOCK)) {
         gen_op_ld_v(s1, ot, s1->T0, s1->A0);
@@ -3603,7 +3604,15 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
             if (dflag == MO_16) {
                 tcg_gen_ext16u_tl(s->T0, s->T0);
             }
+#if TARGET_LONG_BITS == 32
+            TCGv_i64 call_addr = tcg_temp_new_i64();
+            tcg_gen_extu_i32_i64(call_addr, eip_next_tl(s));
+            gen_helper_sym_notify_call(call_addr);
+#elif TARGET_LONG_BITS == 64
             gen_helper_sym_notify_call(eip_next_tl(s));
+#else
+#error Unhandled TARGET_LONG_BITS value
+#endif
             gen_push_v(s, eip_next_tl(s));
             gen_op_jmp_v(s, s->T0);
             gen_bnd_jmp(s);
@@ -5063,7 +5072,15 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
         val = x86_ldsw_code(env, s);
         ot = gen_pop_T0(s);
         gen_stack_update(s, val + (1 << ot));
+#if TARGET_LONG_BITS == 32
+        TCGv_i64 ret_addr = tcg_temp_new_i64();
+        tcg_gen_extu_i32_i64(ret_addr, s->T0);
+        gen_helper_sym_notify_return(ret_addr);
+#elif TARGET_LONG_BITS == 64
         gen_helper_sym_notify_return(s->T0);
+#else
+#error Unhandled TARGET_LONG_BITS value
+#endif
         /* Note that gen_pop_T0 uses a zero-extending load.  */
         gen_op_jmp_v(s, s->T0);
         gen_bnd_jmp(s);
@@ -5072,7 +5089,15 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
     case 0xc3: /* ret */
         ot = gen_pop_T0(s);
         gen_pop_update(s, ot);
+#if TARGET_LONG_BITS == 32
+        TCGv_i64 ret_addr2 = tcg_temp_new_i64();
+        tcg_gen_extu_i32_i64(ret_addr2, s->T0);
+        gen_helper_sym_notify_return(ret_addr2);
+#elif TARGET_LONG_BITS == 64
         gen_helper_sym_notify_return(s->T0);
+#else
+#error Unhandled TARGET_LONG_BITS value
+#endif
         /* Note that gen_pop_T0 uses a zero-extending load.  */
         gen_op_jmp_v(s, s->T0);
         gen_bnd_jmp(s);
@@ -5125,7 +5150,15 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
             int diff = (dflag != MO_16
                         ? (int32_t)insn_get(env, s, MO_32)
                         : (int16_t)insn_get(env, s, MO_16));
+#if TARGET_LONG_BITS == 32
+            TCGv_i64 call_addr = tcg_temp_new_i64();
+            tcg_gen_extu_i32_i64(call_addr, eip_next_tl(s));
+            gen_helper_sym_notify_call(call_addr);
+#elif TARGET_LONG_BITS == 64
             gen_helper_sym_notify_call(eip_next_tl(s));
+#else
+#error Unhandled TARGET_LONG_BITS value
+#endif
             gen_push_v(s, eip_next_tl(s));
             gen_bnd_jmp(s);
             gen_jmp_rel(s, dflag, diff, 0);
