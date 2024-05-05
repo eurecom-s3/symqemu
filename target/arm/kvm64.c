@@ -32,22 +32,6 @@
 #include "hw/acpi/acpi.h"
 #include "hw/acpi/ghes.h"
 
-static bool have_guest_debug;
-
-void kvm_arm_init_debug(KVMState *s)
-{
-    have_guest_debug = kvm_check_extension(s,
-                                           KVM_CAP_SET_GUEST_DEBUG);
-
-    max_hw_wps = kvm_check_extension(s, KVM_CAP_GUEST_DEBUG_HW_WPS);
-    hw_watchpoints = g_array_sized_new(true, true,
-                                       sizeof(HWWatchpoint), max_hw_wps);
-
-    max_hw_bps = kvm_check_extension(s, KVM_CAP_GUEST_DEBUG_HW_BPS);
-    hw_breakpoints = g_array_sized_new(true, true,
-                                       sizeof(HWBreakpoint), max_hw_bps);
-    return;
-}
 
 int kvm_arch_insert_hw_breakpoint(vaddr addr, vaddr len, int type)
 {
@@ -1141,33 +1125,23 @@ static const uint32_t brk_insn = 0xd4200000;
 
 int kvm_arch_insert_sw_breakpoint(CPUState *cs, struct kvm_sw_breakpoint *bp)
 {
-    if (have_guest_debug) {
-        if (cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&bp->saved_insn, 4, 0) ||
-            cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&brk_insn, 4, 1)) {
-            return -EINVAL;
-        }
-        return 0;
-    } else {
-        error_report("guest debug not supported on this kernel");
+    if (cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&bp->saved_insn, 4, 0) ||
+        cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&brk_insn, 4, 1)) {
         return -EINVAL;
     }
+    return 0;
 }
 
 int kvm_arch_remove_sw_breakpoint(CPUState *cs, struct kvm_sw_breakpoint *bp)
 {
     static uint32_t brk;
 
-    if (have_guest_debug) {
-        if (cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&brk, 4, 0) ||
-            brk != brk_insn ||
-            cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&bp->saved_insn, 4, 1)) {
-            return -EINVAL;
-        }
-        return 0;
-    } else {
-        error_report("guest debug not supported on this kernel");
+    if (cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&brk, 4, 0) ||
+        brk != brk_insn ||
+        cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&bp->saved_insn, 4, 1)) {
         return -EINVAL;
     }
+    return 0;
 }
 
 /* See v8 ARM ARM D7.2.27 ESR_ELx, Exception Syndrome Register
@@ -1237,54 +1211,5 @@ bool kvm_arm_handle_debug(CPUState *cs, struct kvm_debug_exit_arch *debug_exit)
     arm_cpu_do_interrupt(cs);
     qemu_mutex_unlock_iothread();
 
-    return false;
-}
-
-#define ARM64_REG_ESR_EL1 ARM64_SYS_REG(3, 0, 5, 2, 0)
-#define ARM64_REG_TCR_EL1 ARM64_SYS_REG(3, 0, 2, 0, 2)
-
-/*
- * ESR_EL1
- * ISS encoding
- * AARCH64: DFSC,   bits [5:0]
- * AARCH32:
- *      TTBCR.EAE == 0
- *          FS[4]   - DFSR[10]
- *          FS[3:0] - DFSR[3:0]
- *      TTBCR.EAE == 1
- *          FS, bits [5:0]
- */
-#define ESR_DFSC(aarch64, lpae, v)        \
-    ((aarch64 || (lpae)) ? ((v) & 0x3F)   \
-               : (((v) >> 6) | ((v) & 0x1F)))
-
-#define ESR_DFSC_EXTABT(aarch64, lpae) \
-    ((aarch64) ? 0x10 : (lpae) ? 0x10 : 0x8)
-
-bool kvm_arm_verify_ext_dabt_pending(CPUState *cs)
-{
-    uint64_t dfsr_val;
-
-    if (!kvm_get_one_reg(cs, ARM64_REG_ESR_EL1, &dfsr_val)) {
-        ARMCPU *cpu = ARM_CPU(cs);
-        CPUARMState *env = &cpu->env;
-        int aarch64_mode = arm_feature(env, ARM_FEATURE_AARCH64);
-        int lpae = 0;
-
-        if (!aarch64_mode) {
-            uint64_t ttbcr;
-
-            if (!kvm_get_one_reg(cs, ARM64_REG_TCR_EL1, &ttbcr)) {
-                lpae = arm_feature(env, ARM_FEATURE_LPAE)
-                        && (ttbcr & TTBCR_EAE);
-            }
-        }
-        /*
-         * The verification here is based on the DFSC bits
-         * of the ESR_EL1 reg only
-         */
-         return (ESR_DFSC(aarch64_mode, lpae, dfsr_val) ==
-                ESR_DFSC_EXTABT(aarch64_mode, lpae));
-    }
     return false;
 }

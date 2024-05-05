@@ -19,14 +19,6 @@
 #define KVM_ARM_VGIC_V3   (1 << 1)
 
 /**
- * kvm_arm_init_debug() - initialize guest debug capabilities
- * @s: KVMState
- *
- * Should be called only once before using guest debug capabilities.
- */
-void kvm_arm_init_debug(KVMState *s);
-
-/**
  * kvm_arm_vcpu_init:
  * @cs: CPUState
  *
@@ -479,15 +471,5 @@ bool kvm_arm_hw_debug_active(CPUState *cs);
  */
 struct kvm_guest_debug_arch;
 void kvm_arm_copy_hw_debug_data(struct kvm_guest_debug_arch *ptr);
-
-/**
- * kvm_arm_verify_ext_dabt_pending:
- * @cs: CPUState
- *
- * Verify the fault status code wrt the Ext DABT injection
- *
- * Returns: true if the fault status code is as expected, false otherwise
- */
-bool kvm_arm_verify_ext_dabt_pending(CPUState *cs);
 
 #endif
