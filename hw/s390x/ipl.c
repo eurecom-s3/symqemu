@@ -35,7 +35,6 @@
 #include "qemu/cutils.h"
 #include "qemu/option.h"
 #include "standard-headers/linux/virtio_ids.h"
-#include "exec/exec-all.h"
 
 #define KERN_IMAGE_START                0x010000UL
 #define LINUX_MAGIC_ADDR                0x010008UL
@@ -60,7 +59,7 @@ static const VMStateDescription vmstate_iplb_extended = {
     .version_id = 0,
     .minimum_version_id = 0,
     .needed = iplb_extended_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(reserved_ext, IplParameterBlock, 4096 - 200),
         VMSTATE_END_OF_LIST()
     }
@@ -70,13 +69,13 @@ static const VMStateDescription vmstate_iplb = {
     .name = "ipl/iplb",
     .version_id = 0,
     .minimum_version_id = 0,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(reserved1, IplParameterBlock, 110),
         VMSTATE_UINT16(devno, IplParameterBlock),
         VMSTATE_UINT8_ARRAY(reserved2, IplParameterBlock, 88),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription*[]) {
+    .subsections = (const VMStateDescription * const []) {
         &vmstate_iplb_extended,
         NULL
     }
@@ -86,7 +85,7 @@ static const VMStateDescription vmstate_ipl = {
     .name = "ipl",
     .version_id = 0,
     .minimum_version_id = 0,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(compat_start_addr, S390IPLState),
         VMSTATE_UINT64(compat_bios_start_addr, S390IPLState),
         VMSTATE_STRUCT(iplb, S390IPLState, 0, vmstate_iplb, IplParameterBlock),

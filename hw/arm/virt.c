@@ -1998,13 +1998,14 @@ static void virt_cpu_post_init(VirtMachineState *vms, MemoryRegion *sysmem)
             if (pmu) {
                 assert(arm_feature(&ARM_CPU(cpu)->env, ARM_FEATURE_PMU));
                 if (kvm_irqchip_in_kernel()) {
-                    kvm_arm_pmu_set_irq(cpu, VIRTUAL_PMU_IRQ);
+                    kvm_arm_pmu_set_irq(ARM_CPU(cpu), VIRTUAL_PMU_IRQ);
                 }
-                kvm_arm_pmu_init(cpu);
+                kvm_arm_pmu_init(ARM_CPU(cpu));
             }
             if (steal_time) {
-                kvm_arm_pvtime_init(cpu, pvtime_reg_base +
-                                         cpu->cpu_index * PVTIME_SIZE_PER_CPU);
+                kvm_arm_pvtime_init(ARM_CPU(cpu), pvtime_reg_base
+                                                  + cpu->cpu_index
+                                                    * PVTIME_SIZE_PER_CPU);
             }
         }
     } else {
@@ -3180,10 +3181,17 @@ static void machvirt_machine_init(void)
 }
 type_init(machvirt_machine_init);
 
-static void virt_machine_8_2_options(MachineClass *mc)
+static void virt_machine_9_0_options(MachineClass *mc)
 {
 }
-DEFINE_VIRT_MACHINE_AS_LATEST(8, 2)
+DEFINE_VIRT_MACHINE_AS_LATEST(9, 0)
+
+static void virt_machine_8_2_options(MachineClass *mc)
+{
+    virt_machine_9_0_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_8_2, hw_compat_8_2_len);
+}
+DEFINE_VIRT_MACHINE(8, 2)
 
 static void virt_machine_8_1_options(MachineClass *mc)
 {

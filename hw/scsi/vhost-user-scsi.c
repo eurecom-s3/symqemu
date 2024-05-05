@@ -83,7 +83,8 @@ static void vhost_user_scsi_set_status(VirtIODevice *vdev, uint8_t status)
     if (should_start) {
         ret = vhost_user_scsi_start(s, &local_err);
         if (ret < 0) {
-            error_reportf_err(local_err, "unable to start vhost-user-scsi: %s",
+            error_reportf_err(local_err,
+                              "unable to start vhost-user-scsi: %s: ",
                               strerror(-ret));
             qemu_chr_fe_disconnect(&vs->conf.chardev);
         }
@@ -378,7 +379,7 @@ static const VMStateDescription vmstate_vhost_scsi = {
     .name = "virtio-scsi",
     .minimum_version_id = 1,
     .version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_VIRTIO_DEVICE,
         VMSTATE_END_OF_LIST()
     },

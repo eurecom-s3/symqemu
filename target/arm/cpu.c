@@ -1690,7 +1690,7 @@ void arm_cpu_post_init(Object *obj)
     }
 
     if (kvm_enabled()) {
-        kvm_arm_add_vcpu_properties(obj);
+        kvm_arm_add_vcpu_properties(cpu);
     }
 
 #ifndef CONFIG_USER_ONLY
