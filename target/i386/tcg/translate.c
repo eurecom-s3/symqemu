@@ -2514,7 +2514,7 @@ static void gen_cmovcc1(DisasContext *s, int b, TCGv dest, TCGv src)
         cc.reg2 = tcg_constant_tl(cc.imm);
     }
 
-    tcg_gen_movcond_tl(cc.cond, dest, cc.reg, cc.reg2, src, dest);
+    tcg_gen_movcond_tl(cc.cond, dest, cc.reg, cc.reg2, dest, src);
 }
 
 static inline void gen_op_movl_T0_seg(DisasContext *s, X86Seg seg_reg)
@@ -5258,7 +5258,7 @@ static bool disas_insn(DisasContext *s, CPUState *cpu)
         modrm = x86_ldub_code(env, s);
         reg = ((modrm >> 3) & 7) | REX_R(s);
         gen_ldst_modrm(env, s, modrm, ot, OR_TMP0, 0);
-        gen_cmovcc1(s, b ^ 1, s->T0, cpu_regs[reg]);
+        gen_cmovcc1(s, b, s->T0, cpu_regs[reg]);
         gen_op_mov_reg_v(s, ot, reg, s->T0);
         break;
 
