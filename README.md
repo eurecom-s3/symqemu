@@ -105,35 +105,36 @@ Sometimes, it is more convenient to use docker-compose while developing SymQEMU,
 especially to avoid rebuilding for each change. It can both build `symqemu` and
 `symqemu-dev`.
 
-Beware however, the container and the host directory will be synchronized: each
-change in the container's source folder will be reflected on the host and vice
-versa (except for the build subfolder).
+Beware however, test the container and the host directory will be synchronized:
+each change in the container's source folder will be reflected on the host and
+vice versa (except for the build sub-folder).
 
-A script is available to quickly get docker-compose: `./dev.sh`.
+A script is available to quickly get docker-compose: `./dev.sh`. Alternatively
+the following commands can be used:
 
-For example, to build the `symqemu-dev` service:
+- Build the `symqemu-dev` service:
 ```bash
 docker-compose build symqemu-dev
 ```
 
-Then, it is necessary to up the service:
+- Start the service:
 ```bash
 docker-compose up -d symqemu-dev
 ```
 
-It is finally possible to attach to the container:
+- Attach to the container:
 ```bash
 docker-compose exec -it symqemu-dev /bin/bash
 ```
 
-Building and testing in one line (confugure only needed the first time, it is
+- Building and testing in one line (configure only needed the first time, it is
 automatically rerun when needed):
 
 ```bash
 docker-compose exec -it  symqemu-dev /bin/bash -c "cd build && /configure_symqemu.sh && make -j && make check"
 ```
 
-Running symqemu integration tests:
+- Running SymQEMU integration tests:
 ```bash
 docker-compose exec -it  symqemu-dev /bin/bash -c "cd /symqemu_source/tests/symqemu && python3 -m unittest test.py"
 ```
