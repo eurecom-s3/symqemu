@@ -99,6 +99,31 @@ You can use the docker with:
 docker run -it --rm symqemu
 ```
 
+## Build with Docker Compose
+
+Sometimes, it is more convenient to use docker-compose while developing SymQEMU, especially to avoid rebuilding for
+each change. It can both build `symqemu` and `symqemu-dev`.
+
+Beware however, the container and the host directory will be synchronized: each change in the container's source folder
+will be reflected on the host and vice versa (except for the build subfolder).
+
+A script is available to quickly get docker-compose: `./dev.sh`.
+
+For example, to build the `symqemu-dev` service:
+```bash
+docker-compose build symqemu-dev
+```
+
+Then, it is necessary to up the service:
+```bash
+docker-compose up -d symqemu-dev
+```
+
+It is finally possible to attach to the container:
+```bash
+docker-compose exec -it symqemu-dev /bin/bash
+````
+
 ## Contributing
 
 Use the GitHub project for reporting issues, and proposing changes.
