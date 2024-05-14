@@ -21,6 +21,7 @@
 #ifndef HW_ARM_SMMUV3_INTERNAL_H
 #define HW_ARM_SMMUV3_INTERNAL_H
 
+#include "hw/registerfields.h"
 #include "hw/arm/smmu-common.h"
 
 typedef enum SMMUTranslationStatus {
@@ -623,6 +624,7 @@ static inline int pa_range(STE *ste)
 #define CD_EPD(x, sel)   extract32((x)->word[0], (16 * (sel)) + 14, 1)
 #define CD_ENDI(x)       extract32((x)->word[0], 15, 1)
 #define CD_IPS(x)        extract32((x)->word[1], 0 , 3)
+#define CD_AFFD(x)       extract32((x)->word[1], 3 , 1)
 #define CD_TBI(x)        extract32((x)->word[1], 6 , 2)
 #define CD_HD(x)         extract32((x)->word[1], 10 , 1)
 #define CD_HA(x)         extract32((x)->word[1], 11 , 1)

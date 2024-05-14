@@ -900,13 +900,7 @@ static inline void store_reg_from_load(DisasContext *s, int reg, TCGv_i32 var)
 MemOp pow2_align(unsigned i)
 {
     static const MemOp mop_align[] = {
-        0, MO_ALIGN_2, MO_ALIGN_4, MO_ALIGN_8, MO_ALIGN_16,
-        /*
-         * FIXME: TARGET_PAGE_BITS_MIN affects TLB_FLAGS_MASK such
-         * that 256-bit alignment (MO_ALIGN_32) cannot be supported:
-         * see get_alignment_bits(). Enforce only 128-bit alignment for now.
-         */
-        MO_ALIGN_16
+        0, MO_ALIGN_2, MO_ALIGN_4, MO_ALIGN_8, MO_ALIGN_16, MO_ALIGN_32
     };
     g_assert(i < ARRAY_SIZE(mop_align));
     return mop_align[i];
@@ -2822,13 +2816,20 @@ static bool msr_banked_access_decode(DisasContext *s, int r, int sysm, int rn,
         break;
     case ARM_CPU_MODE_HYP:
         /*
-         * SPSR_hyp and r13_hyp can only be accessed from Monitor mode
-         * (and so we can forbid accesses from EL2 or below). elr_hyp
-         * can be accessed also from Hyp mode, so forbid accesses from
-         * EL0 or EL1.
+         * r13_hyp can only be accessed from Monitor mode, and so we
+         * can forbid accesses from EL2 or below.
+         * elr_hyp can be accessed also from Hyp mode, so forbid
+         * accesses from EL0 or EL1.
+         * SPSR_hyp is supposed to be in the same category as r13_hyp
+         * and UNPREDICTABLE if accessed from anything except Monitor
+         * mode. However there is some real-world code that will do
+         * it because at least some hardware happens to permit the
+         * access. (Notably a standard Cortex-R52 startup code fragment
+         * does this.) So we permit SPSR_hyp from Hyp mode also, to allow
+         * this (incorrect) guest code to run.
          */
-        if (!arm_dc_feature(s, ARM_FEATURE_EL2) || s->current_el < 2 ||
-            (s->current_el < 3 && *regno != 17)) {
+        if (!arm_dc_feature(s, ARM_FEATURE_EL2) || s->current_el < 2
+            || (s->current_el < 3 && *regno != 16 && *regno != 17)) {
             goto undef;
         }
         break;
@@ -4584,7 +4585,7 @@ static void do_coproc_insn(DisasContext *s, int cpnum, int is64,
             tcg_gen_andi_i32(t, t, 1u << maskbit);
             tcg_gen_brcondi_i32(TCG_COND_EQ, t, 0, over.label);
 
-            gen_exception_insn(s, 0, EXCP_UDEF, syndrome);
+            gen_exception_insn_el(s, 0, EXCP_UDEF, syndrome, 2);
             /*
              * gen_exception_insn() will set is_jmp to DISAS_NORETURN,
              * but since we're conditionally branching over it, we want
@@ -9272,7 +9273,7 @@ static void arm_tr_insn_start(DisasContextBase *dcbase, CPUState *cpu)
         condexec_bits = (dc->condexec_cond << 4) | (dc->condexec_mask >> 1);
     }
     tcg_gen_insn_start(pc_arg, condexec_bits, 0);
-    dc->insn_start = tcg_last_op();
+    dc->insn_start_updated = false;
 }
 
 static bool arm_check_kernelpage(DisasContext *dc)
@@ -9691,7 +9692,7 @@ static const TranslatorOps thumb_translator_ops = {
 
 /* generate intermediate code for basic block 'tb'.  */
 void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb, int *max_insns,
-                           target_ulong pc, void *host_pc)
+                           vaddr pc, void *host_pc)
 {
     DisasContext dc = { };
     const TranslatorOps *ops = &arm_translator_ops;

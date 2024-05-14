@@ -13,7 +13,6 @@
 
 #include "qemu/osdep.h"
 #include <bpf/bpf.h>
-#include <inttypes.h>
 #include <linux/if_link.h>
 #include <linux/if_xdp.h>
 #include <net/if.h>
@@ -447,7 +446,7 @@ int net_init_af_xdp(const Netdev *netdev,
     NetClientState *nc, *nc0 = NULL;
     unsigned int ifindex;
     uint32_t prog_id = 0;
-    int *sock_fds = NULL;
+    g_autofree int *sock_fds = NULL;
     int64_t i, queues;
     Error *err = NULL;
     AFXDPState *s;
@@ -517,7 +516,6 @@ int net_init_af_xdp(const Netdev *netdev,
     return 0;
 
 err:
-    g_free(sock_fds);
     if (nc0) {
         qemu_del_net_client(nc0);
     }

@@ -121,9 +121,9 @@ static void build_dvsecs(CXLComponentState *cxl)
         .rcvd_mod_ts_data_phase1 = 0xef, /* WTF? */
     };
     cxl_component_create_dvsec(cxl, CXL2_UPSTREAM_PORT,
-                               PCIE_FLEXBUS_PORT_DVSEC_LENGTH_2_0,
+                               PCIE_CXL3_FLEXBUS_PORT_DVSEC_LENGTH,
                                PCIE_FLEXBUS_PORT_DVSEC,
-                               PCIE_FLEXBUS_PORT_DVSEC_REVID_2_0, dvsec);
+                               PCIE_CXL3_FLEXBUS_PORT_DVSEC_REVID, dvsec);
 
     dvsec = (uint8_t *)&(CXLDVSECRegisterLocator){
         .rsvd         = 0,
@@ -192,8 +192,8 @@ enum {
 
 static int build_cdat_table(CDATSubHeader ***cdat_table, void *priv)
 {
-    g_autofree CDATSslbis *sslbis_latency = NULL;
-    g_autofree CDATSslbis *sslbis_bandwidth = NULL;
+    CDATSslbis *sslbis_latency;
+    CDATSslbis *sslbis_bandwidth;
     CXLUpstreamPort *us = CXL_USP(priv);
     PCIBus *bus = &PCI_BRIDGE(us)->sec_bus;
     int devfn, sslbis_size, i;
@@ -228,9 +228,6 @@ static int build_cdat_table(CDATSubHeader ***cdat_table, void *priv)
 
     sslbis_size = sizeof(CDATSslbis) + sizeof(*sslbis_latency->sslbe) * count;
     sslbis_latency = g_malloc(sslbis_size);
-    if (!sslbis_latency) {
-        return -ENOMEM;
-    }
     *sslbis_latency = (CDATSslbis) {
         .sslbis_header = {
             .header = {
@@ -251,9 +248,6 @@ static int build_cdat_table(CDATSubHeader ***cdat_table, void *priv)
     }
 
     sslbis_bandwidth = g_malloc(sslbis_size);
-    if (!sslbis_bandwidth) {
-        return 0;
-    }
     *sslbis_bandwidth = (CDATSslbis) {
         .sslbis_header = {
             .header = {
@@ -276,8 +270,8 @@ static int build_cdat_table(CDATSubHeader ***cdat_table, void *priv)
     *cdat_table = g_new0(CDATSubHeader *, CXL_USP_CDAT_NUM_ENTRIES);
 
     /* Header always at start of structure */
-    (*cdat_table)[CXL_USP_CDAT_SSLBIS_LAT] = g_steal_pointer(&sslbis_latency);
-    (*cdat_table)[CXL_USP_CDAT_SSLBIS_BW] = g_steal_pointer(&sslbis_bandwidth);
+    (*cdat_table)[CXL_USP_CDAT_SSLBIS_LAT] = (CDATSubHeader *)sslbis_latency;
+    (*cdat_table)[CXL_USP_CDAT_SSLBIS_BW] = (CDATSubHeader *)sslbis_bandwidth;
 
     return CXL_USP_CDAT_NUM_ENTRIES;
 }
@@ -295,6 +289,7 @@ static void free_default_cdat_table(CDATSubHeader **cdat_table, int num,
 
 static void cxl_usp_realize(PCIDevice *d, Error **errp)
 {
+    ERRP_GUARD();
     PCIEPort *p = PCIE_PORT(d);
     CXLUpstreamPort *usp = CXL_USP(d);
     CXLComponentState *cxl_cstate = &usp->cxl_cstate;

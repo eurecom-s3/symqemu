@@ -446,14 +446,16 @@ static inline void loongson3_virt_devices_init(MachineState *machine,
     pci_vga_init(pci_bus);
 
     if (defaults_enabled() && object_class_by_name("pci-ohci")) {
+        USBBus *usb_bus;
+
         pci_create_simple(pci_bus, -1, "pci-ohci");
-        usb_create_simple(usb_bus_find(-1), "usb-kbd");
-        usb_create_simple(usb_bus_find(-1), "usb-tablet");
+        usb_bus = USB_BUS(object_resolve_type_unambiguous(TYPE_USB_BUS,
+                                                          &error_abort));
+        usb_create_simple(usb_bus, "usb-kbd");
+        usb_create_simple(usb_bus, "usb-tablet");
     }
 
-    for (i = 0; i < nb_nics; i++) {
-        pci_nic_init_nofail(&nd_table[i], pci_bus, mc->default_nic, NULL);
-    }
+    pci_init_nic_devices(pci_bus, mc->default_nic);
 }
 
 static void mips_loongson3_virt_init(MachineState *machine)

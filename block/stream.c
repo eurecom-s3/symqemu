@@ -39,6 +39,7 @@ typedef struct StreamBlockJob {
     BlockDriverState *target_bs;
     BlockdevOnError on_error;
     char *backing_file_str;
+    bool backing_mask_protocol;
     bool bs_read_only;
 } StreamBlockJob;
 
@@ -95,13 +96,18 @@ static int stream_prepare(Job *job)
         if (unfiltered_base) {
             base_id = s->backing_file_str ?: unfiltered_base->filename;
             if (unfiltered_base->drv) {
-                base_fmt = unfiltered_base->drv->format_name;
+                if (s->backing_mask_protocol &&
+                    unfiltered_base->drv->protocol_name) {
+                    base_fmt = "raw";
+                } else {
+                    base_fmt = unfiltered_base->drv->format_name;
+                }
             }
         }
 
-        bdrv_graph_wrlock(s->target_bs);
+        bdrv_graph_wrlock();
         bdrv_set_backing_hd_drained(unfiltered_bs, base, &local_err);
-        bdrv_graph_wrunlock(s->target_bs);
+        bdrv_graph_wrunlock();
 
         /*
          * This call will do I/O, so the graph can change again from here on.
@@ -247,6 +253,7 @@ static const BlockJobDriver stream_job_driver = {
 
 void stream_start(const char *job_id, BlockDriverState *bs,
                   BlockDriverState *base, const char *backing_file_str,
+                  bool backing_mask_protocol,
                   BlockDriverState *bottom,
                   int creation_flags, int64_t speed,
                   BlockdevOnError on_error,
@@ -366,10 +373,10 @@ void stream_start(const char *job_id, BlockDriverState *bs,
      * already have our own plans. Also don't allow resize as the image size is
      * queried only at the job start and then cached.
      */
-    bdrv_graph_wrlock(bs);
+    bdrv_graph_wrlock();
     if (block_job_add_bdrv(&s->common, "active node", bs, 0,
                            basic_flags | BLK_PERM_WRITE, errp)) {
-        bdrv_graph_wrunlock(bs);
+        bdrv_graph_wrunlock();
         goto fail;
     }
 
@@ -389,15 +396,16 @@ void stream_start(const char *job_id, BlockDriverState *bs,
         ret = block_job_add_bdrv(&s->common, "intermediate node", iter, 0,
                                  basic_flags, errp);
         if (ret < 0) {
-            bdrv_graph_wrunlock(bs);
+            bdrv_graph_wrunlock();
             goto fail;
         }
     }
-    bdrv_graph_wrunlock(bs);
+    bdrv_graph_wrunlock();
 
     s->base_overlay = base_overlay;
     s->above_base = above_base;
     s->backing_file_str = g_strdup(backing_file_str);
+    s->backing_mask_protocol = backing_mask_protocol;
     s->cor_filter_bs = cor_filter_bs;
     s->target_bs = bs;
     s->bs_read_only = bs_read_only;

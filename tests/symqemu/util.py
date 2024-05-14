@@ -1,7 +1,7 @@
 import pathlib
 import subprocess
 
-SYMQEMU_EXECUTABLE = pathlib.Path(__file__).parent.parent.parent / "build" / "x86_64-linux-user" / "qemu-x86_64"
+SYMQEMU_EXECUTABLE = pathlib.Path(__file__).parent.parent.parent / "build" / "qemu-x86_64"
 BINARIES_DIR = pathlib.Path(__file__).parent / "binaries"
 
 

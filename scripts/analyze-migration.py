@@ -151,17 +151,12 @@ class RamSection(object):
             addr &= ~(self.TARGET_PAGE_SIZE - 1)
 
             if flags & self.RAM_SAVE_FLAG_MEM_SIZE:
-                while True:
+                total_length = addr
+                while total_length > 0:
                     namelen = self.file.read8()
-                    # We assume that no RAM chunk is big enough to ever
-                    # hit the first byte of the address, so when we see
-                    # a zero here we know it has to be an address, not the
-                    # length of the next block.
-                    if namelen == 0:
-                        self.file.file.seek(-1, 1)
-                        break
                     self.name = self.file.readstr(len = namelen)
                     len = self.file.read64()
+                    total_length -= len
                     self.sizeinfo[self.name] = '0x%016x' % len
                     if self.write_memory:
                         print(self.name)
@@ -258,6 +253,34 @@ class HTABSection(object):
                 break
 
             self.file.readvar(n_valid * self.HASH_PTE_SIZE_64)
+
+    def getDict(self):
+        return ""
+
+
+class S390StorageAttributes(object):
+    STATTR_FLAG_EOS   = 0x01
+    STATTR_FLAG_MORE  = 0x02
+    STATTR_FLAG_ERROR = 0x04
+    STATTR_FLAG_DONE  = 0x08
+
+    def __init__(self, file, version_id, device, section_key):
+        if version_id != 0:
+            raise Exception("Unknown storage_attributes version %d" % version_id)
+
+        self.file = file
+        self.section_key = section_key
+
+    def read(self):
+        while True:
+            addr_flags = self.file.read64()
+            flags = addr_flags & 0xfff
+            if (flags & (self.STATTR_FLAG_DONE | self.STATTR_FLAG_EOS)):
+                return
+            if (flags & self.STATTR_FLAG_ERROR):
+                raise Exception("Error in migration stream")
+            count = self.file.read64()
+            self.file.readvar(count)
 
     def getDict(self):
         return ""
@@ -544,8 +567,11 @@ class MigrationDump(object):
     QEMU_VM_SECTION_FOOTER= 0x7e
 
     def __init__(self, filename):
-        self.section_classes = { ( 'ram', 0 ) : [ RamSection, None ],
-                                 ( 'spapr/htab', 0) : ( HTABSection, None ) }
+        self.section_classes = {
+            ( 'ram', 0 ) : [ RamSection, None ],
+            ( 's390-storage_attributes', 0 ) : [ S390StorageAttributes, None],
+            ( 'spapr/htab', 0) : ( HTABSection, None )
+        }
         self.filename = filename
         self.vmsd_desc = None
 

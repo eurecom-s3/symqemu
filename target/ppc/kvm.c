@@ -546,8 +546,7 @@ static void kvm_sw_tlb_put(PowerPCCPU *cpu)
 
 static void kvm_get_one_spr(CPUState *cs, uint64_t id, int spr)
 {
-    PowerPCCPU *cpu = POWERPC_CPU(cs);
-    CPUPPCState *env = &cpu->env;
+    CPUPPCState *env = cpu_env(cs);
     /* Init 'val' to avoid "uninitialised value" Valgrind warnings */
     union {
         uint32_t u32;
@@ -581,8 +580,7 @@ static void kvm_get_one_spr(CPUState *cs, uint64_t id, int spr)
 
 static void kvm_put_one_spr(CPUState *cs, uint64_t id, int spr)
 {
-    PowerPCCPU *cpu = POWERPC_CPU(cs);
-    CPUPPCState *env = &cpu->env;
+    CPUPPCState *env = cpu_env(cs);
     union {
         uint32_t u32;
         uint64_t u64;
@@ -615,8 +613,7 @@ static void kvm_put_one_spr(CPUState *cs, uint64_t id, int spr)
 
 static int kvm_put_fp(CPUState *cs)
 {
-    PowerPCCPU *cpu = POWERPC_CPU(cs);
-    CPUPPCState *env = &cpu->env;
+    CPUPPCState *env = cpu_env(cs);
     struct kvm_one_reg reg;
     int i;
     int ret;
@@ -635,8 +632,8 @@ static int kvm_put_fp(CPUState *cs)
 
         for (i = 0; i < 32; i++) {
             uint64_t vsr[2];
-            uint64_t *fpr = cpu_fpr_ptr(&cpu->env, i);
-            uint64_t *vsrl = cpu_vsrl_ptr(&cpu->env, i);
+            uint64_t *fpr = cpu_fpr_ptr(env, i);
+            uint64_t *vsrl = cpu_vsrl_ptr(env, i);
 
 #if HOST_BIG_ENDIAN
             vsr[0] = float64_val(*fpr);
@@ -682,8 +679,7 @@ static int kvm_put_fp(CPUState *cs)
 
 static int kvm_get_fp(CPUState *cs)
 {
-    PowerPCCPU *cpu = POWERPC_CPU(cs);
-    CPUPPCState *env = &cpu->env;
+    CPUPPCState *env = cpu_env(cs);
     struct kvm_one_reg reg;
     int i;
     int ret;
@@ -704,8 +700,8 @@ static int kvm_get_fp(CPUState *cs)
 
         for (i = 0; i < 32; i++) {
             uint64_t vsr[2];
-            uint64_t *fpr = cpu_fpr_ptr(&cpu->env, i);
-            uint64_t *vsrl = cpu_vsrl_ptr(&cpu->env, i);
+            uint64_t *fpr = cpu_fpr_ptr(env, i);
+            uint64_t *vsrl = cpu_vsrl_ptr(env, i);
 
             reg.addr = (uintptr_t) &vsr;
             reg.id = vsx ? KVM_REG_PPC_VSR(i) : KVM_REG_PPC_FPR(i);
@@ -1656,7 +1652,7 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
     CPUPPCState *env = &cpu->env;
     int ret;
 
-    qemu_mutex_lock_iothread();
+    bql_lock();
 
     switch (run->exit_reason) {
     case KVM_EXIT_DCR:
@@ -1715,7 +1711,7 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
         break;
     }
 
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
     return ret;
 }
 
@@ -2369,17 +2365,6 @@ static void kvmppc_host_cpu_class_init(ObjectClass *oc, void *data)
 
 #if defined(TARGET_PPC64)
     pcc->radix_page_info = kvmppc_get_radix_page_info();
-
-    if ((pcc->pvr & 0xffffff00) == CPU_POWERPC_POWER9_DD1) {
-        /*
-         * POWER9 DD1 has some bugs which make it not really ISA 3.00
-         * compliant.  More importantly, advertising ISA 3.00
-         * architected mode may prevent guests from activating
-         * necessary DD1 workarounds.
-         */
-        pcc->pcr_supported &= ~(PCR_COMPAT_3_00 | PCR_COMPAT_2_07
-                                | PCR_COMPAT_2_06 | PCR_COMPAT_2_05);
-    }
 #endif /* defined(TARGET_PPC64) */
 }
 
@@ -2688,7 +2673,7 @@ int kvmppc_get_htab_fd(bool write, uint64_t index, Error **errp)
 int kvmppc_save_htab(QEMUFile *f, int fd, size_t bufsize, int64_t max_ns)
 {
     int64_t starttime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-    uint8_t buf[bufsize];
+    g_autofree uint8_t *buf = g_malloc(bufsize);
     ssize_t rc;
 
     do {
@@ -2770,9 +2755,9 @@ void kvmppc_read_hptes(ppc_hash_pte64_t *hptes, hwaddr ptex, int n)
     while (i < n) {
         struct kvm_get_htab_header *hdr;
         int m = n < HPTES_PER_GROUP ? n : HPTES_PER_GROUP;
-        char buf[sizeof(*hdr) + m * HASH_PTE_SIZE_64];
+        char buf[sizeof(*hdr) + HPTES_PER_GROUP * HASH_PTE_SIZE_64];
 
-        rc = read(fd, buf, sizeof(buf));
+        rc = read(fd, buf, sizeof(*hdr) + m * HASH_PTE_SIZE_64);
         if (rc < 0) {
             hw_error("kvmppc_read_hptes: Unable to read HPTEs");
         }

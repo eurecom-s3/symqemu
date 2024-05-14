@@ -141,6 +141,10 @@ bool net_tx_pkt_update_sctp_checksum(struct NetTxPkt *pkt)
     uint32_t csum = 0;
     struct iovec *pl_start_frag = pkt->vec + NET_TX_PKT_PL_START_FRAG;
 
+    if (iov_size(pl_start_frag, pkt->payload_frags) < 8 + sizeof(csum)) {
+        return false;
+    }
+
     if (iov_from_buf(pl_start_frag, pkt->payload_frags, 8, &csum, sizeof(csum)) < sizeof(csum)) {
         return false;
     }
@@ -833,6 +837,7 @@ bool net_tx_pkt_send_custom(struct NetTxPkt *pkt, bool offload,
 
     if (offload || gso_type == VIRTIO_NET_HDR_GSO_NONE) {
         if (!offload && pkt->virt_hdr.flags & VIRTIO_NET_HDR_F_NEEDS_CSUM) {
+            pkt->virt_hdr.flags &= ~VIRTIO_NET_HDR_F_NEEDS_CSUM;
             net_tx_pkt_do_sw_csum(pkt, &pkt->vec[NET_TX_PKT_L2HDR_FRAG],
                                   pkt->payload_frags + NET_TX_PKT_PL_START_FRAG - 1,
                                   pkt->payload_len);

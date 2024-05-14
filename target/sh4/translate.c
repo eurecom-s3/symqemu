@@ -159,8 +159,7 @@ void sh4_translate_init(void)
 
 void superh_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 {
-    SuperHCPU *cpu = SUPERH_CPU(cs);
-    CPUSH4State *env = &cpu->env;
+    CPUSH4State *env = cpu_env(cs);
     int i;
 
     qemu_fprintf(f, "pc=0x%08x sr=0x%08x pr=0x%08x fpscr=0x%08x\n",
@@ -524,6 +523,7 @@ static void _decode_opc(DisasContext * ctx)
         tcg_gen_movi_i32(REG(B11_8), B7_0s);
         return;
     case 0x9000: /* mov.w @(disp,PC),Rn */
+        CHECK_NOT_DELAY_SLOT
         {
             TCGv addr = tcg_constant_i32(ctx->base.pc_next + 4 + B7_0 * 2);
             tcg_gen_qemu_ld_i32(REG(B11_8), addr, ctx->memidx,
@@ -531,6 +531,7 @@ static void _decode_opc(DisasContext * ctx)
         }
         return;
     case 0xd000: /* mov.l @(disp,PC),Rn */
+        CHECK_NOT_DELAY_SLOT
         {
             TCGv addr = tcg_constant_i32((ctx->base.pc_next + 4 + B7_0 * 4) & ~3);
             tcg_gen_qemu_ld_i32(REG(B11_8), addr, ctx->memidx,
@@ -817,10 +818,10 @@ static void _decode_opc(DisasContext * ctx)
             TCGv arg0, arg1;
             arg0 = tcg_temp_new();
             tcg_gen_qemu_ld_i32(arg0, REG(B7_4), ctx->memidx,
-                                MO_TESL | MO_ALIGN);
+                                MO_TESW | MO_ALIGN);
             arg1 = tcg_temp_new();
             tcg_gen_qemu_ld_i32(arg1, REG(B11_8), ctx->memidx,
-                                MO_TESL | MO_ALIGN);
+                                MO_TESW | MO_ALIGN);
             gen_helper_macw(tcg_env, arg0, arg1);
             tcg_gen_addi_i32(REG(B11_8), REG(B11_8), 2);
             tcg_gen_addi_i32(REG(B7_4), REG(B7_4), 2);
@@ -1237,6 +1238,7 @@ static void _decode_opc(DisasContext * ctx)
         }
         return;
     case 0xc700: /* mova @(disp,PC),R0 */
+        CHECK_NOT_DELAY_SLOT
         tcg_gen_movi_i32(REG(0), ((ctx->base.pc_next & 0xfffffffc) +
                                   4 + B7_0 * 4) & ~3);
         return;
@@ -2186,7 +2188,6 @@ static void decode_gusa(DisasContext *ctx, CPUSH4State *env)
 static void sh4_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
 {
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
-    CPUSH4State *env = cpu_env(cs);
     uint32_t tbflags;
     int bound;
 
@@ -2196,7 +2197,7 @@ static void sh4_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     /* We don't know if the delayed pc came from a dynamic or static branch,
        so assume it is a dynamic branch.  */
     ctx->delayed_pc = -1; /* use delayed pc from env pointer */
-    ctx->features = env->features;
+    ctx->features = cpu_env(cs)->features;
     ctx->has_movcal = (tbflags & TB_FLAG_PENDING_MOVCA);
     ctx->gbank = ((tbflags & (1 << SR_MD)) &&
                   (tbflags & (1 << SR_RB))) * 0x10;
@@ -2317,7 +2318,7 @@ static const TranslatorOps sh4_tr_ops = {
 };
 
 void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int *max_insns,
-                           target_ulong pc, void *host_pc)
+                           vaddr pc, void *host_pc)
 {
     DisasContext ctx;
 

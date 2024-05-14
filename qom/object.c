@@ -138,9 +138,46 @@ static TypeImpl *type_new(const TypeInfo *info)
     return ti;
 }
 
+static bool type_name_is_valid(const char *name)
+{
+    const int slen = strlen(name);
+    int plen;
+
+    g_assert(slen > 1);
+
+    /*
+     * Ideally, the name should start with a letter - however, we've got
+     * too many names starting with a digit already, so allow digits here,
+     * too (except '0' which is not used yet)
+     */
+    if (!g_ascii_isalnum(name[0]) || name[0] == '0') {
+        return false;
+    }
+
+    plen = strspn(name, "abcdefghijklmnopqrstuvwxyz"
+                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                        "0123456789-_.");
+
+    /* Allow some legacy names with '+' in it for compatibility reasons */
+    if (name[plen] == '+') {
+        if (plen >= 17 && g_str_has_prefix(name, "Sun-UltraSparc-I")) {
+            /* Allow "Sun-UltraSparc-IV+" and "Sun-UltraSparc-IIIi+" */
+            return true;
+        }
+    }
+
+    return plen == slen;
+}
+
 static TypeImpl *type_register_internal(const TypeInfo *info)
 {
     TypeImpl *ti;
+
+    if (!type_name_is_valid(info->name)) {
+        fprintf(stderr, "Registering '%s' with illegal type name\n", info->name);
+        abort();
+    }
+
     ti = type_new(info);
 
     type_table_add(ti);
@@ -2190,6 +2227,22 @@ Object *object_resolve_path_at(Object *parent, const char *path)
                                        TYPE_OBJECT);
     }
     return object_resolve_abs_path(parent, parts, TYPE_OBJECT);
+}
+
+Object *object_resolve_type_unambiguous(const char *typename, Error **errp)
+{
+    bool ambig;
+    Object *o = object_resolve_path_type("", typename, &ambig);
+
+    if (ambig) {
+        error_setg(errp, "More than one object of type %s", typename);
+        return NULL;
+    }
+    if (!o) {
+        error_setg(errp, "No object found of type %s", typename);
+        return NULL;
+    }
+    return o;
 }
 
 typedef struct StringProperty

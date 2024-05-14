@@ -25,6 +25,7 @@
 #include "sysemu/sysemu.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
+#include "target/arm/cpu-qom.h"
 
 #define NAME_SIZE 20
 
@@ -191,6 +192,36 @@ static void fsl_imx6ul_realize(DeviceState *dev, Error **errp)
      */
     create_unimplemented_device("a7mpcore-dap", FSL_IMX6UL_A7MPCORE_DAP_ADDR,
                                 FSL_IMX6UL_A7MPCORE_DAP_SIZE);
+
+    /*
+     * MMDC
+     */
+    create_unimplemented_device("a7mpcore-mmdc", FSL_IMX6UL_MMDC_CFG_ADDR,
+                                FSL_IMX6UL_MMDC_CFG_SIZE);
+
+    /*
+     * OCOTP
+     */
+    create_unimplemented_device("a7mpcore-ocotp", FSL_IMX6UL_OCOTP_CTRL_ADDR,
+                                FSL_IMX6UL_OCOTP_CTRL_SIZE);
+
+    /*
+     * QSPI
+     */
+    create_unimplemented_device("a7mpcore-qspi", FSL_IMX6UL_QSPI_ADDR,
+                                FSL_IMX6UL_QSPI_SIZE);
+
+    /*
+     * CAAM
+     */
+    create_unimplemented_device("a7mpcore-qspi", FSL_IMX6UL_CAAM_ADDR,
+                                FSL_IMX6UL_CAAM_SIZE);
+
+    /*
+     * USBMISC
+     */
+    create_unimplemented_device("a7mpcore-usbmisc", FSL_IMX6UL_USBO2_USBMISC_ADDR,
+                                FSL_IMX6UL_USBO2_USBMISC_SIZE);
 
     /*
      * GPTs
@@ -442,7 +473,7 @@ static void fsl_imx6ul_realize(DeviceState *dev, Error **errp)
                                  s->phy_num[i], &error_abort);
         object_property_set_uint(OBJECT(&s->eth[i]), "tx-ring-num",
                                  FSL_IMX6UL_ETH_NUM_TX_RINGS, &error_abort);
-        qdev_set_nic_properties(DEVICE(&s->eth[i]), &nd_table[i]);
+        qemu_configure_nic_device(DEVICE(&s->eth[i]), true, NULL);
         sysbus_realize(SYS_BUS_DEVICE(&s->eth[i]), &error_abort);
 
         sysbus_mmio_map(SYS_BUS_DEVICE(&s->eth[i]), 0,

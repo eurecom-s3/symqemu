@@ -36,7 +36,6 @@
 #include "hw/boards.h"
 #include "net/net.h"
 #include "hw/scsi/esp.h"
-#include "hw/mips/bios.h"
 #include "hw/loader.h"
 #include "hw/rtc/mc146818rtc.h"
 #include "hw/timer/i8254.h"
@@ -53,11 +52,18 @@
 #ifdef CONFIG_TCG
 #include "hw/core/tcg-cpu-ops.h"
 #endif /* CONFIG_TCG */
+#include "cpu.h"
 
 enum jazz_model_e {
     JAZZ_MAGNUM,
     JAZZ_PICA61,
 };
+
+#if TARGET_BIG_ENDIAN
+#define BIOS_FILENAME "mips_bios.bin"
+#else
+#define BIOS_FILENAME "mipsel_bios.bin"
+#endif
 
 static void main_cpu_reset(void *opaque)
 {
@@ -113,15 +119,19 @@ static const MemoryRegionOps dma_dummy_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void mips_jazz_init_net(NICInfo *nd, IOMMUMemoryRegion *rc4030_dma_mr,
+static void mips_jazz_init_net(IOMMUMemoryRegion *rc4030_dma_mr,
                                DeviceState *rc4030, MemoryRegion *dp8393x_prom)
 {
     DeviceState *dev;
     SysBusDevice *sysbus;
     int checksum, i;
     uint8_t *prom;
+    NICInfo *nd;
 
-    qemu_check_nic_model(nd, "dp83932");
+    nd = qemu_find_nic_info("dp8393x", true, "dp82932");
+    if (!nd) {
+        return;
+    }
 
     dev = qdev_new("dp8393x");
     qdev_set_nic_properties(dev, nd);
@@ -146,6 +156,8 @@ static void mips_jazz_init_net(NICInfo *nd, IOMMUMemoryRegion *rc4030_dma_mr,
     }
     prom[7] = 0xff - checksum;
 }
+
+#define BIOS_SIZE (4 * MiB)
 
 #define MAGNUM_BIOS_SIZE_MAX 0x7e000
 #define MAGNUM_BIOS_SIZE                                                       \
@@ -277,7 +289,7 @@ static void mips_jazz_init(MachineState *machine,
     /* ISA devices */
     i8259 = i8259_init(isa_bus, env->irq[4]);
     isa_bus_register_input_irqs(isa_bus, i8259);
-    i8257_dma_init(isa_bus, 0);
+    i8257_dma_init(OBJECT(rc4030), isa_bus, 0);
     pit = i8254_pit_init(isa_bus, 0x40, 0, NULL);
     pcspk = isa_new(TYPE_PC_SPEAKER);
     object_property_set_link(OBJECT(pcspk), "pit", OBJECT(pit), &error_fatal);
@@ -316,12 +328,7 @@ static void mips_jazz_init(MachineState *machine,
     }
 
     /* Network controller */
-    if (nb_nics == 1) {
-        mips_jazz_init_net(&nd_table[0], rc4030_dma_mr, rc4030, dp8393x_prom);
-    } else if (nb_nics > 1) {
-        error_report("This machine only supports one NIC");
-        exit(1);
-    }
+    mips_jazz_init_net(rc4030_dma_mr, rc4030, dp8393x_prom);
 
     /* SCSI adapter */
     dev = qdev_new(TYPE_SYSBUS_ESP);

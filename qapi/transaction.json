@@ -158,6 +158,8 @@
 # A discriminated record of operations that can be performed with
 # @transaction.
 #
+# @type: the operation to be performed
+#
 # Since: 1.1
 ##
 { 'union': 'TransactionAction',
@@ -232,9 +234,8 @@
 #     execution of the transaction.  See @TransactionProperties for
 #     additional detail.
 #
-# Returns: nothing on success
-#
-#     Errors depend on the operations of the transaction
+# Errors:
+#     Any errors from commands in the transaction
 #
 # Note: The transaction aborts on the first failure.  Therefore, there
 #     will be information on only one failed operation returned in an
@@ -245,24 +246,24 @@
 #
 # Example:
 #
-# -> { "execute": "transaction",
-#      "arguments": { "actions": [
-#          { "type": "blockdev-snapshot-sync", "data" : { "device": "ide-hd0",
-#                                      "snapshot-file": "/some/place/my-image",
-#                                      "format": "qcow2" } },
-#          { "type": "blockdev-snapshot-sync", "data" : { "node-name": "myfile",
-#                                      "snapshot-file": "/some/place/my-image2",
-#                                      "snapshot-node-name": "node3432",
-#                                      "mode": "existing",
-#                                      "format": "qcow2" } },
-#          { "type": "blockdev-snapshot-sync", "data" : { "device": "ide-hd1",
-#                                      "snapshot-file": "/some/place/my-image2",
-#                                      "mode": "existing",
-#                                      "format": "qcow2" } },
-#          { "type": "blockdev-snapshot-internal-sync", "data" : {
-#                                      "device": "ide-hd2",
-#                                      "name": "snapshot0" } } ] } }
-# <- { "return": {} }
+#     -> { "execute": "transaction",
+#          "arguments": { "actions": [
+#              { "type": "blockdev-snapshot-sync", "data" : { "device": "ide-hd0",
+#                                          "snapshot-file": "/some/place/my-image",
+#                                          "format": "qcow2" } },
+#              { "type": "blockdev-snapshot-sync", "data" : { "node-name": "myfile",
+#                                          "snapshot-file": "/some/place/my-image2",
+#                                          "snapshot-node-name": "node3432",
+#                                          "mode": "existing",
+#                                          "format": "qcow2" } },
+#              { "type": "blockdev-snapshot-sync", "data" : { "device": "ide-hd1",
+#                                          "snapshot-file": "/some/place/my-image2",
+#                                          "mode": "existing",
+#                                          "format": "qcow2" } },
+#              { "type": "blockdev-snapshot-internal-sync", "data" : {
+#                                          "device": "ide-hd2",
+#                                          "name": "snapshot0" } } ] } }
+#     <- { "return": {} }
 ##
 { 'command': 'transaction',
   'data': { 'actions': [ 'TransactionAction' ],

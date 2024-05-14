@@ -95,8 +95,7 @@ enum {
 
 void tricore_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 {
-    TriCoreCPU *cpu = TRICORE_CPU(cs);
-    CPUTriCoreState *env = &cpu->env;
+    CPUTriCoreState *env = cpu_env(cs);
     uint32_t psw;
     int i;
 
@@ -8355,7 +8354,7 @@ static void tricore_tr_init_disas_context(DisasContextBase *dcbase,
 {
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
     CPUTriCoreState *env = cpu_env(cs);
-    ctx->mem_idx = cpu_mmu_index(env, false);
+    ctx->mem_idx = cpu_mmu_index(cs, false);
 
     uint32_t tb_flags = (uint32_t)ctx->base.tb->flags;
     ctx->priv = FIELD_EX32(tb_flags, TB_FLAGS, PRIV);
@@ -8472,7 +8471,7 @@ static const TranslatorOps tricore_tr_ops = {
 
 
 void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int *max_insns,
-                           target_ulong pc, void *host_pc)
+                           vaddr pc, void *host_pc)
 {
     DisasContext ctx;
     translator_loop(cs, tb, max_insns, pc, host_pc,

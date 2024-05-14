@@ -904,7 +904,7 @@ static void tpm_emulator_vm_state_change(void *opaque, bool running,
 
     trace_tpm_emulator_vm_state_change(running, state);
 
-    if (!running || state != RUN_STATE_RUNNING || !tpm_emu->relock_storage) {
+    if (!running || !tpm_emu->relock_storage) {
         return;
     }
 
@@ -939,7 +939,7 @@ static const VMStateDescription vmstate_tpm_emulator = {
     .version_id = 0,
     .pre_save = tpm_emulator_pre_save,
     .post_load = tpm_emulator_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(state_blobs.permanent_flags, TPMEmulator),
         VMSTATE_UINT32(state_blobs.permanent.size, TPMEmulator),
         VMSTATE_VBUFFER_ALLOC_UINT32(state_blobs.permanent.buffer,

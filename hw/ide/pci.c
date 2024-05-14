@@ -31,6 +31,7 @@
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "hw/ide/pci.h"
+#include "ide-internal.h"
 #include "trace.h"
 
 #define BMDMA_PAGE_SIZE 4096
@@ -501,7 +502,7 @@ static const VMStateDescription vmstate_bmdma_current = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = ide_bmdma_current_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(cur_addr, BMDMAState),
         VMSTATE_UINT32(cur_prd_last, BMDMAState),
         VMSTATE_UINT32(cur_prd_addr, BMDMAState),
@@ -515,7 +516,7 @@ static const VMStateDescription vmstate_bmdma_status = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = ide_bmdma_status_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8(status, BMDMAState),
         VMSTATE_END_OF_LIST()
     }
@@ -526,7 +527,7 @@ static const VMStateDescription vmstate_bmdma = {
     .version_id = 3,
     .minimum_version_id = 0,
     .pre_save  = ide_bmdma_pre_save,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8(cmd, BMDMAState),
         VMSTATE_UINT8(migration_compat_status, BMDMAState),
         VMSTATE_UINT32(addr, BMDMAState),
@@ -535,7 +536,7 @@ static const VMStateDescription vmstate_bmdma = {
         VMSTATE_UINT8(migration_retry_unit, BMDMAState),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription*[]) {
+    .subsections = (const VMStateDescription * const []) {
         &vmstate_bmdma_current,
         &vmstate_bmdma_status,
         NULL
@@ -562,7 +563,7 @@ const VMStateDescription vmstate_ide_pci = {
     .version_id = 3,
     .minimum_version_id = 0,
     .post_load = ide_pci_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_PCI_DEVICE(parent_obj, PCIIDEState),
         VMSTATE_STRUCT_ARRAY(bmdma, PCIIDEState, 2, 0,
                              vmstate_bmdma, BMDMAState),

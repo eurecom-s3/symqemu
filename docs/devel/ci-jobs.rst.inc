@@ -115,7 +115,7 @@ CI pipeline.
 QEMU_JOB_SKIPPED
 ~~~~~~~~~~~~~~~~
 
-The job is not reliably successsful in general, so is not
+The job is not reliably successful in general, so is not
 currently suitable to be run by default. Ideally this should
 be a temporary marker until the problems can be addressed, or
 the job permanently removed.
@@ -147,7 +147,7 @@ Set this variable to 1 to create the pipelines, but leave all
 the jobs to be manually started from the UI
 
 Set this variable to 2 to create the pipelines and run all
-the jobs immediately, as was historicaly behaviour
+the jobs immediately, as was the historical behaviour
 
 QEMU_CI_AVOCADO_TESTING
 ~~~~~~~~~~~~~~~~~~~~~~~

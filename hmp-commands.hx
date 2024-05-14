@@ -1,8 +1,8 @@
-HXCOMM Use DEFHEADING() to define headings in both help text and rST.
-HXCOMM Text between SRST and ERST is copied to the rST version and
-HXCOMM discarded from C version.
-HXCOMM DEF(command, args, callback, arg_string, help) is used to construct
-HXCOMM monitor commands
+HXCOMM See docs/devel/docs.rst for the format of this file.
+HXCOMM
+HXCOMM This file defines the contents of an array of HMPCommand structs
+HXCOMM which specify the name, behaviour and help text for HMP commands.
+HXCOMM Text between SRST and ERST is rST format documentation.
 HXCOMM HXCOMM can be used for comments, discarded from both rST and C.
 
 
@@ -396,19 +396,6 @@ SRST
   This only has an effect when using TCG, not with KVM or other accelerators.
 
   If called with option off, the emulation returns to normal mode.
-ERST
-
-    {
-        .name       = "singlestep",
-        .args_type  = "option:s?",
-        .params     = "[on|off]",
-        .help       = "deprecated synonym for one-insn-per-tb",
-        .cmd        = hmp_one_insn_per_tb,
-    },
-
-SRST
-``singlestep [off]``
-  This is a deprecated synonym for the one-insn-per-tb command.
 ERST
 
     {
@@ -1425,7 +1412,7 @@ ERST
     {
         .name       = "watchdog_action",
         .args_type  = "action:s",
-        .params     = "[reset|shutdown|poweroff|pause|debug|none]",
+        .params     = "[reset|shutdown|poweroff|pause|debug|none|inject-nmi]",
         .help       = "change watchdog action",
         .cmd        = hmp_watchdog_action,
         .command_completion = watchdog_action_completion,

@@ -38,7 +38,6 @@
 #include "qemu/option_int.h"
 #include "sysemu/block-backend.h"
 #include "migration/misc.h"
-#include "migration/migration.h"
 #include "qemu/cutils.h"
 #include "hw/qdev-properties.h"
 #include "hw/clock.h"
@@ -744,7 +743,6 @@ DeviceState *qdev_device_add(QemuOpts *opts, Error **errp)
 }
 
 #define qdev_printf(fmt, ...) monitor_printf(mon, "%*s" fmt, indent, "", ## __VA_ARGS__)
-static void qbus_print(Monitor *mon, BusState *bus, int indent);
 
 static void qdev_print_props(Monitor *mon, DeviceState *dev, Property *props,
                              int indent)
@@ -784,13 +782,9 @@ static void bus_print_dev(BusState *bus, Monitor *mon, DeviceState *dev, int ind
 static void qdev_print(Monitor *mon, DeviceState *dev, int indent)
 {
     ObjectClass *class;
-    BusState *child;
     NamedGPIOList *ngl;
     NamedClockList *ncl;
 
-    qdev_printf("dev: %s, id \"%s\"\n", object_get_typename(OBJECT(dev)),
-                dev->id ? dev->id : "");
-    indent += 2;
     QLIST_FOREACH(ngl, &dev->gpios, node) {
         if (ngl->num_in) {
             qdev_printf("gpio-in \"%s\" %d\n", ngl->name ? ngl->name : "",
@@ -814,12 +808,9 @@ static void qdev_print(Monitor *mon, DeviceState *dev, int indent)
         class = object_class_get_parent(class);
     } while (class != object_class_by_name(TYPE_DEVICE));
     bus_print_dev(dev->parent_bus, mon, dev, indent);
-    QLIST_FOREACH(child, &dev->child_bus, sibling) {
-        qbus_print(mon, child, indent);
-    }
 }
 
-static void qbus_print(Monitor *mon, BusState *bus, int indent)
+static void qbus_print(Monitor *mon, BusState *bus, int indent, bool details)
 {
     BusChild *kid;
 
@@ -827,16 +818,27 @@ static void qbus_print(Monitor *mon, BusState *bus, int indent)
     indent += 2;
     qdev_printf("type %s\n", object_get_typename(OBJECT(bus)));
     QTAILQ_FOREACH(kid, &bus->children, sibling) {
+        BusState *child_bus;
         DeviceState *dev = kid->child;
-        qdev_print(mon, dev, indent);
+        qdev_printf("dev: %s, id \"%s\"\n", object_get_typename(OBJECT(dev)),
+                    dev->id ? dev->id : "");
+        if (details) {
+            qdev_print(mon, dev, indent + 2);
+        }
+        QLIST_FOREACH(child_bus, &dev->child_bus, sibling) {
+            qbus_print(mon, child_bus, indent + 2, details);
+        }
     }
 }
 #undef qdev_printf
 
 void hmp_info_qtree(Monitor *mon, const QDict *qdict)
 {
-    if (sysbus_get_default())
-        qbus_print(mon, sysbus_get_default(), 0);
+    bool details = !qdict_get_try_bool(qdict, "brief", false);
+
+    if (sysbus_get_default()) {
+        qbus_print(mon, sysbus_get_default(), 0, details);
+    }
 }
 
 void hmp_info_qdm(Monitor *mon, const QDict *qdict)
@@ -858,19 +860,18 @@ void qmp_device_add(QDict *qdict, QObject **ret_data, Error **errp)
         return;
     }
     dev = qdev_device_add(opts, errp);
-
-    /*
-     * Drain all pending RCU callbacks. This is done because
-     * some bus related operations can delay a device removal
-     * (in this case this can happen if device is added and then
-     * removed due to a configuration error)
-     * to a RCU callback, but user might expect that this interface
-     * will finish its job completely once qmp command returns result
-     * to the user
-     */
-    drain_call_rcu();
-
     if (!dev) {
+        /*
+         * Drain all pending RCU callbacks. This is done because
+         * some bus related operations can delay a device removal
+         * (in this case this can happen if device is added and then
+         * removed due to a configuration error)
+         * to a RCU callback, but user might expect that this interface
+         * will finish its job completely once qmp command returns result
+         * to the user
+         */
+        drain_call_rcu();
+
         qemu_opts_del(opts);
         return;
     }
@@ -890,7 +891,7 @@ static DeviceState *find_device_state(const char *id, Error **errp)
 
     dev = (DeviceState *)object_dynamic_cast(obj, TYPE_DEVICE);
     if (!dev) {
-        error_setg(errp, "%s is not a hotpluggable device", id);
+        error_setg(errp, "%s is not a device", id);
         return NULL;
     }
 

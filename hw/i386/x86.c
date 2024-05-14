@@ -137,7 +137,7 @@ void x86_cpus_init(X86MachineState *x86ms, int default_cpu_version)
      * a literal `0` in configurations where kvm_* aren't defined)
      */
     if (kvm_enabled() && x86ms->apic_id_limit > 255 &&
-        (!kvm_irqchip_in_kernel() || !kvm_enable_x2apic())) {
+        kvm_irqchip_in_kernel() && !kvm_enable_x2apic()) {
         error_report("current -smp configuration requires kernel "
                      "irqchip and X2APIC API support.");
         exit(EXIT_FAILURE);
@@ -145,6 +145,10 @@ void x86_cpus_init(X86MachineState *x86ms, int default_cpu_version)
 
     if (kvm_enabled()) {
         kvm_set_max_apic_id(x86ms->apic_id_limit);
+    }
+
+    if (!kvm_irqchip_in_kernel()) {
+        apic_set_max_apic_id(x86ms->apic_id_limit);
     }
 
     possible_cpus = mc->possible_cpu_arch_ids(ms);
@@ -221,7 +225,7 @@ void x86_cpu_plug(HotplugHandler *hotplug_dev,
     }
 
     found_cpu = x86_find_cpu_slot(MACHINE(x86ms), cpu->apic_id, NULL);
-    found_cpu->cpu = OBJECT(dev);
+    found_cpu->cpu = CPU(dev);
 out:
     error_propagate(errp, local_err);
 }
@@ -516,10 +520,10 @@ static void x86_nmi(NMIState *n, int cpu_index, Error **errp)
     CPU_FOREACH(cs) {
         X86CPU *cpu = X86_CPU(cs);
 
-        if (!cpu->apic_state) {
-            cpu_interrupt(cs, CPU_INTERRUPT_NMI);
-        } else {
+        if (cpu_is_apic_enabled(cpu->apic_state)) {
             apic_deliver_nmi(cpu->apic_state);
+        } else {
+            cpu_interrupt(cs, CPU_INTERRUPT_NMI);
         }
     }
 }
@@ -551,7 +555,7 @@ static void pic_irq_request(void *opaque, int irq, int level)
     X86CPU *cpu = X86_CPU(cs);
 
     trace_x86_pic_interrupt(irq, level);
-    if (cpu->apic_state && !kvm_irqchip_in_kernel() &&
+    if (cpu_is_apic_enabled(cpu->apic_state) && !kvm_irqchip_in_kernel() &&
         !whpx_apic_in_platform()) {
         CPU_FOREACH(cs) {
             cpu = X86_CPU(cs);
@@ -636,20 +640,19 @@ void gsi_handler(void *opaque, int n, int level)
     }
 }
 
-void ioapic_init_gsi(GSIState *gsi_state, const char *parent_name)
+void ioapic_init_gsi(GSIState *gsi_state, Object *parent)
 {
     DeviceState *dev;
     SysBusDevice *d;
     unsigned int i;
 
-    assert(parent_name);
+    assert(parent);
     if (kvm_ioapic_in_kernel()) {
         dev = qdev_new(TYPE_KVM_IOAPIC);
     } else {
         dev = qdev_new(TYPE_IOAPIC);
     }
-    object_property_add_child(object_resolve_path(parent_name, NULL),
-                              "ioapic", OBJECT(dev));
+    object_property_add_child(parent, "ioapic", OBJECT(dev));
     d = SYS_BUS_DEVICE(dev);
     sysbus_realize_and_unref(d, &error_fatal);
     sysbus_mmio_map(d, 0, IO_APIC_DEFAULT_ADDRESS);

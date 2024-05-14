@@ -2657,11 +2657,10 @@ static bool canonicalize_skip(DisasContext *ctx)
 static void avr_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
 {
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
-    CPUAVRState *env = cpu_env(cs);
     uint32_t tb_flags = ctx->base.tb->flags;
 
     ctx->cs = cs;
-    ctx->env = env;
+    ctx->env = cpu_env(cs);
     ctx->npc = ctx->base.pc_first / 2;
 
     ctx->skip_cond = TCG_COND_NEVER;
@@ -2805,7 +2804,7 @@ static const TranslatorOps avr_tr_ops = {
 };
 
 void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int *max_insns,
-                           target_ulong pc, void *host_pc)
+                           vaddr pc, void *host_pc)
 {
     DisasContext dc = { };
     translator_loop(cs, tb, max_insns, pc, host_pc, &avr_tr_ops, &dc.base);

@@ -74,6 +74,11 @@ static bool xtensa_cpu_has_work(CPUState *cs)
 #endif
 }
 
+static int xtensa_cpu_mmu_index(CPUState *cs, bool ifetch)
+{
+    return xtensa_get_cring(cpu_env(cs));
+}
+
 #ifdef CONFIG_USER_ONLY
 static bool abi_call0;
 
@@ -90,10 +95,9 @@ bool xtensa_abi_call0(void)
 
 static void xtensa_cpu_reset_hold(Object *obj)
 {
-    CPUState *s = CPU(obj);
-    XtensaCPU *cpu = XTENSA_CPU(s);
-    XtensaCPUClass *xcc = XTENSA_CPU_GET_CLASS(cpu);
-    CPUXtensaState *env = &cpu->env;
+    CPUState *cs = CPU(obj);
+    XtensaCPUClass *xcc = XTENSA_CPU_GET_CLASS(obj);
+    CPUXtensaState *env = cpu_env(cs);
     bool dfpu = xtensa_option_enabled(env->config,
                                       XTENSA_OPTION_DFP_COPROCESSOR);
 
@@ -127,7 +131,7 @@ static void xtensa_cpu_reset_hold(Object *obj)
 
 #ifndef CONFIG_USER_ONLY
     reset_mmu(env);
-    s->halted = env->runstall;
+    cs->halted = env->runstall;
 #endif
     set_no_signaling_nans(!dfpu, &env->fp_status);
     set_use_first_nan(!dfpu, &env->fp_status);
@@ -141,9 +145,7 @@ static ObjectClass *xtensa_cpu_class_by_name(const char *cpu_model)
     typename = g_strdup_printf(XTENSA_CPU_TYPE_NAME("%s"), cpu_model);
     oc = object_class_by_name(typename);
     g_free(typename);
-    if (oc == NULL || !object_class_dynamic_cast(oc, TYPE_XTENSA_CPU)) {
-        return NULL;
-    }
+
     return oc;
 }
 
@@ -224,7 +226,7 @@ static const struct SysemuCPUOps xtensa_sysemu_ops = {
 
 #include "hw/core/tcg-cpu-ops.h"
 
-static const struct TCGCPUOps xtensa_tcg_ops = {
+static const TCGCPUOps xtensa_tcg_ops = {
     .initialize = xtensa_translate_init,
     .debug_excp_handler = xtensa_breakpoint_handler,
     .restore_state_to_opc = xtensa_restore_state_to_opc,
@@ -235,6 +237,7 @@ static const struct TCGCPUOps xtensa_tcg_ops = {
     .do_interrupt = xtensa_cpu_do_interrupt,
     .do_transaction_failed = xtensa_cpu_do_transaction_failed,
     .do_unaligned_access = xtensa_cpu_do_unaligned_access,
+    .debug_check_breakpoint = xtensa_debug_check_breakpoint,
 #endif /* !CONFIG_USER_ONLY */
 };
 
@@ -253,6 +256,7 @@ static void xtensa_cpu_class_init(ObjectClass *oc, void *data)
 
     cc->class_by_name = xtensa_cpu_class_by_name;
     cc->has_work = xtensa_cpu_has_work;
+    cc->mmu_index = xtensa_cpu_mmu_index;
     cc->dump_state = xtensa_cpu_dump_state;
     cc->set_pc = xtensa_cpu_set_pc;
     cc->get_pc = xtensa_cpu_get_pc;

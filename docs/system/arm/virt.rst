@@ -69,6 +69,19 @@ Supported guest CPU types:
 Note that the default is ``cortex-a15``, so for an AArch64 guest you must
 specify a CPU type.
 
+Also, please note that passing ``max`` CPU (i.e. ``-cpu max``) won't
+enable all the CPU features for a given ``virt`` machine. Where a CPU
+architectural feature requires support in both the CPU itself and in the
+wider system (e.g. the MTE feature), it may not be enabled by default,
+but instead requires a machine option to enable it.
+
+For example, MTE support must be enabled with ``-machine virt,mte=on``,
+as well as by selecting an MTE-capable CPU (e.g., ``max``) with the
+``-cpu`` option.
+
+See the machine-specific options below, or check them for a given machine
+by passing the ``help`` suboption, like: ``-machine virt-9.0,help``.
+
 Graphics output is available, but unlike the x86 PC machine types
 there is no default display device enabled: you should select one from
 the Display devices section of "-device help". The recommended option
@@ -96,7 +109,13 @@ mte
 highmem
   Set ``on``/``off`` to enable/disable placing devices and RAM in physical
   address space above 32 bits. The default is ``on`` for machine types
-  later than ``virt-2.12``.
+  later than ``virt-2.12`` when the CPU supports an address space
+  bigger than 32 bits (i.e. 64-bit CPUs, and 32-bit CPUs with the
+  Large Physical Address Extension (LPAE) feature). If you want to
+  boot a 32-bit kernel which does not have ``CONFIG_LPAE`` enabled on
+  a CPU type which implements LPAE, you will need to manually set
+  this to ``off``; otherwise some devices, such as the PCI controller,
+  will not be accessible.
 
 compact-highmem
   Set ``on``/``off`` to enable/disable the compact layout for high memory regions.

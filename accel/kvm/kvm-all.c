@@ -69,16 +69,6 @@
 #define KVM_GUESTDBG_BLOCKIRQ 0
 #endif
 
-//#define DEBUG_KVM
-
-#ifdef DEBUG_KVM
-#define DPRINTF(fmt, ...) \
-    do { fprintf(stderr, fmt, ## __VA_ARGS__); } while (0)
-#else
-#define DPRINTF(fmt, ...) \
-    do { } while (0)
-#endif
-
 struct KVMParkedVcpu {
     unsigned long vcpu_id;
     int kvm_fd;
@@ -98,7 +88,7 @@ bool kvm_allowed;
 bool kvm_readonly_mem_allowed;
 bool kvm_vm_attributes_allowed;
 bool kvm_msi_use_devid;
-bool kvm_has_guest_debug;
+static bool kvm_has_guest_debug;
 static int kvm_sstep_flags;
 static bool kvm_immediate_exit;
 static hwaddr kvm_max_slot_size = ~0;
@@ -331,7 +321,7 @@ static int do_kvm_destroy_vcpu(CPUState *cpu)
     struct KVMParkedVcpu *vcpu = NULL;
     int ret = 0;
 
-    DPRINTF("kvm_destroy_vcpu\n");
+    trace_kvm_destroy_vcpu();
 
     ret = kvm_arch_destroy_vcpu(cpu);
     if (ret < 0) {
@@ -341,7 +331,7 @@ static int do_kvm_destroy_vcpu(CPUState *cpu)
     mmap_size = kvm_ioctl(s, KVM_GET_VCPU_MMAP_SIZE, 0);
     if (mmap_size < 0) {
         ret = mmap_size;
-        DPRINTF("KVM_GET_VCPU_MMAP_SIZE failed\n");
+        trace_kvm_failed_get_vcpu_mmap_size();
         goto err;
     }
 
@@ -443,7 +433,6 @@ int kvm_init_vcpu(CPUState *cpu, Error **errp)
                                    PAGE_SIZE * KVM_DIRTY_LOG_PAGE_OFFSET);
         if (cpu->kvm_dirty_gfns == MAP_FAILED) {
             ret = -errno;
-            DPRINTF("mmap'ing vcpu dirty gfns failed: %d\n", ret);
             goto err;
         }
     }
@@ -817,7 +806,7 @@ static void kvm_dirty_ring_flush(void)
      * should always be with BQL held, serialization is guaranteed.
      * However, let's be sure of it.
      */
-    assert(qemu_mutex_iothread_locked());
+    assert(bql_locked());
     /*
      * First make sure to flush the hardware buffers by kicking all
      * vcpus out in a synchronous way.
@@ -1130,6 +1119,11 @@ int kvm_vm_check_extension(KVMState *s, unsigned int extension)
     return ret;
 }
 
+/*
+ * We track the poisoned pages to be able to:
+ * - replace them on VM reset
+ * - block a migration for a VM with a poisoned page
+ */
 typedef struct HWPoisonPage {
     ram_addr_t ram_addr;
     QLIST_ENTRY(HWPoisonPage) list;
@@ -1161,6 +1155,11 @@ void kvm_hwpoison_page_add(ram_addr_t ram_addr)
     page = g_new(HWPoisonPage, 1);
     page->ram_addr = ram_addr;
     QLIST_INSERT_HEAD(&hwpoison_page_list, page, list);
+}
+
+bool kvm_hwpoisoned_mem(void)
+{
+    return !QLIST_EMPTY(&hwpoison_page_list);
 }
 
 static uint32_t adjust_ioeventfd_endianness(uint32_t val, uint32_t size)
@@ -1402,9 +1401,9 @@ static void *kvm_dirty_ring_reaper_thread(void *data)
         trace_kvm_dirty_ring_reaper("wakeup");
         r->reaper_state = KVM_DIRTY_RING_REAPER_REAPING;
 
-        qemu_mutex_lock_iothread();
+        bql_lock();
         kvm_dirty_ring_reap(s, NULL);
-        qemu_mutex_unlock_iothread();
+        bql_unlock();
 
         r->reaper_iteration++;
     }
@@ -2000,12 +1999,17 @@ int kvm_irqchip_add_msi_route(KVMRouteChange *c, int vector, PCIDevice *dev)
         return -EINVAL;
     }
 
-    trace_kvm_irqchip_add_msi_route(dev ? dev->name : (char *)"N/A",
-                                    vector, virq);
+    if (s->irq_routes->nr < s->gsi_count) {
+        trace_kvm_irqchip_add_msi_route(dev ? dev->name : (char *)"N/A",
+                                        vector, virq);
 
-    kvm_add_routing_entry(s, &kroute);
-    kvm_arch_add_msi_route_post(&kroute, vector, dev);
-    c->changes++;
+        kvm_add_routing_entry(s, &kroute);
+        kvm_arch_add_msi_route_post(&kroute, vector, dev);
+        c->changes++;
+    } else {
+        kvm_irqchip_release_virq(s, virq);
+        return -ENOSPC;
+    }
 
     return virq;
 }
@@ -2360,7 +2364,7 @@ static int kvm_init(MachineState *ms)
     QTAILQ_INIT(&s->kvm_sw_breakpoints);
 #endif
     QLIST_INIT(&s->kvm_parked_vcpus);
-    s->fd = qemu_open_old("/dev/kvm", O_RDWR);
+    s->fd = qemu_open_old(s->device ?: "/dev/kvm", O_RDWR);
     if (s->fd == -1) {
         fprintf(stderr, "Could not access KVM kernel module: %m\n");
         ret = -errno;
@@ -2821,14 +2825,14 @@ int kvm_cpu_exec(CPUState *cpu)
     struct kvm_run *run = cpu->kvm_run;
     int ret, run_ret;
 
-    DPRINTF("kvm_cpu_exec()\n");
+    trace_kvm_cpu_exec();
 
     if (kvm_arch_process_async_events(cpu)) {
         qatomic_set(&cpu->exit_request, 0);
         return EXCP_HLT;
     }
 
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
     cpu_exec_start(cpu);
 
     do {
@@ -2848,7 +2852,7 @@ int kvm_cpu_exec(CPUState *cpu)
 
         kvm_arch_pre_run(cpu, run);
         if (qatomic_read(&cpu->exit_request)) {
-            DPRINTF("interrupt exit requested\n");
+	    trace_kvm_interrupt_exit_request();
             /*
              * KVM requires us to reenter the kernel after IO exits to complete
              * instruction emulation. This self-signal will ensure that we
@@ -2868,17 +2872,17 @@ int kvm_cpu_exec(CPUState *cpu)
 
 #ifdef KVM_HAVE_MCE_INJECTION
         if (unlikely(have_sigbus_pending)) {
-            qemu_mutex_lock_iothread();
+            bql_lock();
             kvm_arch_on_sigbus_vcpu(cpu, pending_sigbus_code,
                                     pending_sigbus_addr);
             have_sigbus_pending = false;
-            qemu_mutex_unlock_iothread();
+            bql_unlock();
         }
 #endif
 
         if (run_ret < 0) {
             if (run_ret == -EINTR || run_ret == -EAGAIN) {
-                DPRINTF("io window exit\n");
+                trace_kvm_io_window_exit();
                 kvm_eat_signals(cpu);
                 ret = EXCP_INTERRUPT;
                 break;
@@ -2900,7 +2904,6 @@ int kvm_cpu_exec(CPUState *cpu)
         trace_kvm_run_exit(cpu->cpu_index, run->exit_reason);
         switch (run->exit_reason) {
         case KVM_EXIT_IO:
-            DPRINTF("handle_io\n");
             /* Called outside BQL */
             kvm_handle_io(run->io.port, attrs,
                           (uint8_t *)run + run->io.data_offset,
@@ -2910,7 +2913,6 @@ int kvm_cpu_exec(CPUState *cpu)
             ret = 0;
             break;
         case KVM_EXIT_MMIO:
-            DPRINTF("handle_mmio\n");
             /* Called outside BQL */
             address_space_rw(&address_space_memory,
                              run->mmio.phys_addr, attrs,
@@ -2920,11 +2922,9 @@ int kvm_cpu_exec(CPUState *cpu)
             ret = 0;
             break;
         case KVM_EXIT_IRQ_WINDOW_OPEN:
-            DPRINTF("irq_window_open\n");
             ret = EXCP_INTERRUPT;
             break;
         case KVM_EXIT_SHUTDOWN:
-            DPRINTF("shutdown\n");
             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
             ret = EXCP_INTERRUPT;
             break;
@@ -2942,7 +2942,7 @@ int kvm_cpu_exec(CPUState *cpu)
              * still full.  Got kicked by KVM_RESET_DIRTY_RINGS.
              */
             trace_kvm_dirty_ring_full(cpu->cpu_index);
-            qemu_mutex_lock_iothread();
+            bql_lock();
             /*
              * We throttle vCPU by making it sleep once it exit from kernel
              * due to dirty ring full. In the dirtylimit scenario, reaping
@@ -2954,11 +2954,12 @@ int kvm_cpu_exec(CPUState *cpu)
             } else {
                 kvm_dirty_ring_reap(kvm_state, NULL);
             }
-            qemu_mutex_unlock_iothread();
+            bql_unlock();
             dirtylimit_vcpu_execute(cpu);
             ret = 0;
             break;
         case KVM_EXIT_SYSTEM_EVENT:
+            trace_kvm_run_exit_system_event(cpu->cpu_index, run->system_event.type);
             switch (run->system_event.type) {
             case KVM_SYSTEM_EVENT_SHUTDOWN:
                 qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
@@ -2970,26 +2971,24 @@ int kvm_cpu_exec(CPUState *cpu)
                 break;
             case KVM_SYSTEM_EVENT_CRASH:
                 kvm_cpu_synchronize_state(cpu);
-                qemu_mutex_lock_iothread();
+                bql_lock();
                 qemu_system_guest_panicked(cpu_get_crash_info(cpu));
-                qemu_mutex_unlock_iothread();
+                bql_unlock();
                 ret = 0;
                 break;
             default:
-                DPRINTF("kvm_arch_handle_exit\n");
                 ret = kvm_arch_handle_exit(cpu, run);
                 break;
             }
             break;
         default:
-            DPRINTF("kvm_arch_handle_exit\n");
             ret = kvm_arch_handle_exit(cpu, run);
             break;
         }
     } while (ret == 0);
 
     cpu_exec_end(cpu);
-    qemu_mutex_lock_iothread();
+    bql_lock();
 
     if (ret < 0) {
         cpu_dump_state(cpu, stderr, CPU_DUMP_CODE);
@@ -3601,6 +3600,24 @@ static void kvm_set_dirty_ring_size(Object *obj, Visitor *v,
     s->kvm_dirty_ring_size = value;
 }
 
+static char *kvm_get_device(Object *obj,
+                            Error **errp G_GNUC_UNUSED)
+{
+    KVMState *s = KVM_STATE(obj);
+
+    return g_strdup(s->device);
+}
+
+static void kvm_set_device(Object *obj,
+                           const char *value,
+                           Error **errp G_GNUC_UNUSED)
+{
+    KVMState *s = KVM_STATE(obj);
+
+    g_free(s->device);
+    s->device = g_strdup(value);
+}
+
 static void kvm_accel_instance_init(Object *obj)
 {
     KVMState *s = KVM_STATE(obj);
@@ -3619,6 +3636,7 @@ static void kvm_accel_instance_init(Object *obj)
     s->xen_version = 0;
     s->xen_gnttab_max_frames = 64;
     s->xen_evtchn_max_pirq = 256;
+    s->device = NULL;
 }
 
 /**
@@ -3658,6 +3676,10 @@ static void kvm_accel_class_init(ObjectClass *oc, void *data)
         NULL, NULL);
     object_class_property_set_description(oc, "dirty-ring-size",
         "Size of KVM dirty page ring buffer (default: 0, i.e. use bitmap)");
+
+    object_class_property_add_str(oc, "device", kvm_get_device, kvm_set_device);
+    object_class_property_set_description(oc, "device",
+        "Path to the device node to use (default: /dev/kvm)");
 
     kvm_arch_accel_class_init(oc);
 }

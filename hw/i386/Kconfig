@@ -76,6 +76,7 @@ config I440FX
     select PIIX
     select DIMM
     select SMBIOS
+    select SMBIOS_LEGACY
     select FW_CFG_DMA
 
 config ISAPC
@@ -95,6 +96,7 @@ config Q35
     imply E1000E_PCI_EXPRESS
     imply VMPORT
     imply VMMOUSE
+    imply IOMMUFD
     select PC_PCI
     select PC_ACPI
     select PCI_EXPRESS_Q35

@@ -10,7 +10,7 @@ static const VMStateDescription vmstate_cpu_timer = {
     .name = "cpu_timer",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(frequency, CPUTimer),
         VMSTATE_UINT32(disabled, CPUTimer),
         VMSTATE_UINT64(disabled_mask, CPUTimer),
@@ -29,7 +29,7 @@ static const VMStateDescription vmstate_trap_state = {
     .name = "trap_state",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(tpc, trap_state),
         VMSTATE_UINT64(tnpc, trap_state),
         VMSTATE_UINT64(tstate, trap_state),
@@ -42,7 +42,7 @@ static const VMStateDescription vmstate_tlb_entry = {
     .name = "tlb_entry",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(tag, SparcTLBEntry),
         VMSTATE_UINT64(tte, SparcTLBEntry),
         VMSTATE_END_OF_LIST()
@@ -81,6 +81,32 @@ static const VMStateInfo vmstate_psr = {
     .name = "psr",
     .get = get_psr,
     .put = put_psr,
+};
+
+static int get_fsr(QEMUFile *f, void *opaque, size_t size,
+                   const VMStateField *field)
+{
+    SPARCCPU *cpu = opaque;
+    target_ulong val = qemu_get_betl(f);
+
+    cpu_put_fsr(&cpu->env, val);
+    return 0;
+}
+
+static int put_fsr(QEMUFile *f, void *opaque, size_t size,
+                   const VMStateField *field, JSONWriter *vmdesc)
+{
+    SPARCCPU *cpu = opaque;
+    target_ulong val = cpu_get_fsr(&cpu->env);
+
+    qemu_put_betl(f, val);
+    return 0;
+}
+
+static const VMStateInfo vmstate_fsr = {
+    .name = "fsr",
+    .get = get_fsr,
+    .put = put_fsr,
 };
 
 #ifdef TARGET_SPARC64
@@ -147,7 +173,7 @@ const VMStateDescription vmstate_sparc_cpu = {
     .version_id = SPARC_VMSTATE_VER,
     .minimum_version_id = SPARC_VMSTATE_VER,
     .pre_save = cpu_pre_save,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINTTL_ARRAY(env.gregs, SPARCCPU, 8),
         VMSTATE_UINT32(env.nwindows, SPARCCPU),
         VMSTATE_VARRAY_MULTIPLY(env.regbase, SPARCCPU, env.nwindows, 16,
@@ -157,7 +183,6 @@ const VMStateDescription vmstate_sparc_cpu = {
         VMSTATE_UINTTL(env.npc, SPARCCPU),
         VMSTATE_UINTTL(env.y, SPARCCPU),
         {
-
             .name = "psr",
             .version_id = 0,
             .size = sizeof(uint32_t),
@@ -165,7 +190,14 @@ const VMStateDescription vmstate_sparc_cpu = {
             .flags = VMS_SINGLE,
             .offset = 0,
         },
-        VMSTATE_UINTTL(env.fsr, SPARCCPU),
+        {
+            .name = "fsr",
+            .version_id = 0,
+            .size = sizeof(target_ulong),
+            .info = &vmstate_fsr,
+            .flags = VMS_SINGLE,
+            .offset = 0,
+        },
         VMSTATE_UINTTL(env.tbr, SPARCCPU),
         VMSTATE_INT32(env.interrupt_index, SPARCCPU),
         VMSTATE_UINT32(env.pil_in, SPARCCPU),

@@ -68,6 +68,7 @@
 #include "hw/acpi/utils.h"
 #include "hw/acpi/pci.h"
 #include "hw/acpi/cxl.h"
+#include "hw/acpi/acpi_generic_initiator.h"
 
 #include "qom/qom-qobject.h"
 #include "hw/i386/amd_iommu.h"
@@ -192,21 +193,10 @@ static void init_common_fadt_data(MachineState *ms, Object *o,
     *data = fadt;
 }
 
-static Object *object_resolve_type_unambiguous(const char *typename)
-{
-    bool ambig;
-    Object *o = object_resolve_path_type("", typename, &ambig);
-
-    if (ambig || !o) {
-        return NULL;
-    }
-    return o;
-}
-
 static void acpi_get_pm_info(MachineState *machine, AcpiPmInfo *pm)
 {
-    Object *piix = object_resolve_type_unambiguous(TYPE_PIIX4_PM);
-    Object *lpc = object_resolve_type_unambiguous(TYPE_ICH9_LPC_DEVICE);
+    Object *piix = object_resolve_type_unambiguous(TYPE_PIIX4_PM, NULL);
+    Object *lpc = object_resolve_type_unambiguous(TYPE_ICH9_LPC_DEVICE, NULL);
     Object *obj = piix ? piix : lpc;
     QObject *o;
     pm->cpu_hp_io_base = 0;
@@ -1428,8 +1418,9 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
            AcpiPmInfo *pm, AcpiMiscInfo *misc,
            Range *pci_hole, Range *pci_hole64, MachineState *machine)
 {
-    Object *i440fx = object_resolve_type_unambiguous(TYPE_I440FX_PCI_HOST_BRIDGE);
-    Object *q35 = object_resolve_type_unambiguous(TYPE_Q35_HOST_DEVICE);
+    Object *i440fx = object_resolve_type_unambiguous(TYPE_I440FX_PCI_HOST_BRIDGE,
+                                                     NULL);
+    Object *q35 = object_resolve_type_unambiguous(TYPE_Q35_HOST_DEVICE, NULL);
     CrsRangeEntry *entry;
     Aml *dsdt, *sb_scope, *scope, *dev, *method, *field, *pkg, *crs;
     CrsRangeSet crs_range_set;
@@ -1556,7 +1547,7 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
     }
 
     crs_range_set_init(&crs_range_set);
-    bus = PC_MACHINE(machine)->bus;
+    bus = PC_MACHINE(machine)->pcibus;
     if (bus) {
         QLIST_FOREACH(bus, &bus->child, sibling) {
             uint8_t bus_num = pci_bus_num(bus);
@@ -2056,6 +2047,8 @@ build_srat(GArray *table_data, BIOSLinker *linker, MachineState *machine)
         build_srat_memory(table_data, 0, 0, 0, MEM_AFFINITY_NOFLAGS);
     }
 
+    build_srat_generic_pci_initiator(table_data);
+
     /*
      * Entry is required for Windows to enable memory hotplug in OS
      * and for Linux to enable SWIOTLB when booted with less than
@@ -2333,29 +2326,22 @@ static void
 build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
                 const char *oem_table_id)
 {
-    int ivhd_table_len = 24;
     AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu_get_default());
     GArray *ivhd_blob = g_array_new(false, true, 1);
     AcpiTable table = { .sig = "IVRS", .rev = 1, .oem_id = oem_id,
                         .oem_table_id = oem_table_id };
+    uint64_t feature_report;
 
     acpi_table_begin(&table, table_data);
     /* IVinfo - IO virtualization information common to all
      * IOMMU units in a system
      */
-    build_append_int_noprefix(table_data, 40UL << 8/* PASize */, 4);
+    build_append_int_noprefix(table_data,
+                             (1UL << 0) | /* EFRSup */
+                             (40UL << 8), /* PASize */
+                             4);
     /* reserved */
     build_append_int_noprefix(table_data, 0, 8);
-
-    /* IVHD definition - type 10h */
-    build_append_int_noprefix(table_data, 0x10, 1);
-    /* virtualization flags */
-    build_append_int_noprefix(table_data,
-                             (1UL << 0) | /* HtTunEn      */
-                             (1UL << 4) | /* iotblSup     */
-                             (1UL << 6) | /* PrefSup      */
-                             (1UL << 7),  /* PPRSup       */
-                             1);
 
     /*
      * A PCI bus walk, for each PCI host bridge, is necessary to create a
@@ -2376,18 +2362,34 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
         build_append_int_noprefix(ivhd_blob, 0x0000001, 4);
     }
 
-    ivhd_table_len += ivhd_blob->len;
-
     /*
      * When interrupt remapping is supported, we add a special IVHD device
-     * for type IO-APIC.
+     * for type IO-APIC
+     * Refer to spec - Table 95: IVHD device entry type codes
+     *
+     * Linux IOMMU driver checks for the special IVHD device (type IO-APIC).
+     * See Linux kernel commit 'c2ff5cf5294bcbd7fa50f7d860e90a66db7e5059'
      */
     if (x86_iommu_ir_supported(x86_iommu_get_default())) {
-        ivhd_table_len += 8;
+        build_append_int_noprefix(ivhd_blob,
+                                 (0x1ull << 56) |           /* type IOAPIC */
+                                 (IOAPIC_SB_DEVID << 40) |  /* IOAPIC devid */
+                                 0x48,                      /* special device */
+                                 8);
     }
 
+    /* IVHD definition - type 10h */
+    build_append_int_noprefix(table_data, 0x10, 1);
+    /* virtualization flags */
+    build_append_int_noprefix(table_data,
+                             (1UL << 0) | /* HtTunEn      */
+                             (1UL << 4) | /* iotblSup     */
+                             (1UL << 6) | /* PrefSup      */
+                             (1UL << 7),  /* PPRSup       */
+                             1);
+
     /* IVHD length */
-    build_append_int_noprefix(table_data, ivhd_table_len, 2);
+    build_append_int_noprefix(table_data, ivhd_blob->len + 24, 2);
     /* DeviceID */
     build_append_int_noprefix(table_data,
                               object_property_get_int(OBJECT(&s->pci), "addr",
@@ -2401,31 +2403,53 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
     /* IOMMU info */
     build_append_int_noprefix(table_data, 0, 2);
     /* IOMMU Feature Reporting */
-    build_append_int_noprefix(table_data,
-                             (48UL << 30) | /* HATS   */
-                             (48UL << 28) | /* GATS   */
-                             (1UL << 2)   | /* GTSup  */
-                             (1UL << 6),    /* GASup  */
-                             4);
+    feature_report = (48UL << 30) | /* HATS   */
+                     (48UL << 28) | /* GATS   */
+                     (1UL << 2)   | /* GTSup  */
+                     (1UL << 6);    /* GASup  */
+    if (s->xtsup) {
+        feature_report |= (1UL << 0); /* XTSup */
+    }
+    build_append_int_noprefix(table_data, feature_report, 4);
 
     /* IVHD entries as found above */
     g_array_append_vals(table_data, ivhd_blob->data, ivhd_blob->len);
-    g_array_free(ivhd_blob, TRUE);
 
-    /*
-     * Add a special IVHD device type.
-     * Refer to spec - Table 95: IVHD device entry type codes
-     *
-     * Linux IOMMU driver checks for the special IVHD device (type IO-APIC).
-     * See Linux kernel commit 'c2ff5cf5294bcbd7fa50f7d860e90a66db7e5059'
-     */
-    if (x86_iommu_ir_supported(x86_iommu_get_default())) {
-        build_append_int_noprefix(table_data,
-                                 (0x1ull << 56) |           /* type IOAPIC */
-                                 (IOAPIC_SB_DEVID << 40) |  /* IOAPIC devid */
-                                 0x48,                      /* special device */
-                                 8);
-    }
+   /* IVHD definition - type 11h */
+    build_append_int_noprefix(table_data, 0x11, 1);
+    /* virtualization flags */
+    build_append_int_noprefix(table_data,
+                             (1UL << 0) | /* HtTunEn      */
+                             (1UL << 4),  /* iotblSup     */
+                             1);
+
+    /* IVHD length */
+    build_append_int_noprefix(table_data, ivhd_blob->len + 40, 2);
+    /* DeviceID */
+    build_append_int_noprefix(table_data,
+                              object_property_get_int(OBJECT(&s->pci), "addr",
+                                                      &error_abort), 2);
+    /* Capability offset */
+    build_append_int_noprefix(table_data, s->pci.capab_offset, 2);
+    /* IOMMU base address */
+    build_append_int_noprefix(table_data, s->mmio.addr, 8);
+    /* PCI Segment Group */
+    build_append_int_noprefix(table_data, 0, 2);
+    /* IOMMU info */
+    build_append_int_noprefix(table_data, 0, 2);
+    /* IOMMU Attributes */
+    build_append_int_noprefix(table_data, 0, 4);
+    /* EFR Register Image */
+    build_append_int_noprefix(table_data,
+                              amdvi_extended_feature_register(s),
+                              8);
+    /* EFR Register Image 2 */
+    build_append_int_noprefix(table_data, 0, 8);
+
+    /* IVHD entries as found above */
+    g_array_append_vals(table_data, ivhd_blob->data, ivhd_blob->len);
+
+    g_array_free(ivhd_blob, TRUE);
     acpi_table_end(linker, &table);
 }
 
@@ -2697,7 +2721,7 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
                         " migration may not work",
                         tables_blob->len, legacy_table_size);
             error_printf("Try removing CPUs, NUMA nodes, memory slots"
-                         " or PCI bridges.");
+                         " or PCI bridges.\n");
         }
         g_array_set_size(tables_blob, legacy_table_size);
     } else {
@@ -2709,7 +2733,7 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
                         " migration may not work",
                         tables_blob->len, ACPI_BUILD_TABLE_SIZE / 2);
             error_printf("Try removing CPUs, NUMA nodes, memory slots"
-                         " or PCI bridges.");
+                         " or PCI bridges.\n");
         }
         acpi_align_size(tables_blob, ACPI_BUILD_TABLE_SIZE);
     }
@@ -2770,7 +2794,7 @@ static const VMStateDescription vmstate_acpi_build = {
     .name = "acpi_build",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8(patched, AcpiBuildState),
         VMSTATE_END_OF_LIST()
     },

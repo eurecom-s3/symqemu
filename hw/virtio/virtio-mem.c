@@ -605,8 +605,7 @@ static int virtio_mem_set_block_state(VirtIOMEM *vmem, uint64_t start_gpa,
         int fd = memory_region_get_fd(&vmem->memdev->mr);
         Error *local_err = NULL;
 
-        qemu_prealloc_mem(fd, area, size, 1, NULL, &local_err);
-        if (local_err) {
+        if (!qemu_prealloc_mem(fd, area, size, 1, NULL, false, &local_err)) {
             static bool warned;
 
             /*
@@ -1249,8 +1248,7 @@ static int virtio_mem_prealloc_range_cb(VirtIOMEM *vmem, void *arg,
     int fd = memory_region_get_fd(&vmem->memdev->mr);
     Error *local_err = NULL;
 
-    qemu_prealloc_mem(fd, area, size, 1, NULL, &local_err);
-    if (local_err) {
+    if (!qemu_prealloc_mem(fd, area, size, 1, NULL, false, &local_err)) {
         error_report_err(local_err);
         return -ENOMEM;
     }
@@ -1370,7 +1368,7 @@ static const VMStateDescription vmstate_virtio_mem_sanity_checks = {
     .name = "virtio-mem-device/sanity-checks",
     .pre_save = virtio_mem_mig_sanity_checks_pre_save,
     .post_load = virtio_mem_mig_sanity_checks_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(addr, VirtIOMEMMigSanityChecks),
         VMSTATE_UINT64(region_size, VirtIOMEMMigSanityChecks),
         VMSTATE_UINT64(block_size, VirtIOMEMMigSanityChecks),
@@ -1393,7 +1391,7 @@ static const VMStateDescription vmstate_virtio_mem_device = {
     .version_id = 1,
     .priority = MIG_PRI_VIRTIO_MEM,
     .post_load = virtio_mem_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_WITH_TMP_TEST(VirtIOMEM, virtio_mem_vmstate_field_exists,
                               VirtIOMEMMigSanityChecks,
                               vmstate_virtio_mem_sanity_checks),
@@ -1423,7 +1421,7 @@ static const VMStateDescription vmstate_virtio_mem_device_early = {
     .version_id = 1,
     .early_setup = true,
     .post_load = virtio_mem_post_load_early,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_WITH_TMP(VirtIOMEM, VirtIOMEMMigSanityChecks,
                          vmstate_virtio_mem_sanity_checks),
         VMSTATE_UINT64(size, VirtIOMEM),
@@ -1436,7 +1434,7 @@ static const VMStateDescription vmstate_virtio_mem = {
     .name = "virtio-mem",
     .minimum_version_id = 1,
     .version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_VIRTIO_DEVICE,
         VMSTATE_END_OF_LIST()
     },

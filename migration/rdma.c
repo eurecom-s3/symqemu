@@ -3357,7 +3357,7 @@ static int qemu_rdma_accept(RDMAContext *rdma)
         goto err_rdma_dest_wait;
     }
 
-    isock->host = rdma->host;
+    isock->host = g_strdup(rdma->host);
     isock->port = g_strdup_printf("%d", rdma->port);
 
     /*
@@ -4039,7 +4039,6 @@ static void rdma_accept_incoming_migration(void *opaque)
 {
     RDMAContext *rdma = opaque;
     QEMUFile *f;
-    Error *local_err = NULL;
 
     trace_qemu_rdma_accept_incoming_migration();
     if (qemu_rdma_accept(rdma) < 0) {
@@ -4061,10 +4060,7 @@ static void rdma_accept_incoming_migration(void *opaque)
     }
 
     rdma->migration_started_on_destination = 1;
-    migration_fd_process_incoming(f, &local_err);
-    if (local_err) {
-        error_reportf_err(local_err, "RDMA ERROR:");
-    }
+    migration_fd_process_incoming(f);
 }
 
 void rdma_start_incoming_migration(InetSocketAddress *host_port,

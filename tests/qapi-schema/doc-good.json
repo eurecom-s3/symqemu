@@ -3,11 +3,15 @@
 #
 # Positive QAPI doc comment tests
 
-{ 'pragma': { 'doc-required': true } }
+{ 'pragma': {
+    'doc-required': true,
+    'documentation-exceptions': [ 'Enum', 'Variant1', 'Alternate', 'cmd' ] } }
 
 ##
 # = Section
-#
+##
+
+##
 # == Subsection
 #
 # *with emphasis*
@@ -73,8 +77,8 @@
 # @Base:
 #
 # @base1:
-# description starts on a new line,
-# not indented
+#  description starts on a new line,
+#  minimally indented
 ##
 { 'struct': 'Base', 'data': { 'base1': 'Enum' },
   'if': { 'all': ['IFALL1', 'IFALL2'] } }
@@ -150,22 +154,31 @@
 # Features:
 # @cmd-feat1: a feature
 # @cmd-feat2: another feature
+#
 # Note: @arg3 is undocumented
+#
 # Returns: @Object
+#
+# Errors: some
+#
 # TODO: frobnicate
+#
 # Notes:
 #
-# - Lorem ipsum dolor sit amet
-# - Ut enim ad minim veniam
+#  - Lorem ipsum dolor sit amet
+#  - Ut enim ad minim veniam
 #
-# Duis aute irure dolor
+#  Duis aute irure dolor
+#
 # Example:
 #
-# -> in
-# <- out
+#  -> in
+#  <- out
+#
 # Examples:
-# - *verbatim*
-# - {braces}
+#  - *verbatim*
+#  - {braces}
+#
 # Since: 2.10
 ##
 { 'command': 'cmd',
@@ -176,14 +189,16 @@
 ##
 # @cmd-boxed:
 # If you're bored enough to read this, go see a video of boxed cats
+#
 # Features:
 # @cmd-feat1: a feature
 # @cmd-feat2: another feature
+#
 # Example:
 #
-# -> in
+#  -> in
 #
-# <- out
+#  <- out
 ##
 { 'command': 'cmd-boxed', 'boxed': true,
   'data': 'Object',

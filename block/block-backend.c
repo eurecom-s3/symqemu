@@ -44,7 +44,7 @@ struct BlockBackend {
     char *name;
     int refcnt;
     BdrvChild *root;
-    AioContext *ctx;
+    AioContext *ctx; /* access with atomic operations only */
     DriveInfo *legacy_dinfo;    /* null unless created by drive_new() */
     QTAILQ_ENTRY(BlockBackend) link;         /* for block_backends */
     QTAILQ_ENTRY(BlockBackend) monitor_link; /* for monitor_block_backends */
@@ -390,8 +390,6 @@ BlockBackend *blk_new(AioContext *ctx, uint64_t perm, uint64_t shared_perm)
  * Both sets of permissions can be changed later using blk_set_perm().
  *
  * Return the new BlockBackend on success, null on failure.
- *
- * Callers must hold the AioContext lock of @bs.
  */
 BlockBackend *blk_new_with_bs(BlockDriverState *bs, uint64_t perm,
                               uint64_t shared_perm, Error **errp)
@@ -416,8 +414,6 @@ BlockBackend *blk_new_with_bs(BlockDriverState *bs, uint64_t perm,
  * Just as with bdrv_open(), after having called this function the reference to
  * @options belongs to the block layer (even on failure).
  *
- * Called without holding an AioContext lock.
- *
  * TODO: Remove @filename and @flags; it should be possible to specify a whole
  * BDS tree just by specifying the @options QDict (or @reference,
  * alternatively). At the time of adding this function, this is not possible,
@@ -429,7 +425,6 @@ BlockBackend *blk_new_open(const char *filename, const char *reference,
 {
     BlockBackend *blk;
     BlockDriverState *bs;
-    AioContext *ctx;
     uint64_t perm = 0;
     uint64_t shared = BLK_PERM_ALL;
 
@@ -459,23 +454,18 @@ BlockBackend *blk_new_open(const char *filename, const char *reference,
         shared = BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE_UNCHANGED;
     }
 
-    aio_context_acquire(qemu_get_aio_context());
     bs = bdrv_open(filename, reference, options, flags, errp);
-    aio_context_release(qemu_get_aio_context());
     if (!bs) {
         return NULL;
     }
 
     /* bdrv_open() could have moved bs to a different AioContext */
-    ctx = bdrv_get_aio_context(bs);
     blk = blk_new(bdrv_get_aio_context(bs), perm, shared);
     blk->perm = perm;
     blk->shared_perm = shared;
 
-    aio_context_acquire(ctx);
     blk_insert_bs(blk, bs, errp);
     bdrv_unref(bs);
-    aio_context_release(ctx);
 
     if (!blk->root) {
         blk_unref(blk);
@@ -577,13 +567,9 @@ void blk_remove_all_bs(void)
     GLOBAL_STATE_CODE();
 
     while ((blk = blk_all_next(blk)) != NULL) {
-        AioContext *ctx = blk_get_aio_context(blk);
-
-        aio_context_acquire(ctx);
         if (blk->root) {
             blk_remove_bs(blk);
         }
-        aio_context_release(ctx);
     }
 }
 
@@ -613,13 +599,13 @@ BlockDriverState *bdrv_next(BdrvNextIterator *it)
     /* Must be called from the main loop */
     assert(qemu_get_current_aio_context() == qemu_get_aio_context());
 
+    old_bs = it->bs;
+
     /* First, return all root nodes of BlockBackends. In order to avoid
      * returning a BDS twice when multiple BBs refer to it, we only return it
      * if the BB is the first one in the parent list of the BDS. */
     if (it->phase == BDRV_NEXT_BACKEND_ROOTS) {
         BlockBackend *old_blk = it->blk;
-
-        old_bs = old_blk ? blk_bs(old_blk) : NULL;
 
         do {
             it->blk = blk_all_next(it->blk);
@@ -634,11 +620,10 @@ BlockDriverState *bdrv_next(BdrvNextIterator *it)
         if (bs) {
             bdrv_ref(bs);
             bdrv_unref(old_bs);
+            it->bs = bs;
             return bs;
         }
         it->phase = BDRV_NEXT_MONITOR_OWNED;
-    } else {
-        old_bs = it->bs;
     }
 
     /* Then return the monitor-owned BDSes without a BB attached. Ignore all
@@ -678,13 +663,10 @@ void bdrv_next_cleanup(BdrvNextIterator *it)
     /* Must be called from the main loop */
     assert(qemu_get_current_aio_context() == qemu_get_aio_context());
 
-    if (it->phase == BDRV_NEXT_BACKEND_ROOTS) {
-        if (it->blk) {
-            bdrv_unref(blk_bs(it->blk));
-            blk_unref(it->blk);
-        }
-    } else {
-        bdrv_unref(it->bs);
+    bdrv_unref(it->bs);
+
+    if (it->phase == BDRV_NEXT_BACKEND_ROOTS && it->blk) {
+        blk_unref(it->blk);
     }
 
     bdrv_next_reset(it);
@@ -882,14 +864,11 @@ BlockBackend *blk_by_public(BlockBackendPublic *public)
 
 /*
  * Disassociates the currently associated BlockDriverState from @blk.
- *
- * The caller must hold the AioContext lock for the BlockBackend.
  */
 void blk_remove_bs(BlockBackend *blk)
 {
     ThrottleGroupMember *tgm = &blk->public.throttle_group_member;
     BdrvChild *root;
-    AioContext *ctx;
 
     GLOBAL_STATE_CODE();
 
@@ -919,30 +898,26 @@ void blk_remove_bs(BlockBackend *blk)
     root = blk->root;
     blk->root = NULL;
 
-    ctx = bdrv_get_aio_context(root->bs);
-    bdrv_graph_wrlock(root->bs);
+    bdrv_graph_wrlock();
     bdrv_root_unref_child(root);
-    bdrv_graph_wrunlock_ctx(ctx);
+    bdrv_graph_wrunlock();
 }
 
 /*
  * Associates a new BlockDriverState with @blk.
- *
- * Callers must hold the AioContext lock of @bs.
  */
 int blk_insert_bs(BlockBackend *blk, BlockDriverState *bs, Error **errp)
 {
     ThrottleGroupMember *tgm = &blk->public.throttle_group_member;
-    AioContext *ctx = bdrv_get_aio_context(bs);
 
     GLOBAL_STATE_CODE();
     bdrv_ref(bs);
-    bdrv_graph_wrlock(bs);
+    bdrv_graph_wrlock();
     blk->root = bdrv_root_attach_child(bs, "root", &child_root,
                                        BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
                                        blk->perm, blk->shared_perm,
                                        blk, errp);
-    bdrv_graph_wrunlock_ctx(ctx);
+    bdrv_graph_wrunlock();
     if (blk->root == NULL) {
         return -EPERM;
     }
@@ -2435,22 +2410,22 @@ void blk_op_unblock_all(BlockBackend *blk, Error *reason)
     }
 }
 
+/**
+ * Return BB's current AioContext.  Note that this context may change
+ * concurrently at any time, with one exception: If the BB has a root node
+ * attached, its context will only change through bdrv_try_change_aio_context(),
+ * which creates a drained section.  Therefore, incrementing such a BB's
+ * in-flight counter will prevent its context from changing.
+ */
 AioContext *blk_get_aio_context(BlockBackend *blk)
 {
-    BlockDriverState *bs;
     IO_CODE();
 
     if (!blk) {
         return qemu_get_aio_context();
     }
 
-    bs = blk_bs(blk);
-    if (bs) {
-        AioContext *ctx = bdrv_get_aio_context(blk_bs(blk));
-        assert(ctx == blk->ctx);
-    }
-
-    return blk->ctx;
+    return qatomic_read(&blk->ctx);
 }
 
 int blk_set_aio_context(BlockBackend *blk, AioContext *new_context,
@@ -2463,7 +2438,7 @@ int blk_set_aio_context(BlockBackend *blk, AioContext *new_context,
     GLOBAL_STATE_CODE();
 
     if (!bs) {
-        blk->ctx = new_context;
+        qatomic_set(&blk->ctx, new_context);
         return 0;
     }
 
@@ -2492,7 +2467,7 @@ static void blk_root_set_aio_ctx_commit(void *opaque)
     AioContext *new_context = s->new_ctx;
     ThrottleGroupMember *tgm = &blk->public.throttle_group_member;
 
-    blk->ctx = new_context;
+    qatomic_set(&blk->ctx, new_context);
     if (tgm->throttle_state) {
         throttle_group_detach_aio_context(tgm);
         throttle_group_attach_aio_context(tgm, new_context);
@@ -2739,20 +2714,16 @@ int blk_commit_all(void)
     GRAPH_RDLOCK_GUARD_MAINLOOP();
 
     while ((blk = blk_all_next(blk)) != NULL) {
-        AioContext *aio_context = blk_get_aio_context(blk);
         BlockDriverState *unfiltered_bs = bdrv_skip_filters(blk_bs(blk));
 
-        aio_context_acquire(aio_context);
         if (blk_is_inserted(blk) && bdrv_cow_child(unfiltered_bs)) {
             int ret;
 
             ret = bdrv_commit(unfiltered_bs);
             if (ret < 0) {
-                aio_context_release(aio_context);
                 return ret;
             }
         }
-        aio_context_release(aio_context);
     }
     return 0;
 }

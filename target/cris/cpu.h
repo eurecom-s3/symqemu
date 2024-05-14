@@ -260,10 +260,6 @@ enum {
 
 /* MMU modes definitions */
 #define MMU_USER_IDX 1
-static inline int cpu_mmu_index (CPUCRISState *env, bool ifetch)
-{
-	return !!(env->pregs[PR_CCS] & U_FLAG);
-}
 
 /* Support function regs.  */
 #define SFR_RW_GC_CFG      0][0
@@ -286,8 +282,5 @@ static inline void cpu_get_tb_cpu_state(CPUCRISState *env, vaddr *pc,
             (env->pregs[PR_CCS] & (S_FLAG | P_FLAG | U_FLAG
 				     | X_FLAG | PFIX_FLAG));
 }
-
-#define cpu_list cris_cpu_list
-void cris_cpu_list(void);
 
 #endif

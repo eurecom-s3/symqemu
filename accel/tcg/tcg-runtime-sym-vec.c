@@ -96,10 +96,26 @@ static void *build_expression_for_vector_vector_op(
         uint64_t vector_size, uint64_t vece,
         void *(*symbolic_operation)(void *, void *)
 ) {
-    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
     uint64_t element_size = vece_element_size(vece);
-    g_assert(element_size <= vector_size);
+
     g_assert(vector_size % element_size == 0);
+    uint64_t element_count = vector_size / element_size;
+
+    static void** arg1_elts      = NULL;
+    static void** arg2_elts      = NULL;
+
+    static uint64_t arg_len = 0;
+
+    uint64_t arg_len_required = element_count * sizeof(void*);
+    if (arg_len < arg_len_required) {
+        arg1_elts = g_realloc(arg1_elts, arg_len_required);
+        arg2_elts = g_realloc(arg2_elts, arg_len_required);
+
+        arg_len = arg_len_required;
+    }
+
+    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
+    g_assert(element_size <= vector_size);
 
     if (arg1_symbolic == NULL && arg2_symbolic == NULL) {
         return NULL;
@@ -116,13 +132,10 @@ static void *build_expression_for_vector_vector_op(
     g_assert(_sym_bits_helper(arg1_symbolic) == _sym_bits_helper(arg2_symbolic) &&
              _sym_bits_helper(arg1_symbolic) == vector_size);
 
-    uint64_t element_count = vector_size / element_size;
-    void *arg1_elements[element_count];
-    void *arg2_elements[element_count];
-    split_expression(arg1_symbolic, element_count, element_size, arg1_elements);
-    split_expression(arg2_symbolic, element_count, element_size, arg2_elements);
+    split_expression(arg1_symbolic, element_count, element_size, arg1_elts);
+    split_expression(arg2_symbolic, element_count, element_size, arg2_elts);
 
-    void *result = apply_op_and_merge(symbolic_operation, arg1_elements, arg2_elements, element_count);
+    void *result = apply_op_and_merge(symbolic_operation, arg1_elts, arg2_elts, element_count);
     g_assert(_sym_bits_helper(result) == vector_size);
     return result;
 }
@@ -150,10 +163,26 @@ build_expression_for_vector_int32_op(
         uint64_t vector_size, uint64_t vece,
         void *(*symbolic_operation)(void *, void *)
 ) {
-    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
     uint64_t element_size = vece_element_size(vece);
-    g_assert(element_size <= vector_size);
+
     g_assert(vector_size % element_size == 0);
+    uint64_t element_count = vector_size / element_size;
+
+    static void** arg1_elts      = NULL;
+    static void** arg2_elts      = NULL;
+
+    static uint64_t arg_len = 0;
+
+    uint64_t arg_len_required = element_count * sizeof(void*);
+    if (arg_len < arg_len_required) {
+        arg1_elts = g_realloc(arg1_elts, arg_len_required);
+        arg2_elts = g_realloc(arg2_elts, arg_len_required);
+
+        arg_len = arg_len_required;
+    }
+
+    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
+    g_assert(element_size <= vector_size);
 
     if (arg1_symbolic == NULL && arg2_symbolic == NULL) {
         return NULL;
@@ -174,15 +203,12 @@ build_expression_for_vector_int32_op(
         arg2_symbolic = _sym_build_zext(arg2_symbolic, element_size - 32);
     }
 
-    uint64_t element_count = vector_size / element_size;
-    void *arg1_elements[element_count];
-    void *arg2_elements[element_count];
-    split_expression(arg1_symbolic, element_count, element_size, arg1_elements);
+    split_expression(arg1_symbolic, element_count, element_size, arg1_elts);
     for (uint64_t i = 0; i < element_count; i++) {
-        arg2_elements[i] = arg2_symbolic;
+        arg2_elts[i] = arg2_symbolic;
     }
 
-    void *result = apply_op_and_merge(symbolic_operation, arg1_elements, arg2_elements, element_count);
+    void *result = apply_op_and_merge(symbolic_operation, arg1_elts, arg2_elts, element_count);
     g_assert(_sym_bits_helper(result) == vector_size);
     return result;
 }
@@ -390,8 +416,25 @@ void *HELPER(sym_cmp_vec)(
         /* TCGCond */ uint32_t comparison_operator, void *result_concrete,
         uint64_t vector_size, uint64_t vece
 ) {
-    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
     uint64_t element_size = vece_element_size(vece);
+
+    g_assert(vector_size % element_size == 0);
+    uint64_t element_count = vector_size / element_size;
+
+    static void** arg1_elts      = NULL;
+    static void** arg2_elts      = NULL;
+
+    static uint64_t arg_len = 0;
+
+    uint64_t arg_len_required = element_count * sizeof(void*);
+    if (arg_len < arg_len_required) {
+        arg1_elts = g_realloc(arg1_elts, arg_len_required);
+        arg2_elts = g_realloc(arg2_elts, arg_len_required);
+
+        arg_len = arg_len_required;
+    }
+
+    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
     g_assert(element_size <= vector_size);
     g_assert(vector_size % element_size == 0);
 
@@ -410,13 +453,8 @@ void *HELPER(sym_cmp_vec)(
     g_assert(_sym_bits_helper(arg1_symbolic) == _sym_bits_helper(arg2_symbolic) &&
              _sym_bits_helper(arg1_symbolic) == vector_size);
 
-    uint64_t element_count = vector_size / element_size;
-
-    void *arg1_elements[element_count];
-    void *arg2_elements[element_count];
-
-    split_expression(arg1_symbolic, element_count, element_size, arg1_elements);
-    split_expression(arg2_symbolic, element_count, element_size, arg2_elements);
+    split_expression(arg1_symbolic, element_count, element_size, arg1_elts);
+    split_expression(arg2_symbolic, element_count, element_size, arg2_elts);
 
     for (uint64_t i = 0; i < element_count; i++) {
         /* For each element, the comparison was true iff the element of the result is equal to -1.
@@ -424,8 +462,8 @@ void *HELPER(sym_cmp_vec)(
         uint8_t is_taken = *(uint8_t *) element_address(result_concrete, i, element_size, vector_size);
         build_and_push_path_constraint(
                 env,
-                arg1_elements[i],
-                arg2_elements[i],
+                arg1_elts[i],
+                arg2_elts[i],
                 comparison_operator,
                 is_taken
         );
@@ -471,10 +509,38 @@ void *HELPER(sym_ternary_vec)(
         /* TCGCond */ uint32_t comparison_operator, void *concrete_result,
         uint64_t vector_size, uint64_t vece
 ) {
-    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
     uint64_t element_size = vece_element_size(vece);
-    g_assert(element_size <= vector_size);
+
     g_assert(vector_size % element_size == 0);
+    uint64_t element_count = vector_size / element_size;
+
+    static void** arg1_elts      = NULL;
+    static void** arg2_elts      = NULL;
+
+    /* For each element, the condition of the ternary was true iff the element of the result is equal to the element
+     * of arg1. */
+    static int* concrete_condition_was_true = NULL;
+
+    static uint64_t arg_len = 0;
+    static uint64_t concrete_condition_len = 0;
+
+    uint64_t arg_len_required = element_count * sizeof(void*);
+    if (arg_len < arg_len_required) {
+        arg1_elts = g_realloc(arg1_elts, arg_len_required);
+        arg2_elts = g_realloc(arg2_elts, arg_len_required);
+
+        arg_len = arg_len_required;
+    }
+
+    uint64_t concrete_condition_len_required = element_count * sizeof(int);
+    if (concrete_condition_len < concrete_condition_len_required) {
+        concrete_condition_was_true = g_realloc(concrete_condition_was_true, concrete_condition_len_required);
+
+        concrete_condition_len = concrete_condition_len_required;
+    }
+
+    g_assert(vector_size == 64 || vector_size == 128 || vector_size == 256);
+    g_assert(element_size <= vector_size);
 
     if (arg1_symbolic == NULL && arg2_symbolic == NULL) {
         return NULL;
@@ -491,17 +557,8 @@ void *HELPER(sym_ternary_vec)(
     g_assert(_sym_bits_helper(arg1_symbolic) == _sym_bits_helper(arg2_symbolic) &&
              _sym_bits_helper(arg1_symbolic) == vector_size);
 
-    uint64_t element_count = vector_size / element_size;
-
-    void *arg1_elements[element_count];
-    void *arg2_elements[element_count];
-
-    split_expression(arg1_symbolic, element_count, element_size, arg1_elements);
-    split_expression(arg2_symbolic, element_count, element_size, arg2_elements);
-
-    /* For each element, the condition of the ternary was true iff the element of the result is equal to the element
-     * of arg1. */
-    int concrete_condition_was_true[element_count];
+    split_expression(arg1_symbolic, element_count, element_size, arg1_elts);
+    split_expression(arg2_symbolic, element_count, element_size, arg2_elts);
 
     for (int i = 0; i < element_count; i++) {
         void *result_element_ptr = element_address(concrete_result, i, element_size, vector_size);
@@ -512,16 +569,16 @@ void *HELPER(sym_ternary_vec)(
     for (int i = 0; i < element_count; i++) {
         build_and_push_path_constraint(
                 env,
-                arg1_elements[i],
-                arg2_elements[i],
+                arg1_elts[i],
+                arg2_elts[i],
                 comparison_operator,
                 concrete_condition_was_true[i]
         );
     }
 
-    void *result_expression = concrete_condition_was_true[0] ? arg1_elements[0] : arg2_elements[0];
+    void *result_expression = concrete_condition_was_true[0] ? arg1_elts[0] : arg2_elts[0];
     for (int i = 1; i < element_count; i++) {
-        result_expression = _sym_concat_helper(concrete_condition_was_true[i] ? arg1_elements[i] : arg2_elements[i],
+        result_expression = _sym_concat_helper(concrete_condition_was_true[i] ? arg1_elts[i] : arg2_elts[i],
                                                result_expression);
     }
 

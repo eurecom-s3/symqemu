@@ -15,20 +15,20 @@
 #
 # @elf: elf format
 #
-# @kdump-zlib: makedumpfile flattened, kdump-compressed format with zlib
-#     compression
+# @kdump-zlib: makedumpfile flattened, kdump-compressed format with
+#     zlib compression
 #
 # @kdump-lzo: makedumpfile flattened, kdump-compressed format with lzo
 #     compression
 #
-# @kdump-snappy: makedumpfile flattened, kdump-compressed format with snappy
-#     compression
+# @kdump-snappy: makedumpfile flattened, kdump-compressed format with
+#     snappy compression
 #
-# @kdump-raw-zlib: raw assembled kdump-compressed format with zlib compression
-#     (since 8.2)
+# @kdump-raw-zlib: raw assembled kdump-compressed format with zlib
+#     compression (since 8.2)
 #
-# @kdump-raw-lzo: raw assembled kdump-compressed format with lzo compression
-#     (since 8.2)
+# @kdump-raw-lzo: raw assembled kdump-compressed format with lzo
+#     compression (since 8.2)
 #
 # @kdump-raw-snappy: raw assembled kdump-compressed format with snappy
 #     compression (since 8.2)
@@ -77,7 +77,7 @@
 #
 # @detach: if true, QMP will return immediately rather than waiting
 #     for the dump to finish.  The user can track progress using
-#     "query-dump". (since 2.6).
+#     "query-dump".  (since 2.6).
 #
 # @begin: if specified, the starting physical address.
 #
@@ -92,15 +92,13 @@
 #
 # Note: All boolean arguments default to false
 #
-# Returns: nothing on success
-#
 # Since: 1.2
 #
 # Example:
 #
-# -> { "execute": "dump-guest-memory",
-#      "arguments": { "paging": false, "protocol": "fd:dump" } }
-# <- { "return": {} }
+#     -> { "execute": "dump-guest-memory",
+#          "arguments": { "paging": false, "protocol": "fd:dump" } }
+#     <- { "return": {} }
 ##
 { 'command': 'dump-guest-memory',
   'data': { 'paging': 'bool', 'protocol': 'str', '*detach': 'bool',
@@ -154,9 +152,9 @@
 #
 # Example:
 #
-# -> { "execute": "query-dump" }
-# <- { "return": { "status": "active", "completed": 1024000,
-#                  "total": 2048000 } }
+#     -> { "execute": "query-dump" }
+#     <- { "return": { "status": "active", "completed": 1024000,
+#                      "total": 2048000 } }
 ##
 { 'command': 'query-dump', 'returns': 'DumpQueryResult' }
 
@@ -175,10 +173,10 @@
 #
 # Example:
 #
-# <- { "event": "DUMP_COMPLETED",
-#      "data": { "result": { "total": 1090650112, "status": "completed",
-#                            "completed": 1090650112 } },
-#      "timestamp": { "seconds": 1648244171, "microseconds": 950316 } }
+#     <- { "event": "DUMP_COMPLETED",
+#          "data": { "result": { "total": 1090650112, "status": "completed",
+#                                "completed": 1090650112 } },
+#          "timestamp": { "seconds": 1648244171, "microseconds": 950316 } }
 ##
 { 'event': 'DUMP_COMPLETED' ,
   'data': { 'result': 'DumpQueryResult', '*error': 'str' } }
@@ -186,7 +184,7 @@
 ##
 # @DumpGuestMemoryCapability:
 #
-# A list of the available formats for dump-guest-memory
+# @formats: the available formats for dump-guest-memory
 #
 # Since: 2.0
 ##
@@ -206,9 +204,9 @@
 #
 # Example:
 #
-# -> { "execute": "query-dump-guest-memory-capability" }
-# <- { "return": { "formats":
-#                  ["elf", "kdump-zlib", "kdump-lzo", "kdump-snappy"] } }
+#     -> { "execute": "query-dump-guest-memory-capability" }
+#     <- { "return": { "formats":
+#                      ["elf", "kdump-zlib", "kdump-lzo", "kdump-snappy"] } }
 ##
 { 'command': 'query-dump-guest-memory-capability',
   'returns': 'DumpGuestMemoryCapability' }

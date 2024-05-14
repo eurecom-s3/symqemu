@@ -486,14 +486,14 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
     int i, err = 0;
 #if defined(TARGET_PPC64)
     struct target_sigcontext *sc = 0;
-    struct image_info *image = ((TaskState *)thread_cpu->opaque)->info;
+    struct image_info *image = get_task_state(thread_cpu)->info;
 #endif
 
     rt_sf_addr = get_sigframe(ka, env, sizeof(*rt_sf));
     if (!lock_user_struct(VERIFY_WRITE, rt_sf, rt_sf_addr, 1))
         goto sigsegv;
 
-    tswap_siginfo(&rt_sf->info, info);
+    rt_sf->info = *info;
 
     __put_user(0, &rt_sf->uc.tuc_flags);
     __put_user(0, &rt_sf->uc.tuc_link);
@@ -502,7 +502,7 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
     __put_user(h2g (&rt_sf->uc.tuc_mcontext),
                &rt_sf->uc.tuc_regs);
 #endif
-    for(i = 0; i < TARGET_NSIG_WORDS; i++) {
+    for (i = 0; i < TARGET_NSIG_WORDS; i++) {
         __put_user(set->sig[i], &rt_sf->uc.tuc_sigmask.sig[i]);
     }
 
@@ -673,7 +673,7 @@ abi_long do_swapcontext(CPUArchState *env, abi_ulong uold_ctx,
     }
 
     if (uold_ctx) {
-        TaskState *ts = (TaskState *)thread_cpu->opaque;
+        TaskState *ts = get_task_state(thread_cpu);
 
         if (!lock_user_struct(VERIFY_WRITE, uctx, uold_ctx, 1)) {
             return -TARGET_EFAULT;

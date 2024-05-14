@@ -47,7 +47,7 @@ void ppc_set_irq(PowerPCCPU *cpu, int irq, int level)
     unsigned int old_pending;
 
     /* We may already have the BQL if coming from the reset path */
-    QEMU_IOTHREAD_LOCK_GUARD();
+    BQL_LOCK_GUARD();
 
     old_pending = env->pending_interrupts;
 
@@ -314,7 +314,7 @@ void store_40x_dbcr0(CPUPPCState *env, uint32_t val)
 {
     PowerPCCPU *cpu = env_archcpu(env);
 
-    qemu_mutex_lock_iothread();
+    bql_lock();
 
     switch ((val >> 28) & 0x3) {
     case 0x0:
@@ -334,7 +334,7 @@ void store_40x_dbcr0(CPUPPCState *env, uint32_t val)
         break;
     }
 
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
 }
 
 /* PowerPC 40x internal IRQ controller */
@@ -631,6 +631,16 @@ void cpu_ppc_store_atbu (CPUPPCState *env, uint32_t value)
     tb &= 0x00000000FFFFFFFFULL;
     cpu_ppc_store_tb(tb_env, clock, &tb_env->atb_offset,
                      ((uint64_t)value << 32) | tb);
+}
+
+void cpu_ppc_increase_tb_by_offset(CPUPPCState *env, int64_t offset)
+{
+    env->tb_env->tb_offset += offset;
+}
+
+void cpu_ppc_decrease_tb_by_offset(CPUPPCState *env, int64_t offset)
+{
+    env->tb_env->tb_offset -= offset;
 }
 
 uint64_t cpu_ppc_load_vtb(CPUPPCState *env)
@@ -1066,7 +1076,7 @@ const VMStateDescription vmstate_ppc_timebase = {
     .version_id = 1,
     .minimum_version_id = 1,
     .pre_save = timebase_pre_save,
-    .fields      = (VMStateField []) {
+    .fields = (const VMStateField []) {
         VMSTATE_UINT64(guest_timebase, PPCTimebase),
         VMSTATE_INT64(time_of_the_day_ns, PPCTimebase),
         VMSTATE_END_OF_LIST()

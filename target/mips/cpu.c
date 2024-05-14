@@ -89,8 +89,7 @@ static void fpu_dump_state(CPUMIPSState *env, FILE *f, int flags)
 
 static void mips_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 {
-    MIPSCPU *cpu = MIPS_CPU(cs);
-    CPUMIPSState *env = &cpu->env;
+    CPUMIPSState *env = cpu_env(cs);
     int i;
 
     qemu_fprintf(f, "pc=0x" TARGET_FMT_lx " HI=0x" TARGET_FMT_lx
@@ -132,9 +131,7 @@ void cpu_set_exception_base(int vp_index, target_ulong address)
 
 static void mips_cpu_set_pc(CPUState *cs, vaddr value)
 {
-    MIPSCPU *cpu = MIPS_CPU(cs);
-
-    mips_env_set_pc(&cpu->env, value);
+    mips_env_set_pc(cpu_env(cs), value);
 }
 
 static vaddr mips_cpu_get_pc(CPUState *cs)
@@ -146,8 +143,7 @@ static vaddr mips_cpu_get_pc(CPUState *cs)
 
 static bool mips_cpu_has_work(CPUState *cs)
 {
-    MIPSCPU *cpu = MIPS_CPU(cs);
-    CPUMIPSState *env = &cpu->env;
+    CPUMIPSState *env = cpu_env(cs);
     bool has_work = false;
 
     /*
@@ -191,13 +187,18 @@ static bool mips_cpu_has_work(CPUState *cs)
     return has_work;
 }
 
+static int mips_cpu_mmu_index(CPUState *cs, bool ifunc)
+{
+    return mips_env_mmu_index(cpu_env(cs));
+}
+
 #include "cpu-defs.c.inc"
 
 static void mips_cpu_reset_hold(Object *obj)
 {
     CPUState *cs = CPU(obj);
     MIPSCPU *cpu = MIPS_CPU(cs);
-    MIPSCPUClass *mcc = MIPS_CPU_GET_CLASS(cpu);
+    MIPSCPUClass *mcc = MIPS_CPU_GET_CLASS(obj);
     CPUMIPSState *env = &cpu->env;
 
     if (mcc->parent_phases.hold) {
@@ -437,10 +438,7 @@ static void mips_cpu_reset_hold(Object *obj)
 
 static void mips_cpu_disas_set_info(CPUState *s, disassemble_info *info)
 {
-    MIPSCPU *cpu = MIPS_CPU(s);
-    CPUMIPSState *env = &cpu->env;
-
-    if (!(env->insn_flags & ISA_NANOMIPS32)) {
+    if (!(cpu_env(s)->insn_flags & ISA_NANOMIPS32)) {
 #if TARGET_BIG_ENDIAN
         info->print_insn = print_insn_big_mips;
 #else
@@ -560,7 +558,7 @@ static const struct SysemuCPUOps mips_sysemu_ops = {
  * NB: cannot be const, as some elements are changed for specific
  * mips hardware (see hw/mips/jazz.c).
  */
-static const struct TCGCPUOps mips_tcg_ops = {
+static const TCGCPUOps mips_tcg_ops = {
     .initialize = mips_tcg_init,
     .synchronize_from_tb = mips_cpu_synchronize_from_tb,
     .restore_state_to_opc = mips_restore_state_to_opc,
@@ -590,6 +588,7 @@ static void mips_cpu_class_init(ObjectClass *c, void *data)
 
     cc->class_by_name = mips_cpu_class_by_name;
     cc->has_work = mips_cpu_has_work;
+    cc->mmu_index = mips_cpu_mmu_index;
     cc->dump_state = mips_cpu_dump_state;
     cc->set_pc = mips_cpu_set_pc;
     cc->get_pc = mips_cpu_get_pc;

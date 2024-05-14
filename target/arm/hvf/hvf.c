@@ -28,6 +28,8 @@
 #include "arm-powerctl.h"
 #include "target/arm/cpu.h"
 #include "target/arm/internals.h"
+#include "target/arm/multiprocessing.h"
+#include "target/arm/gtimer.h"
 #include "trace/trace-target_arm_hvf.h"
 #include "migration/vmstate.h"
 
@@ -36,7 +38,7 @@
 #define MDSCR_EL1_SS_SHIFT  0
 #define MDSCR_EL1_MDE_SHIFT 15
 
-static uint16_t dbgbcr_regs[] = {
+static const uint16_t dbgbcr_regs[] = {
     HV_SYS_REG_DBGBCR0_EL1,
     HV_SYS_REG_DBGBCR1_EL1,
     HV_SYS_REG_DBGBCR2_EL1,
@@ -54,7 +56,8 @@ static uint16_t dbgbcr_regs[] = {
     HV_SYS_REG_DBGBCR14_EL1,
     HV_SYS_REG_DBGBCR15_EL1,
 };
-static uint16_t dbgbvr_regs[] = {
+
+static const uint16_t dbgbvr_regs[] = {
     HV_SYS_REG_DBGBVR0_EL1,
     HV_SYS_REG_DBGBVR1_EL1,
     HV_SYS_REG_DBGBVR2_EL1,
@@ -72,7 +75,8 @@ static uint16_t dbgbvr_regs[] = {
     HV_SYS_REG_DBGBVR14_EL1,
     HV_SYS_REG_DBGBVR15_EL1,
 };
-static uint16_t dbgwcr_regs[] = {
+
+static const uint16_t dbgwcr_regs[] = {
     HV_SYS_REG_DBGWCR0_EL1,
     HV_SYS_REG_DBGWCR1_EL1,
     HV_SYS_REG_DBGWCR2_EL1,
@@ -90,7 +94,8 @@ static uint16_t dbgwcr_regs[] = {
     HV_SYS_REG_DBGWCR14_EL1,
     HV_SYS_REG_DBGWCR15_EL1,
 };
-static uint16_t dbgwvr_regs[] = {
+
+static const uint16_t dbgwvr_regs[] = {
     HV_SYS_REG_DBGWVR0_EL1,
     HV_SYS_REG_DBGWVR1_EL1,
     HV_SYS_REG_DBGWVR2_EL1,
@@ -1013,7 +1018,7 @@ static void hvf_raise_exception(CPUState *cpu, uint32_t excp,
 
 static void hvf_psci_cpu_off(ARMCPU *arm_cpu)
 {
-    int32_t ret = arm_set_cpu_off(arm_cpu->mp_affinity);
+    int32_t ret = arm_set_cpu_off(arm_cpu_mp_affinity(arm_cpu));
     assert(ret == QEMU_ARM_POWERCTL_RET_SUCCESS);
 }
 
@@ -1042,7 +1047,7 @@ static bool hvf_handle_psci_call(CPUState *cpu)
     int32_t ret = 0;
 
     trace_hvf_psci_call(param[0], param[1], param[2], param[3],
-                        arm_cpu->mp_affinity);
+                        arm_cpu_mp_affinity(arm_cpu));
 
     switch (param[0]) {
     case QEMU_PSCI_0_2_FN_PSCI_VERSION:
@@ -1718,9 +1723,9 @@ static void hvf_wait_for_ipi(CPUState *cpu, struct timespec *ts)
      * sleeping.
      */
     qatomic_set_mb(&cpu->thread_kicked, false);
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
     pselect(0, 0, 0, 0, ts, &cpu->accel->unblock_ipi_mask);
-    qemu_mutex_lock_iothread();
+    bql_lock();
 }
 
 static void hvf_wfi(CPUState *cpu)
@@ -1821,7 +1826,7 @@ int hvf_vcpu_exec(CPUState *cpu)
 
     flush_cpu_state(cpu);
 
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
     assert_hvf_ok(hv_vcpu_run(cpu->accel->fd));
 
     /* handle VMEXIT */
@@ -1830,7 +1835,7 @@ int hvf_vcpu_exec(CPUState *cpu)
     uint32_t ec = syn_get_ec(syndrome);
 
     ret = 0;
-    qemu_mutex_lock_iothread();
+    bql_lock();
     switch (exit_reason) {
     case HV_EXIT_REASON_EXCEPTION:
         /* This is the main one, handle below. */
@@ -2010,7 +2015,7 @@ static const VMStateDescription vmstate_hvf_vtimer = {
     .name = "hvf-vtimer",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(vtimer_val, HVFVTimer),
         VMSTATE_END_OF_LIST()
     },
@@ -2241,7 +2246,7 @@ void hvf_arch_update_guest_debug(CPUState *cpu)
     hvf_arch_set_traps();
 }
 
-inline bool hvf_arch_supports_guest_debug(void)
+bool hvf_arch_supports_guest_debug(void)
 {
     return true;
 }

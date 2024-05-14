@@ -40,6 +40,13 @@ extern char **environ;
 
 #include "qemu-os.h"
 /*
+ * TODO: Remove these and rely only on qemu_real_host_page_size().
+ */
+extern uintptr_t qemu_host_page_size;
+extern intptr_t qemu_host_page_mask;
+#define HOST_PAGE_ALIGN(addr) ROUND_UP((addr), qemu_host_page_size)
+
+/*
  * This struct is used to hold certain information about the image.  Basically,
  * it replicates in user space what would be certain task_struct fields in the
  * kernel
@@ -109,6 +116,11 @@ typedef struct TaskState {
     /* This thread's sigaltstack, if it has one */
     struct target_sigaltstack sigaltstack_used;
 } __attribute__((aligned(16))) TaskState;
+
+static inline TaskState *get_task_state(CPUState *cs)
+{
+    return cs->opaque;
+}
 
 void stop_all_tasks(void);
 extern const char *interp_prefix;
@@ -180,7 +192,7 @@ void cpu_loop(CPUArchState *env);
 char *target_strerror(int err);
 int get_osversion(void);
 void fork_start(void);
-void fork_end(int child);
+void fork_end(pid_t pid);
 
 #include "qemu/log.h"
 

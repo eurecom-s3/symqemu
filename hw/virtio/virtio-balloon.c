@@ -31,8 +31,6 @@
 #include "trace.h"
 #include "qemu/error-report.h"
 #include "migration/misc.h"
-#include "migration/migration.h"
-#include "migration/options.h"
 
 #include "hw/virtio/virtio-bus.h"
 #include "hw/virtio/virtio-access.h"
@@ -633,7 +631,8 @@ static void virtio_balloon_free_page_done(VirtIOBalloon *s)
 }
 
 static int
-virtio_balloon_free_page_hint_notify(NotifierWithReturn *n, void *data)
+virtio_balloon_free_page_hint_notify(NotifierWithReturn *n, void *data,
+                                     Error **errp)
 {
     VirtIOBalloon *dev = container_of(n, VirtIOBalloon, free_page_hint_notify);
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
@@ -817,7 +816,7 @@ static const VMStateDescription vmstate_virtio_balloon_free_page_hint = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = virtio_balloon_free_page_support,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(free_page_hint_cmd_id, VirtIOBalloon),
         VMSTATE_UINT32(free_page_hint_status, VirtIOBalloon),
         VMSTATE_END_OF_LIST()
@@ -829,7 +828,7 @@ static const VMStateDescription vmstate_virtio_balloon_page_poison = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = virtio_balloon_page_poison_support,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(poison_val, VirtIOBalloon),
         VMSTATE_END_OF_LIST()
     }
@@ -840,12 +839,12 @@ static const VMStateDescription vmstate_virtio_balloon_device = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = virtio_balloon_post_load_device,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(num_pages, VirtIOBalloon),
         VMSTATE_UINT32(actual, VirtIOBalloon),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription * []) {
+    .subsections = (const VMStateDescription * const []) {
         &vmstate_virtio_balloon_free_page_hint,
         &vmstate_virtio_balloon_page_poison,
         NULL
@@ -996,7 +995,7 @@ static const VMStateDescription vmstate_virtio_balloon = {
     .name = "virtio-balloon",
     .minimum_version_id = 1,
     .version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_VIRTIO_DEVICE,
         VMSTATE_END_OF_LIST()
     },
