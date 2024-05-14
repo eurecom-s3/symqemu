@@ -13,7 +13,7 @@ First of all, make sure the
 [symcc-rt](https://github.com/eurecom-s3/symcc-rt.git) submodule is initialized:
 
 ``` shell
-$ git submodule update --init --recursive subprojects/symcc-rt
+git submodule update --init --recursive subprojects/symcc-rt
 ```
 
 Make sure that QEMU's build dependencies are installed. Most package managers
@@ -23,18 +23,18 @@ or `dnf builddep qemu` on Fedora and CentOS.
 The following invocation is known to work on Ubuntu 22.04 and Arch:
 
 ``` shell
-$ mkdir build
-$ cd build
-$ ../configure                                                    \
-      --audio-drv-list=                                           \
-      --disable-sdl                                               \
-      --disable-gtk                                               \
-      --disable-vte                                               \
-      --disable-opengl                                            \
-      --disable-virglrenderer                                     \
-      --disable-werror                                            \
-      --target-list=x86_64-linux-user
-$ make -j
+mkdir build
+cd build
+../configure                                                    \
+    --audio-drv-list=                                           \
+    --disable-sdl                                               \
+    --disable-gtk                                               \
+    --disable-vte                                               \
+    --disable-opengl                                            \
+    --disable-virglrenderer                                     \
+    --disable-werror                                            \
+    --target-list=x86_64-linux-user
+make -j
 ```
 
 This will build a relatively stripped-down emulator targeting 64-bit x86
