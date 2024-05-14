@@ -18,6 +18,7 @@ RUN apt update && apt install -y \
     libz3-dev \
     libzstd-dev \
     colordiff \
+    xxd \
     wdiff
 
 RUN pip install --user meson
