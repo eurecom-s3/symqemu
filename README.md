@@ -13,7 +13,7 @@ First of all, make sure the
 [symcc-rt](https://github.com/eurecom-s3/symcc-rt.git) submodule is initialized:
 
 ``` shell
-$ git submodule update --init --recursive subprojects/symcc-rt
+git submodule update --init --recursive subprojects/symcc-rt
 ```
 
 Make sure that QEMU's build dependencies are installed. Most package managers
@@ -23,18 +23,18 @@ or `dnf builddep qemu` on Fedora and CentOS.
 The following invocation is known to work on Ubuntu 22.04 and Arch:
 
 ``` shell
-$ mkdir build
-$ cd build
-$ ../configure                                                    \
-      --audio-drv-list=                                           \
-      --disable-sdl                                               \
-      --disable-gtk                                               \
-      --disable-vte                                               \
-      --disable-opengl                                            \
-      --disable-virglrenderer                                     \
-      --disable-werror                                            \
-      --target-list=x86_64-linux-user
-$ make -j
+mkdir build
+cd build
+../configure                                                    \
+    --audio-drv-list=                                           \
+    --disable-sdl                                               \
+    --disable-gtk                                               \
+    --disable-vte                                               \
+    --disable-opengl                                            \
+    --disable-virglrenderer                                     \
+    --disable-werror                                            \
+    --target-list=x86_64-linux-user
+make -j
 ```
 
 This will build a relatively stripped-down emulator targeting 64-bit x86
@@ -97,6 +97,46 @@ docker build -t symqemu .
 You can use the docker with:
 ```shell
 docker run -it --rm symqemu
+```
+
+## Build with Docker Compose
+
+Sometimes, it is more convenient to use docker-compose while developing SymQEMU,
+especially to avoid rebuilding for each change. It can both build `symqemu` and
+`symqemu-dev`.
+
+Beware however, test the container and the host directory will be synchronized:
+each change in the container's source folder will be reflected on the host and
+vice versa (except for the build sub-folder).
+
+A script is available to quickly get docker-compose: `./dev.sh`. Alternatively
+the following commands can be used:
+
+- Build the `symqemu-dev` service:
+```bash
+docker-compose build symqemu-dev
+```
+
+- Start the service:
+```bash
+docker-compose up -d symqemu-dev
+```
+
+- Attach to the container:
+```bash
+docker-compose exec -it symqemu-dev /bin/bash
+```
+
+- Building and testing in one line (configure only needed the first time, it is
+automatically rerun when needed):
+
+```bash
+docker-compose exec -it  symqemu-dev /bin/bash -c "cd build && /configure_symqemu.sh && make -j && make check"
+```
+
+- Running SymQEMU integration tests:
+```bash
+docker-compose exec -it  symqemu-dev /bin/bash -c "cd /symqemu_source/tests/symqemu && python3 -m unittest test.py"
 ```
 
 ## Contributing

@@ -1,5 +1,5 @@
 # prepare machine
-FROM ubuntu:22.04 as builder
+FROM ubuntu:22.04 as base
 
 RUN apt update && apt install -y \
     ninja-build \
@@ -35,20 +35,33 @@ RUN if  [ $LLVM_VERSION -eq 12 ] || [ $LLVM_VERSION -eq 13 ] || [ $LLVM_VERSION 
     else mkdir /llvm && cd  /llvm &&  wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && ./llvm.sh ${LLVM_VERSION};   	\
     fi
 
+RUN <<EOF cat > /configure_symqemu.sh
+../configure                                                    \
+      --audio-drv-list=                                         \
+      --disable-sdl                                             \
+      --disable-gtk                                             \
+      --disable-vte                                             \
+      --disable-opengl                                          \
+      --disable-virglrenderer                                   \
+      --target-list=x86_64-linux-user,riscv64-linux-user        \
+      --enable-debug                                            \
+      --enable-debug-tcg                                        \
+      --symcc-rt-llvm-version="$LLVM_VERSION"                   \
+      --disable-werror
+EOF
+
+RUN chmod u+x /configure_symqemu.sh
+
+FROM base as symqemu-dev
+
+WORKDIR /symqemu_source
+
+FROM base as symqemu
+
 COPY . /symqemu_source
 WORKDIR /symqemu_source
 
-RUN mkdir build && cd build && ../configure                           \
-          --audio-drv-list=                                           \
-          --disable-sdl                                               \
-          --disable-gtk                                               \
-          --disable-vte                                               \
-          --disable-opengl                                            \
-          --disable-virglrenderer                                     \
-          --target-list=x86_64-linux-user,riscv64-linux-user          \
-          --enable-debug                                              \
-          --enable-debug-tcg                                          \
-          --symcc-rt-llvm-version="$LLVM_VERSION"
+RUN mkdir build && cd build && /configure_symqemu.sh
 
 RUN cd build && make -j
 
