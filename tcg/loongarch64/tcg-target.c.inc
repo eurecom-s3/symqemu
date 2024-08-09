@@ -366,8 +366,7 @@ static void tcg_out_movi(TCGContext *s, TCGType type, TCGReg rd,
      * back to the slow path.
      */
 
-    intptr_t pc_offset;
-    tcg_target_long val_lo, val_hi, pc_hi, offset_hi;
+    intptr_t src_rx, pc_offset;
     tcg_target_long hi12, hi32, hi52;
 
     /* Value fits in signed i32.  */
@@ -377,24 +376,23 @@ static void tcg_out_movi(TCGContext *s, TCGType type, TCGReg rd,
     }
 
     /* PC-relative cases.  */
-    pc_offset = tcg_pcrel_diff(s, (void *)val);
-    if (pc_offset == sextreg(pc_offset, 0, 22) && (pc_offset & 3) == 0) {
-        /* Single pcaddu2i.  */
-        tcg_out_opc_pcaddu2i(s, rd, pc_offset >> 2);
-        return;
+    src_rx = (intptr_t)tcg_splitwx_to_rx(s->code_ptr);
+    if ((val & 3) == 0) {
+        pc_offset = val - src_rx;
+        if (pc_offset == sextreg(pc_offset, 0, 22)) {
+            /* Single pcaddu2i.  */
+            tcg_out_opc_pcaddu2i(s, rd, pc_offset >> 2);
+            return;
+        }
     }
 
-    if (pc_offset == (int32_t)pc_offset) {
-        /* Offset within 32 bits; load with pcalau12i + ori.  */
-        val_lo = sextreg(val, 0, 12);
-        val_hi = val >> 12;
-        pc_hi = (val - pc_offset) >> 12;
-        offset_hi = val_hi - pc_hi;
-
-        tcg_debug_assert(offset_hi == sextreg(offset_hi, 0, 20));
-        tcg_out_opc_pcalau12i(s, rd, offset_hi);
+    pc_offset = (val >> 12) - (src_rx >> 12);
+    if (pc_offset == sextreg(pc_offset, 0, 20)) {
+        /* Load with pcalau12i + ori.  */
+        tcg_target_long val_lo = val & 0xfff;
+        tcg_out_opc_pcalau12i(s, rd, pc_offset);
         if (val_lo != 0) {
-            tcg_out_opc_ori(s, rd, rd, val_lo & 0xfff);
+            tcg_out_opc_ori(s, rd, rd, val_lo);
         }
         return;
     }
@@ -808,18 +806,88 @@ static void tcg_out_ldst(TCGContext *s, LoongArchInsn opc, TCGReg data,
     }
 }
 
-static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg arg,
-                       TCGReg arg1, intptr_t arg2)
+static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg dest,
+                       TCGReg base, intptr_t offset)
 {
-    bool is_32bit = type == TCG_TYPE_I32;
-    tcg_out_ldst(s, is_32bit ? OPC_LD_W : OPC_LD_D, arg, arg1, arg2);
+    switch (type) {
+    case TCG_TYPE_I32:
+        if (dest < TCG_REG_V0) {
+            tcg_out_ldst(s, OPC_LD_W, dest, base, offset);
+        } else {
+            tcg_out_dupm_vec(s, TCG_TYPE_I128, MO_32, dest, base, offset);
+        }
+        break;
+    case TCG_TYPE_I64:
+        if (dest < TCG_REG_V0) {
+            tcg_out_ldst(s, OPC_LD_D, dest, base, offset);
+        } else {
+            tcg_out_dupm_vec(s, TCG_TYPE_I128, MO_64, dest, base, offset);
+        }
+        break;
+    case TCG_TYPE_V128:
+        if (-0x800 <= offset && offset <= 0x7ff) {
+            tcg_out_opc_vld(s, dest, base, offset);
+        } else {
+            tcg_out_movi(s, TCG_TYPE_PTR, TCG_REG_TMP0, offset);
+            tcg_out_opc_vldx(s, dest, base, TCG_REG_TMP0);
+        }
+        break;
+    default:
+        g_assert_not_reached();
+    }
 }
 
-static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg,
-                       TCGReg arg1, intptr_t arg2)
+static void tcg_out_st(TCGContext *s, TCGType type, TCGReg src,
+                       TCGReg base, intptr_t offset)
 {
-    bool is_32bit = type == TCG_TYPE_I32;
-    tcg_out_ldst(s, is_32bit ? OPC_ST_W : OPC_ST_D, arg, arg1, arg2);
+    switch (type) {
+    case TCG_TYPE_I32:
+        if (src < TCG_REG_V0) {
+            tcg_out_ldst(s, OPC_ST_W, src, base, offset);
+        } else {
+            /* TODO: Could use fst_s, fstx_s */
+            if (offset < -0x100 || offset > 0xff || (offset & 3)) {
+                if (-0x800 <= offset && offset <= 0x7ff) {
+                    tcg_out_opc_addi_d(s, TCG_REG_TMP0, base, offset);
+                } else {
+                    tcg_out_movi(s, TCG_TYPE_PTR, TCG_REG_TMP0, offset);
+                    tcg_out_opc_add_d(s, TCG_REG_TMP0, TCG_REG_TMP0, base);
+                }
+                base = TCG_REG_TMP0;
+                offset = 0;
+            }
+            tcg_out_opc_vstelm_w(s, src, base, offset, 0);
+        }
+        break;
+    case TCG_TYPE_I64:
+        if (src < TCG_REG_V0) {
+            tcg_out_ldst(s, OPC_ST_D, src, base, offset);
+        } else {
+            /* TODO: Could use fst_d, fstx_d */
+            if (offset < -0x100 || offset > 0xff || (offset & 7)) {
+                if (-0x800 <= offset && offset <= 0x7ff) {
+                    tcg_out_opc_addi_d(s, TCG_REG_TMP0, base, offset);
+                } else {
+                    tcg_out_movi(s, TCG_TYPE_PTR, TCG_REG_TMP0, offset);
+                    tcg_out_opc_add_d(s, TCG_REG_TMP0, TCG_REG_TMP0, base);
+                }
+                base = TCG_REG_TMP0;
+                offset = 0;
+            }
+            tcg_out_opc_vstelm_d(s, src, base, offset, 0);
+        }
+        break;
+    case TCG_TYPE_V128:
+        if (-0x800 <= offset && offset <= 0x7ff) {
+            tcg_out_opc_vst(s, src, base, offset);
+        } else {
+            tcg_out_movi(s, TCG_TYPE_PTR, TCG_REG_TMP0, offset);
+            tcg_out_opc_vstx(s, src, base, TCG_REG_TMP0);
+        }
+        break;
+    default:
+        g_assert_not_reached();
+    }
 }
 
 static bool tcg_out_sti(TCGContext *s, TCGType type, TCGArg val,
@@ -1740,7 +1808,6 @@ static void tcg_out_vec_op(TCGContext *s, TCGOpcode opc,
 {
     TCGType type = vecl + TCG_TYPE_V64;
     TCGArg a0, a1, a2, a3;
-    TCGReg temp = TCG_REG_TMP0;
     TCGReg temp_vec = TCG_VEC_TMP0;
 
     static const LoongArchInsn cmp_vec_insn[16][4] = {
@@ -1820,22 +1887,10 @@ static void tcg_out_vec_op(TCGContext *s, TCGOpcode opc,
 
     switch (opc) {
     case INDEX_op_st_vec:
-        /* Try to fit vst imm */
-        if (-0x800 <= a2 && a2 <= 0x7ff) {
-            tcg_out_opc_vst(s, a0, a1, a2);
-        } else {
-            tcg_out_movi(s, TCG_TYPE_I64, temp, a2);
-            tcg_out_opc_vstx(s, a0, a1, temp);
-        }
+        tcg_out_st(s, type, a0, a1, a2);
         break;
     case INDEX_op_ld_vec:
-        /* Try to fit vld imm */
-        if (-0x800 <= a2 && a2 <= 0x7ff) {
-            tcg_out_opc_vld(s, a0, a1, a2);
-        } else {
-            tcg_out_movi(s, TCG_TYPE_I64, temp, a2);
-            tcg_out_opc_vldx(s, a0, a1, temp);
-        }
+        tcg_out_ld(s, type, a0, a1, a2);
         break;
     case INDEX_op_and_vec:
         tcg_out_opc_vand_v(s, a0, a1, a2);
