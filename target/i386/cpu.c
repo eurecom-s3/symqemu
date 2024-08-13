@@ -1553,8 +1553,8 @@ static FeatureDep feature_dependencies[] = {
         .to = { FEAT_SVM,                   ~0ull },
     },
     {
-        .from = { FEAT_VMX_SECONDARY_CTLS,  VMX_SECONDARY_EXEC_ENABLE_USER_WAIT_PAUSE },
-        .to = { FEAT_7_0_ECX,               CPUID_7_0_ECX_WAITPKG },
+        .from = { FEAT_7_0_ECX,             CPUID_7_0_ECX_WAITPKG },
+        .to = { FEAT_VMX_SECONDARY_CTLS,    VMX_SECONDARY_EXEC_ENABLE_USER_WAIT_PAUSE },
     },
 };
 
@@ -6100,10 +6100,8 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
             if (*eax & 31) {
                 int host_vcpus_per_cache = 1 + ((*eax & 0x3FFC000) >> 14);
                 int vcpus_per_socket = cs->nr_cores * cs->nr_threads;
-                if (cs->nr_cores > 1) {
-                    *eax &= ~0xFC000000;
-                    *eax |= (pow2ceil(cs->nr_cores) - 1) << 26;
-                }
+                *eax &= ~0xFC000000;
+                *eax |= (pow2ceil(cs->nr_cores) - 1) << 26;
                 if (host_vcpus_per_cache > vcpus_per_socket) {
                     *eax &= ~0x3FFC000;
                     *eax |= (pow2ceil(vcpus_per_socket) - 1) << 14;
