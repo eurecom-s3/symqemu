@@ -8,13 +8,18 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/irq.h"
 #include "hw/sysbus.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "ui/console.h"
 #include "framebuffer.h"
 #include "ui/pixel_ops.h"
 #include "qemu/timer.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qapi/error.h"
+#include "qom/object.h"
 
 #define PL110_CR_EN   0x001
 #define PL110_CR_BGR  0x100
@@ -40,15 +45,15 @@ enum pl110_bppmode
 /* The Versatile/PB uses a slightly modified PL110 controller.  */
 enum pl110_version
 {
-    PL110,
-    PL110_VERSATILE,
-    PL111
+    VERSION_PL110,
+    VERSION_PL110_VERSATILE,
+    VERSION_PL111
 };
 
 #define TYPE_PL110 "pl110"
-#define PL110(obj) OBJECT_CHECK(PL110State, (obj), TYPE_PL110)
+OBJECT_DECLARE_SIMPLE_TYPE(PL110State, PL110)
 
-typedef struct PL110State {
+struct PL110State {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -71,7 +76,8 @@ typedef struct PL110State {
     uint32_t palette[256];
     uint32_t raw_palette[128];
     qemu_irq irq;
-} PL110State;
+    MemoryRegion *fbmem;
+};
 
 static int vmstate_pl110_post_load(void *opaque, int version_id);
 
@@ -80,7 +86,7 @@ static const VMStateDescription vmstate_pl110 = {
     .version_id = 2,
     .minimum_version_id = 1,
     .post_load = vmstate_pl110_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_INT32(version, PL110State),
         VMSTATE_UINT32_ARRAY(timing, PL110State, 4),
         VMSTATE_UINT32(cr, PL110State),
@@ -120,16 +126,84 @@ static const unsigned char *idregs[] = {
     pl111_id
 };
 
-#define BITS 8
+#define COPY_PIXEL(to, from) do { *(uint32_t *)to = from; to += 4; } while (0)
+
+#undef RGB
+#define BORDER bgr
+#define ORDER 0
 #include "pl110_template.h"
-#define BITS 15
+#define ORDER 1
 #include "pl110_template.h"
-#define BITS 16
+#define ORDER 2
 #include "pl110_template.h"
-#define BITS 24
+#undef BORDER
+#define RGB
+#define BORDER rgb
+#define ORDER 0
 #include "pl110_template.h"
-#define BITS 32
+#define ORDER 1
 #include "pl110_template.h"
+#define ORDER 2
+#include "pl110_template.h"
+#undef BORDER
+
+#undef COPY_PIXEL
+
+static drawfn pl110_draw_fn_32[48] = {
+    pl110_draw_line1_lblp_bgr,
+    pl110_draw_line2_lblp_bgr,
+    pl110_draw_line4_lblp_bgr,
+    pl110_draw_line8_lblp_bgr,
+    pl110_draw_line16_555_lblp_bgr,
+    pl110_draw_line32_lblp_bgr,
+    pl110_draw_line16_lblp_bgr,
+    pl110_draw_line12_lblp_bgr,
+
+    pl110_draw_line1_bbbp_bgr,
+    pl110_draw_line2_bbbp_bgr,
+    pl110_draw_line4_bbbp_bgr,
+    pl110_draw_line8_bbbp_bgr,
+    pl110_draw_line16_555_bbbp_bgr,
+    pl110_draw_line32_bbbp_bgr,
+    pl110_draw_line16_bbbp_bgr,
+    pl110_draw_line12_bbbp_bgr,
+
+    pl110_draw_line1_lbbp_bgr,
+    pl110_draw_line2_lbbp_bgr,
+    pl110_draw_line4_lbbp_bgr,
+    pl110_draw_line8_lbbp_bgr,
+    pl110_draw_line16_555_lbbp_bgr,
+    pl110_draw_line32_lbbp_bgr,
+    pl110_draw_line16_lbbp_bgr,
+    pl110_draw_line12_lbbp_bgr,
+
+    pl110_draw_line1_lblp_rgb,
+    pl110_draw_line2_lblp_rgb,
+    pl110_draw_line4_lblp_rgb,
+    pl110_draw_line8_lblp_rgb,
+    pl110_draw_line16_555_lblp_rgb,
+    pl110_draw_line32_lblp_rgb,
+    pl110_draw_line16_lblp_rgb,
+    pl110_draw_line12_lblp_rgb,
+
+    pl110_draw_line1_bbbp_rgb,
+    pl110_draw_line2_bbbp_rgb,
+    pl110_draw_line4_bbbp_rgb,
+    pl110_draw_line8_bbbp_rgb,
+    pl110_draw_line16_555_bbbp_rgb,
+    pl110_draw_line32_bbbp_rgb,
+    pl110_draw_line16_bbbp_rgb,
+    pl110_draw_line12_bbbp_rgb,
+
+    pl110_draw_line1_lbbp_rgb,
+    pl110_draw_line2_lbbp_rgb,
+    pl110_draw_line4_lbbp_rgb,
+    pl110_draw_line8_lbbp_rgb,
+    pl110_draw_line16_555_lbbp_rgb,
+    pl110_draw_line32_lbbp_rgb,
+    pl110_draw_line16_lbbp_rgb,
+    pl110_draw_line12_lbbp_rgb,
+};
 
 static int pl110_enabled(PL110State *s)
 {
@@ -139,11 +213,8 @@ static int pl110_enabled(PL110State *s)
 static void pl110_update_display(void *opaque)
 {
     PL110State *s = (PL110State *)opaque;
-    SysBusDevice *sbd;
     DisplaySurface *surface = qemu_console_surface(s->con);
-    drawfn* fntable;
     drawfn fn;
-    int dest_width;
     int src_width;
     int bpp_offset;
     int first;
@@ -153,41 +224,12 @@ static void pl110_update_display(void *opaque)
         return;
     }
 
-    sbd = SYS_BUS_DEVICE(s);
-
-    switch (surface_bits_per_pixel(surface)) {
-    case 0:
-        return;
-    case 8:
-        fntable = pl110_draw_fn_8;
-        dest_width = 1;
-        break;
-    case 15:
-        fntable = pl110_draw_fn_15;
-        dest_width = 2;
-        break;
-    case 16:
-        fntable = pl110_draw_fn_16;
-        dest_width = 2;
-        break;
-    case 24:
-        fntable = pl110_draw_fn_24;
-        dest_width = 3;
-        break;
-    case 32:
-        fntable = pl110_draw_fn_32;
-        dest_width = 4;
-        break;
-    default:
-        fprintf(stderr, "pl110: Bad color depth\n");
-        exit(1);
-    }
     if (s->cr & PL110_CR_BGR)
         bpp_offset = 0;
     else
         bpp_offset = 24;
 
-    if ((s->version != PL111) && (s->bpp == BPP_16)) {
+    if ((s->version != VERSION_PL111) && (s->bpp == BPP_16)) {
         /* The PL110's native 16 bit mode is 5551; however
          * most boards with a PL110 implement an external
          * mux which allows bits to be reshuffled to give
@@ -215,12 +257,13 @@ static void pl110_update_display(void *opaque)
         }
     }
 
-    if (s->cr & PL110_CR_BEBO)
-        fn = fntable[s->bpp + 8 + bpp_offset];
-    else if (s->cr & PL110_CR_BEPO)
-        fn = fntable[s->bpp + 16 + bpp_offset];
-    else
-        fn = fntable[s->bpp + bpp_offset];
+    if (s->cr & PL110_CR_BEBO) {
+        fn = pl110_draw_fn_32[s->bpp + 8 + bpp_offset];
+    } else if (s->cr & PL110_CR_BEPO) {
+        fn = pl110_draw_fn_32[s->bpp + 16 + bpp_offset];
+    } else {
+        fn = pl110_draw_fn_32[s->bpp + bpp_offset];
+    }
 
     src_width = s->cols;
     switch (s->bpp) {
@@ -244,18 +287,17 @@ static void pl110_update_display(void *opaque)
         src_width <<= 2;
         break;
     }
-    dest_width *= s->cols;
     first = 0;
     if (s->invalidate) {
         framebuffer_update_memory_section(&s->fbsection,
-                                          sysbus_address_space(sbd),
+                                          s->fbmem,
                                           s->upbase,
                                           s->rows, src_width);
     }
 
     framebuffer_update_display(surface, &s->fbsection,
                                s->cols, s->rows,
-                               src_width, dest_width, 0,
+                               src_width, s->cols * 4, 0,
                                s->invalidate,
                                fn, s->palette,
                                &first, &last);
@@ -370,12 +412,12 @@ static uint64_t pl110_read(void *opaque, hwaddr offset,
     case 5: /* LCDLPBASE */
         return s->lpbase;
     case 6: /* LCDIMSC */
-        if (s->version != PL110) {
+        if (s->version != VERSION_PL110) {
             return s->cr;
         }
         return s->int_mask;
     case 7: /* LCDControl */
-        if (s->version != PL110) {
+        if (s->version != VERSION_PL110) {
             return s->int_mask;
         }
         return s->cr;
@@ -435,7 +477,7 @@ static void pl110_write(void *opaque, hwaddr offset,
         s->lpbase = val;
         break;
     case 6: /* LCDIMSC */
-        if (s->version != PL110) {
+        if (s->version != VERSION_PL110) {
             goto control;
         }
     imsc:
@@ -443,7 +485,7 @@ static void pl110_write(void *opaque, hwaddr offset,
         pl110_update(s);
         break;
     case 7: /* LCDControl */
-        if (s->version != PL110) {
+        if (s->version != VERSION_PL110) {
             goto imsc;
         }
     control:
@@ -493,10 +535,21 @@ static const GraphicHwOps pl110_gfx_ops = {
     .gfx_update  = pl110_update_display,
 };
 
+static Property pl110_properties[] = {
+    DEFINE_PROP_LINK("framebuffer-memory", PL110State, fbmem,
+                     TYPE_MEMORY_REGION, MemoryRegion *),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void pl110_realize(DeviceState *dev, Error **errp)
 {
     PL110State *s = PL110(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+    if (!s->fbmem) {
+        error_setg(errp, "'framebuffer-memory' property was not set");
+        return;
+    }
 
     memory_region_init_io(&s->iomem, OBJECT(s), &pl110_ops, s, "pl110", 0x1000);
     sysbus_init_mmio(sbd, &s->iomem);
@@ -511,21 +564,21 @@ static void pl110_init(Object *obj)
 {
     PL110State *s = PL110(obj);
 
-    s->version = PL110;
+    s->version = VERSION_PL110;
 }
 
 static void pl110_versatile_init(Object *obj)
 {
     PL110State *s = PL110(obj);
 
-    s->version = PL110_VERSATILE;
+    s->version = VERSION_PL110_VERSATILE;
 }
 
 static void pl111_init(Object *obj)
 {
     PL110State *s = PL110(obj);
 
-    s->version = PL111;
+    s->version = VERSION_PL111;
 }
 
 static void pl110_class_init(ObjectClass *klass, void *data)
@@ -535,6 +588,7 @@ static void pl110_class_init(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     dc->vmsd = &vmstate_pl110;
     dc->realize = pl110_realize;
+    device_class_set_props(dc, pl110_properties);
 }
 
 static const TypeInfo pl110_info = {

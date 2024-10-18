@@ -1,5 +1,5 @@
 /*
- * QEMU S/390 CPU
+ * QEMU S/390 CPU QOM header (target agnostic)
  *
  * Copyright (c) 2012 SUSE LINUX Products GmbH
  *
@@ -20,48 +20,13 @@
 #ifndef QEMU_S390_CPU_QOM_H
 #define QEMU_S390_CPU_QOM_H
 
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
 
 #define TYPE_S390_CPU "s390x-cpu"
 
-#define S390_CPU_CLASS(klass) \
-    OBJECT_CLASS_CHECK(S390CPUClass, (klass), TYPE_S390_CPU)
-#define S390_CPU(obj) \
-    OBJECT_CHECK(S390CPU, (obj), TYPE_S390_CPU)
-#define S390_CPU_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(S390CPUClass, (obj), TYPE_S390_CPU)
+OBJECT_DECLARE_CPU_TYPE(S390CPU, S390CPUClass, S390_CPU)
 
-typedef struct S390CPUModel S390CPUModel;
-typedef struct S390CPUDef S390CPUDef;
-
-/**
- * S390CPUClass:
- * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
- * @load_normal: Performs a load normal.
- * @cpu_reset: Performs a CPU reset.
- * @initial_cpu_reset: Performs an initial CPU reset.
- *
- * An S/390 CPU model.
- */
-typedef struct S390CPUClass {
-    /*< private >*/
-    CPUClass parent_class;
-    /*< public >*/
-    const S390CPUDef *cpu_def;
-    bool kvm_required;
-    bool is_static;
-    bool is_migration_safe;
-    const char *desc;
-
-    DeviceRealize parent_realize;
-    void (*parent_reset)(CPUState *cpu);
-    void (*load_normal)(CPUState *cpu);
-    void (*cpu_reset)(CPUState *cpu);
-    void (*initial_cpu_reset)(CPUState *cpu);
-} S390CPUClass;
-
-typedef struct S390CPU S390CPU;
-typedef struct CPUS390XState CPUS390XState;
+#define S390_CPU_TYPE_SUFFIX "-" TYPE_S390_CPU
+#define S390_CPU_TYPE_NAME(name) (name S390_CPU_TYPE_SUFFIX)
 
 #endif

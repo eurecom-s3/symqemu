@@ -13,13 +13,13 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "hw/hotplug.h"
+#include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
 #include "qemu/bitops.h"
 #include "qemu/module.h"
 #include "hw/s390x/css.h"
 #include "ccw-device.h"
 #include "hw/s390x/css-bridge.h"
-#include "cpu.h"
 
 /*
  * Invoke device-specific unplug handler, disable the subchannel
@@ -53,10 +53,10 @@ static void ccw_device_unplug(HotplugHandler *hotplug_dev,
 
     css_generate_sch_crws(sch->cssid, sch->ssid, sch->schid, 1, 0);
 
-    object_property_set_bool(OBJECT(dev), false, "realized", NULL);
+    qdev_unrealize(dev);
 }
 
-static void virtual_css_bus_reset(BusState *qbus)
+static void virtual_css_bus_reset_hold(Object *obj)
 {
     /* This should actually be modelled via the generic css */
     css_reset();
@@ -81,8 +81,9 @@ static char *virtual_css_bus_get_dev_path(DeviceState *dev)
 static void virtual_css_bus_class_init(ObjectClass *klass, void *data)
 {
     BusClass *k = BUS_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
-    k->reset = virtual_css_bus_reset;
+    rc->phases.hold = virtual_css_bus_reset_hold;
     k->get_dev_path = virtual_css_bus_get_dev_path;
 }
 
@@ -95,27 +96,26 @@ static const TypeInfo virtual_css_bus_info = {
 
 VirtualCssBus *virtual_css_bus_init(void)
 {
-    VirtualCssBus *cbus;
     BusState *bus;
     DeviceState *dev;
 
     /* Create bridge device */
-    dev = qdev_create(NULL, TYPE_VIRTUAL_CSS_BRIDGE);
+    dev = qdev_new(TYPE_VIRTUAL_CSS_BRIDGE);
     object_property_add_child(qdev_get_machine(), TYPE_VIRTUAL_CSS_BRIDGE,
-                              OBJECT(dev), NULL);
-    qdev_init_nofail(dev);
+                              OBJECT(dev));
 
     /* Create bus on bridge device */
-    bus = qbus_create(TYPE_VIRTUAL_CSS_BUS, dev, "virtual-css");
-    cbus = VIRTUAL_CSS_BUS(bus);
+    bus = qbus_new(TYPE_VIRTUAL_CSS_BUS, dev, "virtual-css");
 
     /* Enable hotplugging */
-    qbus_set_hotplug_handler(bus, OBJECT(dev), &error_abort);
+    qbus_set_hotplug_handler(bus, OBJECT(dev));
+
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     css_register_io_adapters(CSS_IO_ADAPTER_VIRTIO, true, false,
                              0, &error_abort);
 
-    return cbus;
+    return VIRTUAL_CSS_BUS(bus);
  }
 
 /***************** Virtual-css Bus Bridge Device ********************/
@@ -138,13 +138,12 @@ static void virtual_css_bridge_class_init(ObjectClass *klass, void *data)
 
     hc->unplug = ccw_device_unplug;
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
-    dc->props = virtual_css_bridge_properties;
+    device_class_set_props(dc, virtual_css_bridge_properties);
     object_class_property_add_bool(klass, "cssid-unrestricted",
-                                   prop_get_true, NULL, NULL);
+                                   prop_get_true, NULL);
     object_class_property_set_description(klass, "cssid-unrestricted",
             "A css device can use any cssid, regardless whether virtual"
-            " or not (read only, always true)",
-            NULL);
+            " or not (read only, always true)");
 }
 
 static const TypeInfo virtual_css_bridge_info = {

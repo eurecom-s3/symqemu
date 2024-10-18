@@ -23,16 +23,16 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/isa/isa.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "hw/dma/i8257.h"
+#include "qapi/error.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "qemu/log.h"
 #include "trace.h"
 
-#define I8257(obj) \
-    OBJECT_CHECK(I8257State, (obj), TYPE_I8257)
 
 /* #define DEBUG_DMA */
 
@@ -291,12 +291,6 @@ static uint64_t i8257_read_cont(void *opaque, hwaddr nport, unsigned size)
     return val;
 }
 
-static IsaDmaTransferMode i8257_dma_get_transfer_mode(IsaDma *obj, int nchan)
-{
-    I8257State *d = I8257(obj);
-    return (d->regs[nchan & 3].mode >> 2) & 3;
-}
-
 static bool i8257_dma_has_autoinitialization(IsaDma *obj, int nchan)
 {
     I8257State *d = I8257(obj);
@@ -399,12 +393,21 @@ static void i8257_dma_register_channel(IsaDma *obj, int nchan,
     r->opaque = opaque;
 }
 
+static bool i8257_is_verify_transfer(I8257Regs *r)
+{
+    return (r->mode & 0x0c) == 0;
+}
+
 static int i8257_dma_read_memory(IsaDma *obj, int nchan, void *buf, int pos,
                                  int len)
 {
     I8257State *d = I8257(obj);
     I8257Regs *r = &d->regs[nchan & 3];
     hwaddr addr = ((r->pageh & 0x7f) << 24) | (r->page << 16) | r->now[ADDR];
+
+    if (i8257_is_verify_transfer(r)) {
+        return len;
+    }
 
     if (r->mode & 0x20) {
         int i;
@@ -429,6 +432,10 @@ static int i8257_dma_write_memory(IsaDma *obj, int nchan, void *buf, int pos,
     I8257State *s = I8257(obj);
     I8257Regs *r = &s->regs[nchan & 3];
     hwaddr addr = ((r->pageh & 0x7f) << 24) | (r->page << 16) | r->now[ADDR];
+
+    if (i8257_is_verify_transfer(r)) {
+        return len;
+    }
 
     if (r->mode & 0x20) {
         int i;
@@ -510,7 +517,7 @@ static const VMStateDescription vmstate_i8257_regs = {
     .name = "dma_regs",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_INT32_ARRAY(now, I8257Regs, 2),
         VMSTATE_UINT16_ARRAY(base, I8257Regs, 2),
         VMSTATE_UINT8(mode, I8257Regs),
@@ -535,7 +542,7 @@ static const VMStateDescription vmstate_i8257 = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = i8257_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8(command, I8257State),
         VMSTATE_UINT8(mask, I8257State),
         VMSTATE_UINT8(flip_flop, I8257State),
@@ -552,7 +559,7 @@ static void i8257_realize(DeviceState *dev, Error **errp)
     I8257State *d = I8257(dev);
     int i;
 
-    memory_region_init_io(&d->channel_io, NULL, &channel_io_ops, d,
+    memory_region_init_io(&d->channel_io, OBJECT(dev), &channel_io_ops, d,
                           "dma-chan", 8 << d->dshift);
     memory_region_add_subregion(isa_address_space_io(isa),
                                 d->base, &d->channel_io);
@@ -594,9 +601,8 @@ static void i8257_class_init(ObjectClass *klass, void *data)
     dc->realize = i8257_realize;
     dc->reset = i8257_reset;
     dc->vmsd = &vmstate_i8257;
-    dc->props = i8257_properties;
+    device_class_set_props(dc, i8257_properties);
 
-    idc->get_transfer_mode = i8257_dma_get_transfer_mode;
     idc->has_autoinitialization = i8257_dma_has_autoinitialization;
     idc->read_memory = i8257_dma_read_memory;
     idc->write_memory = i8257_dma_write_memory;
@@ -626,26 +632,28 @@ static void i8257_register_types(void)
 
 type_init(i8257_register_types)
 
-void i8257_dma_init(ISABus *bus, bool high_page_enable)
+void i8257_dma_init(Object *parent, ISABus *bus, bool high_page_enable)
 {
     ISADevice *isa1, *isa2;
     DeviceState *d;
 
-    isa1 = isa_create(bus, TYPE_I8257);
+    isa1 = isa_new(TYPE_I8257);
+    object_property_add_child(parent, "dma[*]", OBJECT(isa1));
     d = DEVICE(isa1);
     qdev_prop_set_int32(d, "base", 0x00);
     qdev_prop_set_int32(d, "page-base", 0x80);
     qdev_prop_set_int32(d, "pageh-base", high_page_enable ? 0x480 : -1);
     qdev_prop_set_int32(d, "dshift", 0);
-    qdev_init_nofail(d);
+    isa_realize_and_unref(isa1, bus, &error_fatal);
 
-    isa2 = isa_create(bus, TYPE_I8257);
+    isa2 = isa_new(TYPE_I8257);
+    object_property_add_child(parent, "dma[*]", OBJECT(isa2));
     d = DEVICE(isa2);
     qdev_prop_set_int32(d, "base", 0xc0);
     qdev_prop_set_int32(d, "page-base", 0x88);
     qdev_prop_set_int32(d, "pageh-base", high_page_enable ? 0x488 : -1);
     qdev_prop_set_int32(d, "dshift", 1);
-    qdev_init_nofail(d);
+    isa_realize_and_unref(isa2, bus, &error_fatal);
 
     isa_bus_dma(bus, ISADMA(isa1), ISADMA(isa2));
 }

@@ -17,6 +17,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/intc/imx_avic.h"
+#include "hw/irq.h"
+#include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 
@@ -36,7 +38,7 @@ static const VMStateDescription vmstate_imx_avic = {
     .name = TYPE_IMX_AVIC,
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(pending, IMXAVICState),
         VMSTATE_UINT64(enabled, IMXAVICState),
         VMSTATE_UINT64(is_fiq, IMXAVICState),

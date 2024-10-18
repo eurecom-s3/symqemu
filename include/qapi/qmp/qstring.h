@@ -17,22 +17,17 @@
 
 struct QString {
     struct QObjectBase_ base;
-    char *string;
-    size_t length;
-    size_t capacity;
+    const char *string;
 };
+
+void qstring_unref(QString *q);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(QString, qstring_unref)
 
 QString *qstring_new(void);
 QString *qstring_from_str(const char *str);
 QString *qstring_from_substr(const char *str, size_t start, size_t end);
-size_t qstring_get_length(const QString *qstring);
+QString *qstring_from_gstring(GString *gstr);
 const char *qstring_get_str(const QString *qstring);
-const char *qstring_get_try_str(const QString *qstring);
-const char *qobject_get_try_str(const QObject *qstring);
-void qstring_append_int(QString *qstring, int64_t value);
-void qstring_append(QString *qstring, const char *str);
-void qstring_append_chr(QString *qstring, int c);
-bool qstring_is_equal(const QObject *x, const QObject *y);
-void qstring_destroy_obj(QObject *obj);
 
 #endif /* QSTRING_H */

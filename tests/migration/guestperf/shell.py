@@ -1,4 +1,3 @@
-from __future__ import print_function
 #
 # Migration test command line shell integration
 #
@@ -7,7 +6,7 @@ from __future__ import print_function
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
 # License as published by the Free Software Foundation; either
-# version 2 of the License, or (at your option) any later version.
+# version 2.1 of the License, or (at your option) any later version.
 #
 # This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -61,6 +60,8 @@ class BaseShell(object):
         parser.add_argument("--prealloc-pages", dest="prealloc_pages", default=False)
         parser.add_argument("--huge-pages", dest="huge_pages", default=False)
         parser.add_argument("--locked-pages", dest="locked_pages", default=False)
+        parser.add_argument("--dirty-ring-size", dest="dirty_ring_size",
+                            default=0, type=int)
 
         self._parser = parser
 
@@ -90,7 +91,9 @@ class BaseShell(object):
 
                         locked_pages=args.locked_pages,
                         huge_pages=args.huge_pages,
-                        prealloc_pages=args.prealloc_pages)
+                        prealloc_pages=args.prealloc_pages,
+
+                        dirty_ring_size=args.dirty_ring_size)
 
 
 class Shell(BaseShell):
@@ -123,6 +126,22 @@ class Shell(BaseShell):
         parser.add_argument("--compression-xbzrle", dest="compression_xbzrle", default=False, action="store_true")
         parser.add_argument("--compression-xbzrle-cache", dest="compression_xbzrle_cache", default=10, type=int)
 
+        parser.add_argument("--multifd", dest="multifd", default=False,
+                            action="store_true")
+        parser.add_argument("--multifd-channels", dest="multifd_channels",
+                            default=2, type=int)
+
+        parser.add_argument("--dirty-limit", dest="dirty_limit", default=False,
+                            action="store_true")
+
+        parser.add_argument("--x-vcpu-dirty-limit-period",
+                            dest="x_vcpu_dirty_limit_period",
+                            default=500, type=int)
+
+        parser.add_argument("--vcpu-dirty-limit",
+                            dest="vcpu_dirty_limit",
+                            default=1, type=int)
+
     def get_scenario(self, args):
         return Scenario(name="perfreport",
                         downtime=args.downtime,
@@ -143,7 +162,15 @@ class Shell(BaseShell):
                         compression_mt_threads=args.compression_mt_threads,
 
                         compression_xbzrle=args.compression_xbzrle,
-                        compression_xbzrle_cache=args.compression_xbzrle_cache)
+                        compression_xbzrle_cache=args.compression_xbzrle_cache,
+
+                        multifd=args.multifd,
+                        multifd_channels=args.multifd_channels,
+
+                        dirty_limit=args.dirty_limit,
+                        x_vcpu_dirty_limit_period=\
+                            args.x_vcpu_dirty_limit_period,
+                        vcpu_dirty_limit=args.vcpu_dirty_limit)
 
     def run(self, argv):
         args = self._parser.parse_args(argv)

@@ -23,10 +23,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
+#include "qemu/cutils.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/dma/xlnx_dpdma.h"
+#include "hw/irq.h"
+#include "migration/vmstate.h"
 
 #ifndef DEBUG_DPDMA
 #define DEBUG_DPDMA 0
@@ -173,24 +175,24 @@ static uint64_t xlnx_dpdma_desc_get_source_address(DPDMADescriptor *desc,
 
     switch (frag) {
     case 0:
-        addr = desc->source_address
-            + (extract32(desc->address_extension, 16, 12) << 20);
+        addr = (uint64_t)desc->source_address
+            + (extract64(desc->address_extension, 16, 16) << 32);
         break;
     case 1:
-        addr = desc->source_address2
-            + (extract32(desc->address_extension_23, 0, 12) << 8);
+        addr = (uint64_t)desc->source_address2
+            + (extract64(desc->address_extension_23, 0, 16) << 32);
         break;
     case 2:
-        addr = desc->source_address3
-            + (extract32(desc->address_extension_23, 16, 12) << 20);
+        addr = (uint64_t)desc->source_address3
+            + (extract64(desc->address_extension_23, 16, 16) << 32);
         break;
     case 3:
-        addr = desc->source_address4
-            + (extract32(desc->address_extension_45, 0, 12) << 8);
+        addr = (uint64_t)desc->source_address4
+            + (extract64(desc->address_extension_45, 0, 16) << 32);
         break;
     case 4:
-        addr = desc->source_address5
-            + (extract32(desc->address_extension_45, 16, 12) << 20);
+        addr = (uint64_t)desc->source_address5
+            + (extract64(desc->address_extension_45, 16, 16) << 32);
         break;
     default:
         addr = 0;
@@ -275,7 +277,7 @@ static inline bool xlnx_dpdma_desc_ignore_done_bit(DPDMADescriptor *desc)
 static const VMStateDescription vmstate_xlnx_dpdma = {
     .name = TYPE_XLNX_DPDMA,
     .version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(registers, XlnxDPDMAState,
                              XLNX_DPDMA_REG_ARRAY_SIZE),
         VMSTATE_BOOL_ARRAY(operation_finished, XlnxDPDMAState, 6),
@@ -386,7 +388,7 @@ static void xlnx_dpdma_dump_descriptor(DPDMADescriptor *desc)
 {
     if (DEBUG_DPDMA) {
         qemu_log("DUMP DESCRIPTOR:\n");
-        qemu_hexdump((char *)desc, stdout, "", sizeof(DPDMADescriptor));
+        qemu_hexdump(stdout, "", desc, sizeof(DPDMADescriptor));
     }
 }
 
@@ -650,7 +652,7 @@ size_t xlnx_dpdma_start_operation(XlnxDPDMAState *s, uint8_t channel,
         }
 
         if (dma_memory_read(&address_space_memory, desc_addr, &desc,
-                            sizeof(DPDMADescriptor))) {
+                            sizeof(DPDMADescriptor), MEMTXATTRS_UNSPECIFIED)) {
             s->registers[DPDMA_EISR] |= ((1 << 1) << channel);
             xlnx_dpdma_update_irq(s);
             s->operation_finished[channel] = true;
@@ -706,7 +708,8 @@ size_t xlnx_dpdma_start_operation(XlnxDPDMAState *s, uint8_t channel,
                     if (dma_memory_read(&address_space_memory,
                                         source_addr[0],
                                         &s->data[channel][ptr],
-                                        line_size)) {
+                                        line_size,
+                                        MEMTXATTRS_UNSPECIFIED)) {
                         s->registers[DPDMA_ISR] |= ((1 << 12) << channel);
                         xlnx_dpdma_update_irq(s);
                         DPRINTF("Can't get data.\n");
@@ -734,7 +737,8 @@ size_t xlnx_dpdma_start_operation(XlnxDPDMAState *s, uint8_t channel,
                     if (dma_memory_read(&address_space_memory,
                                         source_addr[frag],
                                         &(s->data[channel][ptr]),
-                                        fragment_len)) {
+                                        fragment_len,
+                                        MEMTXATTRS_UNSPECIFIED)) {
                         s->registers[DPDMA_ISR] |= ((1 << 12) << channel);
                         xlnx_dpdma_update_irq(s);
                         DPRINTF("Can't get data.\n");
@@ -752,7 +756,7 @@ size_t xlnx_dpdma_start_operation(XlnxDPDMAState *s, uint8_t channel,
             DPRINTF("update the descriptor with the done flag set.\n");
             xlnx_dpdma_desc_set_done(&desc);
             dma_memory_write(&address_space_memory, desc_addr, &desc,
-                             sizeof(DPDMADescriptor));
+                             sizeof(DPDMADescriptor), MEMTXATTRS_UNSPECIFIED);
         }
 
         if (xlnx_dpdma_desc_completion_interrupt(&desc)) {

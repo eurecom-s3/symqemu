@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw auto
 #
 # Test qcow2 image compression
 #
@@ -35,11 +36,12 @@ trap "_cleanup; exit \$status" 0 1 2 3 15
 . ./common.filter
 
 _supported_fmt qcow2
-_supported_proto file
+_supported_proto file fuse
 
 # Repairing the corrupted image requires qemu-img check to store a
 # refcount up to 3, which requires at least two refcount bits.
-_unsupported_imgopts 'refcount_bits=1[^0-9]'
+# External data files do not support compressed clusters.
+_unsupported_imgopts 'refcount_bits=1[^0-9]' data_file
 
 
 echo
@@ -49,7 +51,7 @@ echo
 # The L2 entries of the two compressed clusters are located at
 # 0x800000 and 0x800008, their original values are 0x4008000000a00000
 # and 0x4008000000a00802 (5 sectors for compressed data each).
-_make_test_img 8M -o cluster_size=2M
+_make_test_img 8M -o cluster_size=2M,compression_type=zlib
 $QEMU_IO -c "write -c -P 0x11 0 2M" -c "write -c -P 0x11 2M 2M" "$TEST_IMG" \
          2>&1 | _filter_qemu_io | _filter_testdir
 
@@ -88,6 +90,51 @@ $QEMU_IO -c "read  -P 0x11  0 4M" "$TEST_IMG" 2>&1 | _filter_qemu_io | _filter_t
 _check_test_img -r all
 $QEMU_IO -c "read  -P 0x11  0 4M" "$TEST_IMG" 2>&1 | _filter_qemu_io | _filter_testdir
 $QEMU_IO -c "read  -P 0x22 4M 4M" "$TEST_IMG" 2>&1 | _filter_qemu_io | _filter_testdir
+
+echo
+echo "=== Write compressed data of multiple clusters ==="
+echo
+cluster_size=0x10000
+_make_test_img 2M -o cluster_size=$cluster_size
+
+echo "Write uncompressed data:"
+let data_size="8 * $cluster_size"
+$QEMU_IO -c "write -P 0xaa 0 $data_size" "$TEST_IMG" \
+         2>&1 | _filter_qemu_io | _filter_testdir
+sizeA=$($QEMU_IMG info --output=json "$TEST_IMG" |
+        sed -n '/"actual-size":/ s/[^0-9]//gp' |
+        head -n 1)
+
+_make_test_img 2M -o cluster_size=$cluster_size
+echo "Write compressed data:"
+let data_size="3 * $cluster_size + $cluster_size / 2"
+# Set compress on. That will align the written data
+# by the cluster size and will write them compressed.
+QEMU_IO_OPTIONS=$QEMU_IO_OPTIONS_NO_FMT \
+$QEMU_IO -c "write -P 0xbb 0 $data_size" --image-opts \
+         "driver=compress,file.driver=$IMGFMT,file.file.driver=file,file.file.filename=$TEST_IMG" \
+         2>&1 | _filter_qemu_io | _filter_testdir
+
+let offset="4 * $cluster_size + $cluster_size / 4"
+QEMU_IO_OPTIONS=$QEMU_IO_OPTIONS_NO_FMT \
+$QEMU_IO -c "write -P 0xcc $offset $data_size" "json:{\
+    'driver': 'compress',
+    'file': {'driver': '$IMGFMT',
+             'file': {'driver': 'file',
+                      'filename': '$TEST_IMG'}}}" | \
+                          _filter_qemu_io | _filter_testdir
+
+sizeB=$($QEMU_IMG info --output=json "$TEST_IMG" |
+        sed -n '/"actual-size":/ s/[^0-9]//gp' |
+        head -n 1)
+
+if [ $sizeA -lt $sizeB ]
+then
+    echo "Compression ERROR ($sizeA < $sizeB)"
+fi
+
+$QEMU_IMG check --output=json "$TEST_IMG" |
+          sed -n 's/,$//; /"compressed-clusters":/ s/^ *//p'
 
 # success, all done
 echo '*** done'

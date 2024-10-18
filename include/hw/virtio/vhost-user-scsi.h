@@ -17,19 +17,24 @@
 #ifndef VHOST_USER_SCSI_H
 #define VHOST_USER_SCSI_H
 
-#include "hw/qdev.h"
 #include "hw/virtio/virtio-scsi.h"
 #include "hw/virtio/vhost.h"
 #include "hw/virtio/vhost-user.h"
 #include "hw/virtio/vhost-scsi-common.h"
+#include "qom/object.h"
 
 #define TYPE_VHOST_USER_SCSI "vhost-user-scsi"
-#define VHOST_USER_SCSI(obj) \
-        OBJECT_CHECK(VHostUserSCSI, (obj), TYPE_VHOST_USER_SCSI)
+OBJECT_DECLARE_SIMPLE_TYPE(VHostUserSCSI, VHOST_USER_SCSI)
 
-typedef struct VHostUserSCSI {
+struct VHostUserSCSI {
     VHostSCSICommon parent_obj;
+
+    /* Properties */
+    bool connected;
+    bool started_vu;
+
     VhostUserState vhost_user;
-} VHostUserSCSI;
+    struct vhost_virtqueue *vhost_vqs;
+};
 
 #endif /* VHOST_USER_SCSI_H */

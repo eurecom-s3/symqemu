@@ -20,8 +20,8 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#include "exec/exec-all.h"
 #include "exec/helper-proto.h"
-#include "exception.h"
 #include "fpu/softfloat.h"
 
 static int ieee_ex_to_openrisc(int fexcp)
@@ -45,6 +45,15 @@ static int ieee_ex_to_openrisc(int fexcp)
     return ret;
 }
 
+static G_NORETURN
+void do_fpe(CPUOpenRISCState *env, uintptr_t pc)
+{
+    CPUState *cs = env_cpu(env);
+
+    cs->exception_index = EXCP_FPE;
+    cpu_loop_exit_restore(cs, pc);
+}
+
 void HELPER(update_fpcsr)(CPUOpenRISCState *env)
 {
     int tmp = get_float_exception_flags(&env->fp_status);
@@ -55,15 +64,28 @@ void HELPER(update_fpcsr)(CPUOpenRISCState *env)
         if (tmp) {
             env->fpcsr |= tmp;
             if (env->fpcsr & FPCSR_FPEE) {
-                helper_exception(env, EXCP_FPE);
+                do_fpe(env, GETPC());
             }
         }
     }
 }
 
+void cpu_set_fpcsr(CPUOpenRISCState *env, uint32_t val)
+{
+    static const int rm_to_sf[] = {
+        float_round_nearest_even,
+        float_round_to_zero,
+        float_round_up,
+        float_round_down
+    };
+
+    env->fpcsr = val & 0xfff;
+    set_float_rounding_mode(rm_to_sf[extract32(val, 1, 2)], &env->fp_status);
+}
+
 uint64_t HELPER(itofd)(CPUOpenRISCState *env, uint64_t val)
 {
-    return int32_to_float64(val, &env->fp_status);
+    return int64_to_float64(val, &env->fp_status);
 }
 
 uint32_t HELPER(itofs)(CPUOpenRISCState *env, uint32_t val)
@@ -73,12 +95,22 @@ uint32_t HELPER(itofs)(CPUOpenRISCState *env, uint32_t val)
 
 uint64_t HELPER(ftoid)(CPUOpenRISCState *env, uint64_t val)
 {
-    return float32_to_int64(val, &env->fp_status);
+    return float64_to_int64_round_to_zero(val, &env->fp_status);
 }
 
 uint32_t HELPER(ftois)(CPUOpenRISCState *env, uint32_t val)
 {
-    return float32_to_int32(val, &env->fp_status);
+    return float32_to_int32_round_to_zero(val, &env->fp_status);
+}
+
+uint64_t HELPER(stod)(CPUOpenRISCState *env, uint32_t val)
+{
+    return float32_to_float64(val, &env->fp_status);
+}
+
+uint32_t HELPER(dtos)(CPUOpenRISCState *env, uint64_t val)
+{
+    return float64_to_float32(val, &env->fp_status);
 }
 
 #define FLOAT_CALC(name)                                                  \
@@ -125,4 +157,24 @@ target_ulong helper_float_ ## name ## _s(CPUOpenRISCState *env,           \
 FLOAT_CMP(le, le)
 FLOAT_CMP(lt, lt)
 FLOAT_CMP(eq, eq_quiet)
+FLOAT_CMP(un, unordered_quiet)
 #undef FLOAT_CMP
+
+#define FLOAT_UCMP(name, expr) \
+target_ulong helper_float_ ## name ## _d(CPUOpenRISCState *env,           \
+                                         uint64_t fdt0, uint64_t fdt1)    \
+{                                                                         \
+    FloatRelation r = float64_compare_quiet(fdt0, fdt1, &env->fp_status); \
+    return expr;                                                          \
+}                                                                         \
+target_ulong helper_float_ ## name ## _s(CPUOpenRISCState *env,           \
+                                         uint32_t fdt0, uint32_t fdt1)    \
+{                                                                         \
+    FloatRelation r = float32_compare_quiet(fdt0, fdt1, &env->fp_status); \
+    return expr;                                                          \
+}
+
+FLOAT_UCMP(ueq, r == float_relation_equal || r == float_relation_unordered)
+FLOAT_UCMP(ult, r == float_relation_less || r == float_relation_unordered)
+FLOAT_UCMP(ule, r != float_relation_greater)
+#undef FLOAT_UCMP

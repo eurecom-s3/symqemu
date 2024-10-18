@@ -186,7 +186,7 @@ static int hash_tbl_search_fd_by_ifid(int *fd, __be64 *gid_ifid)
     *fd = _hash_tbl_search_fd_by_ifid(gid_ifid);
     pthread_rwlock_unlock(&server.lock);
 
-    if (!fd) {
+    if (!*fd) {
         syslog(LOG_WARNING, "Can't find matching for ifid 0x%llx\n", *gid_ifid);
         return -ENOENT;
     }
@@ -490,7 +490,7 @@ static int read_and_process(int fd)
 
 static int accept_all(void)
 {
-    int fd, rc = 0;;
+    int fd, rc = 0;
 
     pthread_rwlock_wrlock(&server.lock);
 

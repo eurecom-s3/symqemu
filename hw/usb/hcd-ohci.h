@@ -21,7 +21,10 @@
 #ifndef HCD_OHCI_H
 #define HCD_OHCI_H
 
+#include "hw/sysbus.h"
 #include "sysemu/dma.h"
+#include "hw/usb.h"
+#include "qom/object.h"
 
 /* Number of Downstream Ports on the root hub: */
 #define OHCI_MAX_PORTS 15
@@ -31,7 +34,9 @@ typedef struct OHCIPort {
     uint32_t ctrl;
 } OHCIPort;
 
-typedef struct OHCIState {
+typedef struct OHCIState OHCIState;
+
+struct OHCIState {
     USBBus bus;
     qemu_irq irq;
     MemoryRegion mem;
@@ -87,15 +92,30 @@ typedef struct OHCIState {
     uint32_t async_td;
     bool async_complete;
 
-    void (*ohci_die)(struct OHCIState *ohci);
-} OHCIState;
+    void (*ohci_die)(OHCIState *ohci);
+};
+
+#define TYPE_SYSBUS_OHCI "sysbus-ohci"
+OBJECT_DECLARE_SIMPLE_TYPE(OHCISysBusState, SYSBUS_OHCI)
+
+struct OHCISysBusState {
+    /*< private >*/
+    SysBusDevice parent_obj;
+    /*< public >*/
+
+    OHCIState ohci;
+    char *masterbus;
+    uint32_t num_ports;
+    uint32_t firstport;
+    dma_addr_t dma_offset;
+};
 
 extern const VMStateDescription vmstate_ohci_state;
 
 void usb_ohci_init(OHCIState *ohci, DeviceState *dev, uint32_t num_ports,
                    dma_addr_t localmem_base, char *masterbus,
                    uint32_t firstport, AddressSpace *as,
-                   void (*ohci_die_fn)(struct OHCIState *), Error **errp);
+                   void (*ohci_die_fn)(OHCIState *), Error **errp);
 void ohci_bus_stop(OHCIState *ohci);
 void ohci_stop_endpoints(OHCIState *ohci);
 void ohci_hard_reset(OHCIState *ohci);

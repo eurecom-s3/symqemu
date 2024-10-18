@@ -20,8 +20,9 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "hw/hw.h"
+#include "migration/vmstate.h"
 #include "qemu/timer.h"
+#include "sysemu/reset.h"
 
 #define TIMER_PERIOD 50 /* 50 ns period for 20 MHz timer */
 
@@ -122,11 +123,29 @@ static void openrisc_timer_cb(void *opaque)
     qemu_cpu_kick(CPU(cpu));
 }
 
+/* Reset the per CPU counter state. */
+static void openrisc_count_reset(void *opaque)
+{
+    OpenRISCCPU *cpu = opaque;
+
+    if (cpu->env.is_counting) {
+        cpu_openrisc_count_stop(cpu);
+    }
+    cpu->env.ttmr = 0x00000000;
+}
+
+/* Reset the global timer state. */
+static void openrisc_timer_reset(void *opaque)
+{
+    or1k_timer->ttcr = 0x00000000;
+    or1k_timer->last_clk = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+}
+
 static const VMStateDescription vmstate_or1k_timer = {
     .name = "or1k_timer",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(ttcr, OR1KTimerState),
         VMSTATE_UINT64(last_clk, OR1KTimerState),
         VMSTATE_END_OF_LIST()
@@ -136,10 +155,11 @@ static const VMStateDescription vmstate_or1k_timer = {
 void cpu_openrisc_clock_init(OpenRISCCPU *cpu)
 {
     cpu->env.timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, &openrisc_timer_cb, cpu);
-    cpu->env.ttmr = 0x00000000;
 
+    qemu_register_reset(openrisc_count_reset, cpu);
     if (or1k_timer == NULL) {
         or1k_timer = g_new0(OR1KTimerState, 1);
+        qemu_register_reset(openrisc_timer_reset, cpu);
         vmstate_register(NULL, 0, &vmstate_or1k_timer, or1k_timer);
     }
 }

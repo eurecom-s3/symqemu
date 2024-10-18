@@ -9,7 +9,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,7 +24,7 @@
 #ifndef HW_IDE_AHCI_H
 #define HW_IDE_AHCI_H
 
-#include "hw/sysbus.h"
+#include "exec/memory.h"
 
 typedef struct AHCIDevice AHCIDevice;
 
@@ -45,41 +45,12 @@ typedef struct AHCIState {
     MemoryRegion idp;       /* Index-Data Pair I/O port space */
     unsigned idp_offset;    /* Offset of index in I/O port space */
     uint32_t idp_index;     /* Current IDP index */
-    int32_t ports;
+    uint32_t ports;
     qemu_irq irq;
     AddressSpace *as;
 } AHCIState;
 
-typedef struct AHCIPCIState AHCIPCIState;
 
-#define TYPE_ICH9_AHCI "ich9-ahci"
-
-int32_t ahci_get_num_ports(PCIDevice *dev);
-void ahci_ide_create_devs(PCIDevice *dev, DriveInfo **hd);
-
-#define TYPE_SYSBUS_AHCI "sysbus-ahci"
-
-typedef struct SysbusAHCIState {
-    /*< private >*/
-    SysBusDevice parent_obj;
-    /*< public >*/
-
-    AHCIState ahci;
-    uint32_t num_ports;
-} SysbusAHCIState;
-
-#define TYPE_ALLWINNER_AHCI "allwinner-ahci"
-
-#define ALLWINNER_AHCI_MMIO_OFF  0x80
-#define ALLWINNER_AHCI_MMIO_SIZE 0x80
-
-typedef struct AllwinnerAHCIState {
-    /*< private >*/
-    SysbusAHCIState parent_obj;
-    /*< public >*/
-
-    MemoryRegion mmio;
-    uint32_t regs[ALLWINNER_AHCI_MMIO_SIZE/4];
-} AllwinnerAHCIState;
+void ahci_ide_create_devs(AHCIState *ahci, DriveInfo **hd);
 
 #endif /* HW_IDE_AHCI_H */

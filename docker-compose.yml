@@ -1,0 +1,17 @@
+services:
+  symqemu-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: symqemu-dev
+    volumes:
+      - ./:/symqemu_source
+      - /symqemu_source/build
+    command: tail -f /dev/null
+
+  symqemu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: symqemu
+    command: tail -f /dev/null

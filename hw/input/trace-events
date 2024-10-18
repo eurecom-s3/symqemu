@@ -1,18 +1,25 @@
-# See docs/devel/tracing.txt for syntax documentation.
+# See docs/devel/tracing.rst for syntax documentation.
 
 # adb-kbd.c
-adb_kbd_no_key(void) "Ignoring NO_KEY"
-adb_kbd_writereg(int reg, uint8_t val) "reg %d val 0x%2.2x"
-adb_kbd_readreg(int reg, uint8_t val0, uint8_t val1) "reg %d obuf[0] 0x%2.2x obuf[1] 0x%2.2x"
-adb_kbd_request_change_addr(int devaddr) "change addr to 0x%x"
-adb_kbd_request_change_addr_and_handler(int devaddr, int handler) "change addr and handler to 0x%x, 0x%x"
+adb_device_kbd_no_key(void) "Ignoring NO_KEY"
+adb_device_kbd_writereg(int reg, uint8_t val) "reg %d val 0x%2.2x"
+adb_device_kbd_readreg(int reg, uint8_t val0, uint8_t val1) "reg %d obuf[0] 0x%2.2x obuf[1] 0x%2.2x"
+adb_device_kbd_request_change_addr(int devaddr) "change addr to 0x%x"
+adb_device_kbd_request_change_addr_and_handler(int devaddr, int handler) "change addr and handler to 0x%x, 0x%x"
 
 # adb-mouse.c
-adb_mouse_flush(void) "flush"
-adb_mouse_writereg(int reg, uint8_t val) "reg %d val 0x%2.2x"
-adb_mouse_readreg(int reg, uint8_t val0, uint8_t val1) "reg %d obuf[0] 0x%2.2x obuf[1] 0x%2.2x"
-adb_mouse_request_change_addr(int devaddr) "change addr to 0x%x"
-adb_mouse_request_change_addr_and_handler(int devaddr, int handler) "change addr and handler to 0x%x, 0x%x"
+adb_device_mouse_flush(void) "flush"
+adb_device_mouse_writereg(int reg, uint8_t val) "reg %d val 0x%2.2x"
+adb_device_mouse_readreg(int reg, uint8_t val0, uint8_t val1) "reg %d obuf[0] 0x%2.2x obuf[1] 0x%2.2x"
+adb_device_mouse_request_change_addr(int devaddr) "change addr to 0x%x"
+adb_device_mouse_request_change_addr_and_handler(int devaddr, int handler) "change addr and handler to 0x%x, 0x%x"
+
+# adb.c
+adb_bus_request(uint8_t addr, const char *cmd, int size) "device 0x%x %s cmdsize=%d"
+adb_bus_request_done(uint8_t addr, const char *cmd, int size) "device 0x%x %s replysize=%d"
+adb_bus_autopoll_block(bool blocked) "blocked: %d"
+adb_bus_autopoll_cb(uint16_t mask) "executing autopoll_cb with autopoll mask 0x%x"
+adb_bus_autopoll_cb_done(uint16_t mask) "done executing autopoll_cb with autopoll mask 0x%x"
 
 # pckbd.c
 pckbd_kbd_read_data(uint32_t val) "0x%02x"
@@ -23,7 +30,7 @@ pckbd_kbd_write_data(uint64_t val) "0x%02"PRIx64
 
 # ps2.c
 ps2_put_keycode(void *opaque, int keycode) "%p keycode 0x%02x"
-ps2_keyboard_event(void *opaque, int qcode, int down, unsigned int modifier, unsigned int modifiers) "%p qcode %d down %d modifier 0x%x modifiers 0x%x"
+ps2_keyboard_event(void *opaque, int qcode, int down, unsigned int modifier, unsigned int modifiers, int set, int xlate) "%p qcode %d down %d modifier 0x%x modifiers 0x%x set %d xlate %d"
 ps2_read_data(void *opaque) "%p"
 ps2_set_ledstate(void *s, int ledstate) "%p ledstate %d"
 ps2_reset_keyboard(void *s) "%p"
@@ -34,15 +41,6 @@ ps2_mouse_fake_event(void *opaque) "%p"
 ps2_write_mouse(void *opaque, int val) "%p val %d"
 ps2_kbd_reset(void *opaque) "%p"
 ps2_mouse_reset(void *opaque) "%p"
-ps2_kbd_init(void *s) "%p"
-ps2_mouse_init(void *s) "%p"
-
-# milkymist-softusb.c
-milkymist_softusb_memory_read(uint32_t addr, uint32_t value) "addr 0x%08x value 0x%08x"
-milkymist_softusb_memory_write(uint32_t addr, uint32_t value) "addr 0x%08x value 0x%08x"
-milkymist_softusb_mevt(uint8_t m) "m %d"
-milkymist_softusb_kevt(uint8_t m) "m %d"
-milkymist_softusb_pulse_irq(void) "Pulse IRQ"
 
 # hid.c
 hid_kbd_queue_full(void) "queue full"
@@ -53,3 +51,8 @@ tsc2005_sense(const char *state) "touchscreen sense %s"
 
 # virtio-input.c
 virtio_input_queue_full(void) "queue full"
+
+# lasips2.c
+lasips2_reg_read(unsigned int size, int id, uint64_t addr, const char *name, uint64_t val) "%u %d addr 0x%"PRIx64 "%s -> 0x%"PRIx64
+lasips2_reg_write(unsigned int size, int id, uint64_t addr, const char *name, uint64_t val) "%u %d addr 0x%"PRIx64 "%s <- 0x%"PRIx64
+lasips2_intr(unsigned int val) "%d"

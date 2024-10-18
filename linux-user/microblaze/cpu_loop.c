@@ -18,16 +18,16 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu.h"
+#include "user-internals.h"
 #include "cpu_loop-common.h"
+#include "signal-common.h"
 
 void cpu_loop(CPUMBState *env)
 {
+    int trapnr, ret, si_code, sig;
     CPUState *cs = env_cpu(env);
-    int trapnr, ret;
-    target_siginfo_t info;
-    
+
     while (1) {
         cpu_exec_start(cs);
         trapnr = cpu_exec(cs);
@@ -35,23 +35,13 @@ void cpu_loop(CPUMBState *env)
         process_queued_cpu_work(cs);
 
         switch (trapnr) {
-        case 0xaa:
-            {
-                info.si_signo = TARGET_SIGSEGV;
-                info.si_errno = 0;
-                /* XXX: check env->error_code */
-                info.si_code = TARGET_SEGV_MAPERR;
-                info._sifields._sigfault._addr = 0;
-                queue_signal(env, info.si_signo, QEMU_SI_FAULT, &info);
-            }
-            break;
         case EXCP_INTERRUPT:
-          /* just indicate that signals should be handled asap */
-          break;
-        case EXCP_BREAK:
+            /* just indicate that signals should be handled asap */
+            break;
+        case EXCP_SYSCALL:
             /* Return address is 4 bytes after the call.  */
             env->regs[14] += 4;
-            env->sregs[SR_PC] = env->regs[14];
+            env->pc = env->regs[14];
             ret = do_syscall(env, 
                              env->regs[12], 
                              env->regs[5], 
@@ -61,10 +51,10 @@ void cpu_loop(CPUMBState *env)
                              env->regs[9], 
                              env->regs[10],
                              0, 0);
-            if (ret == -TARGET_ERESTARTSYS) {
+            if (ret == -QEMU_ERESTARTSYS) {
                 /* Wind back to before the syscall. */
-                env->sregs[SR_PC] -= 4;
-            } else if (ret != -TARGET_QEMU_ESIGRETURN) {
+                env->pc -= 4;
+            } else if (ret != -QEMU_ESIGRETURN) {
                 env->regs[3] = ret;
             }
             /* All syscall exits result in guest r14 being equal to the
@@ -73,51 +63,57 @@ void cpu_loop(CPUMBState *env)
              * not a userspace-usable register, as the kernel may clobber it
              * at any point.)
              */
-            env->regs[14] = env->sregs[SR_PC];
+            env->regs[14] = env->pc;
             break;
+
         case EXCP_HW_EXCP:
-            env->regs[17] = env->sregs[SR_PC] + 4;
+            env->regs[17] = env->pc + 4;
             if (env->iflags & D_FLAG) {
-                env->sregs[SR_ESR] |= 1 << 12;
-                env->sregs[SR_PC] -= 4;
+                env->esr |= 1 << 12;
+                env->pc -= 4;
                 /* FIXME: if branch was immed, replay the imm as well.  */
             }
-
             env->iflags &= ~(IMM_FLAG | D_FLAG);
-
-            switch (env->sregs[SR_ESR] & 31) {
-                case ESR_EC_DIVZERO:
-                    info.si_signo = TARGET_SIGFPE;
-                    info.si_errno = 0;
-                    info.si_code = TARGET_FPE_FLTDIV;
-                    info._sifields._sigfault._addr = 0;
-                    queue_signal(env, info.si_signo, QEMU_SI_FAULT, &info);
-                    break;
-                case ESR_EC_FPU:
-                    info.si_signo = TARGET_SIGFPE;
-                    info.si_errno = 0;
-                    if (env->sregs[SR_FSR] & FSR_IO) {
-                        info.si_code = TARGET_FPE_FLTINV;
-                    }
-                    if (env->sregs[SR_FSR] & FSR_DZ) {
-                        info.si_code = TARGET_FPE_FLTDIV;
-                    }
-                    info._sifields._sigfault._addr = 0;
-                    queue_signal(env, info.si_signo, QEMU_SI_FAULT, &info);
-                    break;
-                default:
-                    fprintf(stderr, "Unhandled hw-exception: 0x%" PRIx64 "\n",
-                            env->sregs[SR_ESR] & ESR_EC_MASK);
-                    cpu_dump_state(cs, stderr, 0);
-                    exit(EXIT_FAILURE);
-                    break;
+            switch (env->esr & 31) {
+            case ESR_EC_DIVZERO:
+                sig = TARGET_SIGFPE;
+                si_code = TARGET_FPE_INTDIV;
+                break;
+            case ESR_EC_FPU:
+                /*
+                 * Note that the kernel passes along fsr as si_code
+                 * if there's no recognized bit set.  Possibly this
+                 * implies that si_code is 0, but follow the structure.
+                 */
+                sig = TARGET_SIGFPE;
+                si_code = env->fsr;
+                if (si_code & FSR_IO) {
+                    si_code = TARGET_FPE_FLTINV;
+                } else if (si_code & FSR_OF) {
+                    si_code = TARGET_FPE_FLTOVF;
+                } else if (si_code & FSR_UF) {
+                    si_code = TARGET_FPE_FLTUND;
+                } else if (si_code & FSR_DZ) {
+                    si_code = TARGET_FPE_FLTDIV;
+                } else if (si_code & FSR_DO) {
+                    si_code = TARGET_FPE_FLTRES;
+                }
+                break;
+            case ESR_EC_PRIVINSN:
+                sig = SIGILL;
+                si_code = ILL_PRVOPC;
+                break;
+            default:
+                fprintf(stderr, "Unhandled hw-exception: 0x%x\n",
+                        env->esr & ESR_EC_MASK);
+                cpu_dump_state(cs, stderr, 0);
+                exit(EXIT_FAILURE);
             }
+            force_sig_fault(sig, si_code, env->pc);
             break;
+
         case EXCP_DEBUG:
-            info.si_signo = TARGET_SIGTRAP;
-            info.si_errno = 0;
-            info.si_code = TARGET_TRAP_BRKPT;
-            queue_signal(env, info.si_signo, QEMU_SI_FAULT, &info);
+            force_sig_fault(TARGET_SIGTRAP, TARGET_TRAP_BRKPT, env->pc);
             break;
         case EXCP_ATOMIC:
             cpu_exec_step_atomic(cs);
@@ -165,5 +161,5 @@ void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
     env->regs[29] = regs->r29;
     env->regs[30] = regs->r30;
     env->regs[31] = regs->r31;
-    env->sregs[SR_PC] = regs->pc;
+    env->pc = regs->pc;
 }

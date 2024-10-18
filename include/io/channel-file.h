@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,12 +22,11 @@
 #define QIO_CHANNEL_FILE_H
 
 #include "io/channel.h"
+#include "qom/object.h"
 
 #define TYPE_QIO_CHANNEL_FILE "qio-channel-file"
-#define QIO_CHANNEL_FILE(obj)                                     \
-    OBJECT_CHECK(QIOChannelFile, (obj), TYPE_QIO_CHANNEL_FILE)
+OBJECT_DECLARE_SIMPLE_TYPE(QIOChannelFile, QIO_CHANNEL_FILE)
 
-typedef struct QIOChannelFile QIOChannelFile;
 
 /**
  * QIOChannelFile:
@@ -68,6 +67,24 @@ struct QIOChannelFile {
  */
 QIOChannelFile *
 qio_channel_file_new_fd(int fd);
+
+/**
+ * qio_channel_file_new_dupfd:
+ * @fd: the file descriptor
+ * @errp: pointer to initialized error object
+ *
+ * Create a new IO channel object for a file represented by the @fd
+ * parameter. Like qio_channel_file_new_fd(), but the @fd is first
+ * duplicated with dup().
+ *
+ * The channel will own the duplicated file descriptor and will take
+ * responsibility for closing it, the original FD is owned by the
+ * caller.
+ *
+ * Returns: the new channel object
+ */
+QIOChannelFile *
+qio_channel_file_new_dupfd(int fd, Error **errp);
 
 /**
  * qio_channel_file_new_path:

@@ -16,7 +16,9 @@
 #include "qapi/qmp/qstring.h"
 #include "qemu/module.h"
 #include "qemu/option.h"
+#include "block/block-io.h"
 #include "block/block_int.h"
+#include "sysemu/replay.h"
 
 #define NULL_OPT_LATENCY "latency-ns"
 #define NULL_OPT_ZEROES  "read-zeroes"
@@ -98,7 +100,7 @@ static int null_file_open(BlockDriverState *bs, QDict *options, int flags,
     return ret;
 }
 
-static int64_t null_getlength(BlockDriverState *bs)
+static int64_t coroutine_fn null_co_getlength(BlockDriverState *bs)
 {
     BDRVNullState *s = bs->opaque;
     return s->length;
@@ -115,8 +117,9 @@ static coroutine_fn int null_co_common(BlockDriverState *bs)
 }
 
 static coroutine_fn int null_co_preadv(BlockDriverState *bs,
-                                       uint64_t offset, uint64_t bytes,
-                                       QEMUIOVector *qiov, int flags)
+                                       int64_t offset, int64_t bytes,
+                                       QEMUIOVector *qiov,
+                                       BdrvRequestFlags flags)
 {
     BDRVNullState *s = bs->opaque;
 
@@ -128,8 +131,9 @@ static coroutine_fn int null_co_preadv(BlockDriverState *bs,
 }
 
 static coroutine_fn int null_co_pwritev(BlockDriverState *bs,
-                                        uint64_t offset, uint64_t bytes,
-                                        QEMUIOVector *qiov, int flags)
+                                        int64_t offset, int64_t bytes,
+                                        QEMUIOVector *qiov,
+                                        BdrvRequestFlags flags)
 {
     return null_co_common(bs);
 }
@@ -179,14 +183,15 @@ static inline BlockAIOCB *null_aio_common(BlockDriverState *bs,
         timer_mod_ns(&acb->timer,
                      qemu_clock_get_ns(QEMU_CLOCK_REALTIME) + s->latency_ns);
     } else {
-        aio_bh_schedule_oneshot(bdrv_get_aio_context(bs), null_bh_cb, acb);
+        replay_bh_schedule_oneshot_event(bdrv_get_aio_context(bs),
+                                         null_bh_cb, acb);
     }
     return &acb->common;
 }
 
 static BlockAIOCB *null_aio_preadv(BlockDriverState *bs,
-                                   uint64_t offset, uint64_t bytes,
-                                   QEMUIOVector *qiov, int flags,
+                                   int64_t offset, int64_t bytes,
+                                   QEMUIOVector *qiov, BdrvRequestFlags flags,
                                    BlockCompletionFunc *cb,
                                    void *opaque)
 {
@@ -200,8 +205,8 @@ static BlockAIOCB *null_aio_preadv(BlockDriverState *bs,
 }
 
 static BlockAIOCB *null_aio_pwritev(BlockDriverState *bs,
-                                    uint64_t offset, uint64_t bytes,
-                                    QEMUIOVector *qiov, int flags,
+                                    int64_t offset, int64_t bytes,
+                                    QEMUIOVector *qiov, BdrvRequestFlags flags,
                                     BlockCompletionFunc *cb,
                                     void *opaque)
 {
@@ -260,6 +265,12 @@ static void null_refresh_filename(BlockDriverState *bs)
              bs->drv->format_name);
 }
 
+static int64_t coroutine_fn
+null_co_get_allocated_file_size(BlockDriverState *bs)
+{
+    return 0;
+}
+
 static const char *const null_strong_runtime_opts[] = {
     BLOCK_OPT_SIZE,
     NULL_OPT_ZEROES,
@@ -274,7 +285,8 @@ static BlockDriver bdrv_null_co = {
 
     .bdrv_file_open         = null_file_open,
     .bdrv_parse_filename    = null_co_parse_filename,
-    .bdrv_getlength         = null_getlength,
+    .bdrv_co_getlength      = null_co_getlength,
+    .bdrv_co_get_allocated_file_size = null_co_get_allocated_file_size,
 
     .bdrv_co_preadv         = null_co_preadv,
     .bdrv_co_pwritev        = null_co_pwritev,
@@ -294,7 +306,8 @@ static BlockDriver bdrv_null_aio = {
 
     .bdrv_file_open         = null_file_open,
     .bdrv_parse_filename    = null_aio_parse_filename,
-    .bdrv_getlength         = null_getlength,
+    .bdrv_co_getlength      = null_co_getlength,
+    .bdrv_co_get_allocated_file_size = null_co_get_allocated_file_size,
 
     .bdrv_aio_preadv        = null_aio_preadv,
     .bdrv_aio_pwritev       = null_aio_pwritev,

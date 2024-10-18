@@ -18,9 +18,10 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/log.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
-#include "exec/gdbstub.h"
+#include "gdbstub/helpers.h"
 #include "qemu/host-utils.h"
 #ifndef CONFIG_USER_ONLY
 #include "hw/loader.h"
@@ -28,15 +29,11 @@
 
 void openrisc_cpu_do_interrupt(CPUState *cs)
 {
-#ifndef CONFIG_USER_ONLY
-    OpenRISCCPU *cpu = OPENRISC_CPU(cs);
-    CPUOpenRISCState *env = &cpu->env;
+    CPUOpenRISCState *env = cpu_env(cs);
     int exception = cs->exception_index;
 
     env->epcr = env->pc;
-    if (exception == EXCP_SYSCALL) {
-        env->epcr += 4;
-    }
+
     /* When we have an illegal instruction the error effective address
        shall be set to the illegal instruction address.  */
     if (exception == EXCP_ILLEGAL) {
@@ -63,6 +60,9 @@ void openrisc_cpu_do_interrupt(CPUState *cs)
         env->epcr -= 4;
     } else {
         env->sr &= ~SR_DSX;
+        if (exception == EXCP_SYSCALL || exception == EXCP_FPE) {
+            env->epcr += 4;
+        }
     }
 
     if (exception > 0 && exception < EXCP_NR) {
@@ -83,7 +83,9 @@ void openrisc_cpu_do_interrupt(CPUState *cs)
             [EXCP_TRAP]     = "TRAP",
         };
 
-        qemu_log_mask(CPU_LOG_INT, "INT: %s\n", int_name[exception]);
+        qemu_log_mask(CPU_LOG_INT, "CPU: %d INT: %s\n",
+                      cs->cpu_index,
+                      int_name[exception]);
 
         hwaddr vect_pc = exception << 8;
         if (env->cpucfgr & CPUCFGR_EVBARP) {
@@ -96,15 +98,13 @@ void openrisc_cpu_do_interrupt(CPUState *cs)
     } else {
         cpu_abort(cs, "Unhandled exception 0x%x\n", exception);
     }
-#endif
 
     cs->exception_index = -1;
 }
 
 bool openrisc_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 {
-    OpenRISCCPU *cpu = OPENRISC_CPU(cs);
-    CPUOpenRISCState *env = &cpu->env;
+    CPUOpenRISCState *env = cpu_env(cs);
     int idx = -1;
 
     if ((interrupt_request & CPU_INTERRUPT_HARD) && (env->sr & SR_IEE)) {

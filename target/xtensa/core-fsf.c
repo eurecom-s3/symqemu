@@ -27,14 +27,14 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "exec/gdbstub.h"
+#include "gdbstub/helpers.h"
 #include "qemu/host-utils.h"
 
 #include "core-fsf/core-isa.h"
 #include "overlay_tool.h"
 
 #define xtensa_modules xtensa_modules_fsf
-#include "core-fsf/xtensa-modules.inc.c"
+#include "core-fsf/xtensa-modules.c.inc"
 
 static XtensaConfig fsf __attribute__((unused)) = {
     .name = "fsf",

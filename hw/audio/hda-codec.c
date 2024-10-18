@@ -18,13 +18,16 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/pci/pci.h"
+#include "hw/qdev-properties.h"
 #include "intel-hda.h"
+#include "migration/vmstate.h"
+#include "qemu/host-utils.h"
 #include "qemu/module.h"
 #include "intel-hda-defs.h"
 #include "audio/audio.h"
 #include "trace.h"
+#include "qom/object.h"
 
 /* -------------------------------------------------------------------------- */
 
@@ -143,7 +146,9 @@ static const char *fmt2name[] = {
     [ AUDIO_FORMAT_S32 ] = "PCM-S32",
 };
 
-typedef struct HDAAudioState HDAAudioState;
+#define TYPE_HDA_AUDIO "hda-audio"
+OBJECT_DECLARE_SIMPLE_TYPE(HDAAudioState, HDA_AUDIO)
+
 typedef struct HDAAudioStream HDAAudioStream;
 
 struct HDAAudioStream {
@@ -169,9 +174,6 @@ struct HDAAudioStream {
     int64_t buft_start;
 };
 
-#define TYPE_HDA_AUDIO "hda-audio"
-#define HDA_AUDIO(obj) OBJECT_CHECK(HDAAudioState, (obj), TYPE_HDA_AUDIO)
-
 struct HDAAudioState {
     HDACodecDevice hda;
     const char *name;
@@ -188,9 +190,9 @@ struct HDAAudioState {
     bool     use_timer;
 };
 
-static inline int64_t hda_bytes_per_second(HDAAudioStream *st)
+static inline uint32_t hda_bytes_per_second(HDAAudioStream *st)
 {
-    return 2LL * st->as.nchannels * st->as.freq;
+    return 2 * (uint32_t)st->as.nchannels * (uint32_t)st->as.freq;
 }
 
 static inline void hda_timer_sync_adjust(HDAAudioStream *st, int64_t target_pos)
@@ -221,12 +223,18 @@ static void hda_audio_input_timer(void *opaque)
 
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    int64_t buft_start = st->buft_start;
+    int64_t uptime = now - st->buft_start;
     int64_t wpos = st->wpos;
     int64_t rpos = st->rpos;
+    int64_t wanted_rpos;
 
-    int64_t wanted_rpos = hda_bytes_per_second(st) * (now - buft_start)
-                          / NANOSECONDS_PER_SECOND;
+    if (uptime <= 0) {
+        /* wanted_rpos <= 0 */
+        goto out_timer;
+    }
+
+    wanted_rpos = muldiv64(uptime, hda_bytes_per_second(st),
+                           NANOSECONDS_PER_SECOND);
     wanted_rpos &= -4; /* IMPORTANT! clip to frames */
 
     if (wanted_rpos <= rpos) {
@@ -234,10 +242,10 @@ static void hda_audio_input_timer(void *opaque)
         goto out_timer;
     }
 
-    int64_t to_transfer = audio_MIN(wpos - rpos, wanted_rpos - rpos);
+    int64_t to_transfer = MIN(wpos - rpos, wanted_rpos - rpos);
     while (to_transfer) {
         uint32_t start = (rpos & B_MASK);
-        uint32_t chunk = audio_MIN(B_SIZE - start, to_transfer);
+        uint32_t chunk = MIN(B_SIZE - start, to_transfer);
         int rc = hda_codec_xfer(
                 &st->state->hda, st->stream, false, st->buf + start, chunk);
         if (!rc) {
@@ -262,13 +270,11 @@ static void hda_audio_input_cb(void *opaque, int avail)
     int64_t wpos = st->wpos;
     int64_t rpos = st->rpos;
 
-    int64_t to_transfer = audio_MIN(B_SIZE - (wpos - rpos), avail);
-
-    hda_timer_sync_adjust(st, -((wpos - rpos) + to_transfer - (B_SIZE >> 1)));
+    int64_t to_transfer = MIN(B_SIZE - (wpos - rpos), avail);
 
     while (to_transfer) {
         uint32_t start = (uint32_t) (wpos & B_MASK);
-        uint32_t chunk = (uint32_t) audio_MIN(B_SIZE - start, to_transfer);
+        uint32_t chunk = (uint32_t) MIN(B_SIZE - start, to_transfer);
         uint32_t read = AUD_read(st->voice.in, st->buf + start, chunk);
         wpos += read;
         to_transfer -= read;
@@ -277,6 +283,8 @@ static void hda_audio_input_cb(void *opaque, int avail)
             break;
         }
     }
+
+    hda_timer_sync_adjust(st, -((wpos - rpos) - (B_SIZE >> 1)));
 }
 
 static void hda_audio_output_timer(void *opaque)
@@ -285,12 +293,18 @@ static void hda_audio_output_timer(void *opaque)
 
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    int64_t buft_start = st->buft_start;
+    int64_t uptime = now - st->buft_start;
     int64_t wpos = st->wpos;
     int64_t rpos = st->rpos;
+    int64_t wanted_wpos;
 
-    int64_t wanted_wpos = hda_bytes_per_second(st) * (now - buft_start)
-                          / NANOSECONDS_PER_SECOND;
+    if (uptime <= 0) {
+        /* wanted_wpos <= 0 */
+        goto out_timer;
+    }
+
+    wanted_wpos = muldiv64(uptime, hda_bytes_per_second(st),
+                           NANOSECONDS_PER_SECOND);
     wanted_wpos &= -4; /* IMPORTANT! clip to frames */
 
     if (wanted_wpos <= wpos) {
@@ -298,10 +312,10 @@ static void hda_audio_output_timer(void *opaque)
         goto out_timer;
     }
 
-    int64_t to_transfer = audio_MIN(B_SIZE - (wpos - rpos), wanted_wpos - wpos);
+    int64_t to_transfer = MIN(B_SIZE - (wpos - rpos), wanted_wpos - wpos);
     while (to_transfer) {
         uint32_t start = (wpos & B_MASK);
-        uint32_t chunk = audio_MIN(B_SIZE - start, to_transfer);
+        uint32_t chunk = MIN(B_SIZE - start, to_transfer);
         int rc = hda_codec_xfer(
                 &st->state->hda, st->stream, true, st->buf + start, chunk);
         if (!rc) {
@@ -326,7 +340,7 @@ static void hda_audio_output_cb(void *opaque, int avail)
     int64_t wpos = st->wpos;
     int64_t rpos = st->rpos;
 
-    int64_t to_transfer = audio_MIN(wpos - rpos, avail);
+    int64_t to_transfer = MIN(wpos - rpos, avail);
 
     if (wpos - rpos == B_SIZE) {
         /* drop buffer, reset timer adjust */
@@ -337,11 +351,9 @@ static void hda_audio_output_cb(void *opaque, int avail)
         return;
     }
 
-    hda_timer_sync_adjust(st, (wpos - rpos) - to_transfer - (B_SIZE >> 1));
-
     while (to_transfer) {
         uint32_t start = (uint32_t) (rpos & B_MASK);
-        uint32_t chunk = (uint32_t) audio_MIN(B_SIZE - start, to_transfer);
+        uint32_t chunk = (uint32_t) MIN(B_SIZE - start, to_transfer);
         uint32_t written = AUD_write(st->voice.out, st->buf + start, chunk);
         rpos += written;
         to_transfer -= written;
@@ -350,6 +362,8 @@ static void hda_audio_output_cb(void *opaque, int avail)
             break;
         }
     }
+
+    hda_timer_sync_adjust(st, (wpos - rpos) - (B_SIZE >> 1));
 }
 
 static void hda_audio_compat_input_cb(void *opaque, int avail)
@@ -674,7 +688,9 @@ static void hda_audio_stream(HDACodecDevice *hda, uint32_t stnr, bool running, b
     }
 }
 
-static int hda_audio_init(HDACodecDevice *hda, const struct desc_codec *desc)
+static void hda_audio_init(HDACodecDevice *hda,
+                           const struct desc_codec *desc,
+                           Error **errp)
 {
     HDAAudioState *a = HDA_AUDIO(hda);
     HDAAudioStream *st;
@@ -682,11 +698,14 @@ static int hda_audio_init(HDACodecDevice *hda, const struct desc_codec *desc)
     const desc_param *param;
     uint32_t i, type;
 
+    if (!AUD_register_card("hda", &a->card, errp)) {
+        return;
+    }
+
     a->desc = desc;
     a->name = object_get_typename(OBJECT(a));
     dprint(a, 1, "%s: cad %d\n", __func__, a->hda.cad);
 
-    AUD_register_card("hda", &a->card);
     for (i = 0; i < a->desc->nnodes; i++) {
         node = a->desc->nodes + i;
         param = hda_codec_find_param(node, AC_PAR_AUDIO_WIDGET_CAP);
@@ -717,7 +736,6 @@ static int hda_audio_init(HDACodecDevice *hda, const struct desc_codec *desc)
             break;
         }
     }
-    return 0;
 }
 
 static void hda_audio_exit(HDACodecDevice *hda)
@@ -794,7 +812,7 @@ static const VMStateDescription vmstate_hda_audio_stream_buf = {
     .name = "hda-audio-stream/buffer",
     .version_id = 1,
     .needed = vmstate_hda_audio_stream_buf_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_BUFFER(buf, HDAAudioStream),
         VMSTATE_INT64(rpos, HDAAudioStream),
         VMSTATE_INT64(wpos, HDAAudioStream),
@@ -807,7 +825,7 @@ static const VMStateDescription vmstate_hda_audio_stream_buf = {
 static const VMStateDescription vmstate_hda_audio_stream = {
     .name = "hda-audio-stream",
     .version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(stream, HDAAudioStream),
         VMSTATE_UINT32(channel, HDAAudioStream),
         VMSTATE_UINT32(format, HDAAudioStream),
@@ -819,7 +837,7 @@ static const VMStateDescription vmstate_hda_audio_stream = {
         VMSTATE_BUFFER(compat_buf, HDAAudioStream),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription * []) {
+    .subsections = (const VMStateDescription * const []) {
         &vmstate_hda_audio_stream_buf,
         NULL
     }
@@ -829,7 +847,7 @@ static const VMStateDescription vmstate_hda_audio = {
     .name = "hda-audio",
     .version_id = 2,
     .post_load = hda_audio_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_STRUCT_ARRAY(st, HDAAudioState, 4, 0,
                              vmstate_hda_audio_stream,
                              HDAAudioStream),
@@ -840,43 +858,47 @@ static const VMStateDescription vmstate_hda_audio = {
 };
 
 static Property hda_audio_properties[] = {
+    DEFINE_AUDIO_PROPERTIES(HDAAudioState, card),
     DEFINE_PROP_UINT32("debug", HDAAudioState, debug,   0),
     DEFINE_PROP_BOOL("mixer", HDAAudioState, mixer,  true),
     DEFINE_PROP_BOOL("use-timer", HDAAudioState, use_timer,  true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
-static int hda_audio_init_output(HDACodecDevice *hda)
+static void hda_audio_init_output(HDACodecDevice *hda, Error **errp)
 {
     HDAAudioState *a = HDA_AUDIO(hda);
+    const struct desc_codec *desc = &output_mixemu;
 
     if (!a->mixer) {
-        return hda_audio_init(hda, &output_nomixemu);
-    } else {
-        return hda_audio_init(hda, &output_mixemu);
+        desc = &output_nomixemu;
     }
+
+    hda_audio_init(hda, desc, errp);
 }
 
-static int hda_audio_init_duplex(HDACodecDevice *hda)
+static void hda_audio_init_duplex(HDACodecDevice *hda, Error **errp)
 {
     HDAAudioState *a = HDA_AUDIO(hda);
+    const struct desc_codec *desc = &duplex_mixemu;
 
     if (!a->mixer) {
-        return hda_audio_init(hda, &duplex_nomixemu);
-    } else {
-        return hda_audio_init(hda, &duplex_mixemu);
+        desc = &duplex_nomixemu;
     }
+
+    hda_audio_init(hda, desc, errp);
 }
 
-static int hda_audio_init_micro(HDACodecDevice *hda)
+static void hda_audio_init_micro(HDACodecDevice *hda, Error **errp)
 {
     HDAAudioState *a = HDA_AUDIO(hda);
+    const struct desc_codec *desc = &micro_mixemu;
 
     if (!a->mixer) {
-        return hda_audio_init(hda, &micro_nomixemu);
-    } else {
-        return hda_audio_init(hda, &micro_mixemu);
+        desc = &micro_nomixemu;
     }
+
+    hda_audio_init(hda, desc, errp);
 }
 
 static void hda_audio_base_class_init(ObjectClass *klass, void *data)
@@ -890,12 +912,13 @@ static void hda_audio_base_class_init(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
     dc->reset = hda_audio_reset;
     dc->vmsd = &vmstate_hda_audio;
-    dc->props = hda_audio_properties;
+    device_class_set_props(dc, hda_audio_properties);
 }
 
 static const TypeInfo hda_audio_info = {
     .name          = TYPE_HDA_AUDIO,
     .parent        = TYPE_HDA_CODEC_DEVICE,
+    .instance_size = sizeof(HDAAudioState),
     .class_init    = hda_audio_base_class_init,
     .abstract      = true,
 };
@@ -912,7 +935,6 @@ static void hda_audio_output_class_init(ObjectClass *klass, void *data)
 static const TypeInfo hda_audio_output_info = {
     .name          = "hda-output",
     .parent        = TYPE_HDA_AUDIO,
-    .instance_size = sizeof(HDAAudioState),
     .class_init    = hda_audio_output_class_init,
 };
 
@@ -928,7 +950,6 @@ static void hda_audio_duplex_class_init(ObjectClass *klass, void *data)
 static const TypeInfo hda_audio_duplex_info = {
     .name          = "hda-duplex",
     .parent        = TYPE_HDA_AUDIO,
-    .instance_size = sizeof(HDAAudioState),
     .class_init    = hda_audio_duplex_class_init,
 };
 
@@ -944,7 +965,6 @@ static void hda_audio_micro_class_init(ObjectClass *klass, void *data)
 static const TypeInfo hda_audio_micro_info = {
     .name          = "hda-micro",
     .parent        = TYPE_HDA_AUDIO,
-    .instance_size = sizeof(HDAAudioState),
     .class_init    = hda_audio_micro_class_init,
 };
 

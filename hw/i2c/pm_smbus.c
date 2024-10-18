@@ -1,12 +1,12 @@
 /*
  * PC SMBus implementation
- * splitted from acpi.c
+ * split from acpi.c
  *
  * Copyright (c) 2006 Fabrice Bellard
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
- * License version 2 as published by the Free Software Foundation.
+ * License version 2.1 as published by the Free Software Foundation.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,11 +17,13 @@
  * License along with this library; if not, see
  * <http://www.gnu.org/licenses/>.
  */
+
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/boards.h"
 #include "hw/i2c/pm_smbus.h"
 #include "hw/i2c/smbus_master.h"
+#include "migration/vmstate.h"
+#include "trace.h"
 
 #define SMBHSTSTS       0x00
 #define SMBHSTCNT       0x02
@@ -63,15 +65,6 @@
 #define AUX_BLK       (1 << 1)
 #define AUX_MASK      0x3
 
-/*#define DEBUG*/
-
-#ifdef DEBUG
-# define SMBUS_DPRINTF(format, ...)     printf(format, ## __VA_ARGS__)
-#else
-# define SMBUS_DPRINTF(format, ...)     do { } while (0)
-#endif
-
-
 static void smb_transaction(PMSMBus *s)
 {
     uint8_t prot = (s->smb_ctl >> 2) & 0x07;
@@ -81,7 +74,7 @@ static void smb_transaction(PMSMBus *s)
     I2CBus *bus = s->smbus;
     int ret;
 
-    SMBUS_DPRINTF("SMBus trans addr=0x%02x prot=0x%02x\n", addr, prot);
+    trace_smbus_transaction(addr, prot);
     /* Transaction isn't exec if STS_DEV_ERR bit set */
     if ((s->smb_stat & STS_DEV_ERR) != 0)  {
         goto error;
@@ -127,14 +120,14 @@ static void smb_transaction(PMSMBus *s)
          * So at least Linux may or may not set the read bit here.
          * So just ignore the read bit for this command.
          */
-        if (i2c_start_transfer(bus, addr, 0)) {
+        if (i2c_start_send(bus, addr)) {
             goto error;
         }
         ret = i2c_send(bus, s->smb_data1);
         if (ret) {
             goto error;
         }
-        if (i2c_start_transfer(bus, addr, 1)) {
+        if (i2c_start_recv(bus, addr)) {
             goto error;
         }
         s->in_i2c_block_read = true;
@@ -183,7 +176,6 @@ static void smb_transaction(PMSMBus *s)
                 s->smb_stat |= STS_HOST_BUSY | STS_BYTE_DONE;
                 s->smb_data[0] = s->smb_blkdata;
                 s->smb_index = 0;
-                ret = 0;
             }
             goto out;
         }
@@ -258,8 +250,7 @@ static void smb_ioport_writeb(void *opaque, hwaddr addr, uint64_t val,
     PMSMBus *s = opaque;
     uint8_t clear_byte_done;
 
-    SMBUS_DPRINTF("SMB writeb port=0x%04" HWADDR_PRIx
-                  " val=0x%02" PRIx64 "\n", addr, val);
+    trace_smbus_ioport_writeb(addr, val);
     switch(addr) {
     case SMBHSTSTS:
         clear_byte_done = s->smb_stat & val & STS_BYTE_DONE;
@@ -279,7 +270,7 @@ static void smb_ioport_writeb(void *opaque, hwaddr addr, uint64_t val,
             if (!read && s->smb_index == s->smb_data0) {
                 uint8_t prot = (s->smb_ctl >> 2) & 0x07;
                 uint8_t cmd = s->smb_cmd;
-                uint8_t addr = s->smb_addr >> 1;
+                uint8_t smb_addr = s->smb_addr >> 1;
                 int ret;
 
                 if (prot == PROT_I2C_BLOCK_READ) {
@@ -287,7 +278,7 @@ static void smb_ioport_writeb(void *opaque, hwaddr addr, uint64_t val,
                     goto out;
                 }
 
-                ret = smbus_write_block(s->smbus, addr, cmd, s->smb_data,
+                ret = smbus_write_block(s->smbus, smb_addr, cmd, s->smb_data,
                                         s->smb_data0, !s->i2c_enable);
                 if (ret < 0) {
                     s->smb_stat |= STS_DEV_ERR;
@@ -429,8 +420,7 @@ static uint64_t smb_ioport_readb(void *opaque, hwaddr addr, unsigned width)
         val = 0;
         break;
     }
-    SMBUS_DPRINTF("SMB readb port=0x%04" HWADDR_PRIx " val=0x%02x\n",
-                  addr, val);
+    trace_smbus_ioport_readb(addr, val);
 
     if (s->set_irq) {
         s->set_irq(s, smb_irq_value(s));
@@ -465,7 +455,7 @@ const VMStateDescription pmsmb_vmstate = {
     .name = "pmsmb",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8(smb_stat, PMSMBus),
         VMSTATE_UINT8(smb_ctl, PMSMBus),
         VMSTATE_UINT8(smb_cmd, PMSMBus),

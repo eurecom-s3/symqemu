@@ -22,6 +22,10 @@
 
 #include "qemu/osdep.h"
 #include "hw/char/bcm2835_aux.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
+#include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 
@@ -159,8 +163,9 @@ static void bcm2835_aux_write(void *opaque, hwaddr offset, uint64_t value,
     switch (offset) {
     case AUX_ENABLES:
         if (value != 1) {
-            qemu_log_mask(LOG_UNIMP, "%s: unsupported attempt to enable SPI "
-                          "or disable UART\n", __func__);
+            qemu_log_mask(LOG_UNIMP, "%s: unsupported attempt to enable SPI"
+                                     " or disable UART: 0x%"PRIx64"\n",
+                          __func__, value);
         }
         break;
 
@@ -245,7 +250,9 @@ static const MemoryRegionOps bcm2835_aux_ops = {
     .read = bcm2835_aux_read,
     .write = bcm2835_aux_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
-    .valid.min_access_size = 4,
+    .impl.min_access_size = 4,
+    .impl.max_access_size = 4,
+    .valid.min_access_size = 1,
     .valid.max_access_size = 4,
 };
 
@@ -253,7 +260,7 @@ static const VMStateDescription vmstate_bcm2835_aux = {
     .name = TYPE_BCM2835_AUX,
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(read_fifo, BCM2835AuxState,
                             BCM2835_AUX_RX_FIFO_LEN),
         VMSTATE_UINT8(read_pos, BCM2835AuxState),
@@ -295,7 +302,7 @@ static void bcm2835_aux_class_init(ObjectClass *oc, void *data)
     dc->realize = bcm2835_aux_realize;
     dc->vmsd = &vmstate_bcm2835_aux;
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
-    dc->props = bcm2835_aux_props;
+    device_class_set_props(dc, bcm2835_aux_props);
 }
 
 static const TypeInfo bcm2835_aux_info = {

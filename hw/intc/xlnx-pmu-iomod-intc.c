@@ -26,11 +26,14 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/register.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/intc/xlnx-pmu-iomod-intc.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
 
 #ifndef XLNX_PMU_IO_INTC_ERR_DEBUG
 #define XLNX_PMU_IO_INTC_ERR_DEBUG 0
@@ -523,7 +526,7 @@ static const VMStateDescription vmstate_xlnx_pmu_io_intc = {
     .name = TYPE_XLNX_PMU_IO_INTC,
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, XlnxPMUIOIntc, XLNXPMUIOINTC_R_MAX),
         VMSTATE_END_OF_LIST(),
     }
@@ -536,7 +539,7 @@ static void xlnx_pmu_io_intc_class_init(ObjectClass *klass, void *data)
     dc->reset = xlnx_pmu_io_intc_reset;
     dc->realize = xlnx_pmu_io_intc_realize;
     dc->vmsd = &vmstate_xlnx_pmu_io_intc;
-    dc->props = xlnx_pmu_io_intc_properties;
+    device_class_set_props(dc, xlnx_pmu_io_intc_properties);
 }
 
 static const TypeInfo xlnx_pmu_io_intc_info = {

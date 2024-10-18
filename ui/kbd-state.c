@@ -5,7 +5,6 @@
  */
 #include "qemu/osdep.h"
 #include "qemu/bitmap.h"
-#include "qemu/queue.h"
 #include "ui/console.h"
 #include "ui/input.h"
 #include "ui/kbd-state.h"
@@ -116,6 +115,12 @@ void qkbd_state_lift_all_keys(QKbdState *kbd)
             qkbd_state_key_event(kbd, qcode, false);
         }
     }
+}
+
+void qkbd_state_switch_console(QKbdState *kbd, QemuConsole *con)
+{
+    qkbd_state_lift_all_keys(kbd);
+    kbd->con = con;
 }
 
 void qkbd_state_set_delay(QKbdState *kbd, int delay_ms)

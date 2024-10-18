@@ -30,6 +30,10 @@ struct QDict {
     QLIST_HEAD(,QDictEntry) table[QDICT_BUCKET_MAX];
 };
 
+void qdict_unref(QDict *q);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(QDict, qdict_unref)
+
 /* Object API */
 QDict *qdict_new(void);
 const char *qdict_entry_key(const QDictEntry *entry);
@@ -39,13 +43,8 @@ void qdict_put_obj(QDict *qdict, const char *key, QObject *value);
 void qdict_del(QDict *qdict, const char *key);
 int qdict_haskey(const QDict *qdict, const char *key);
 QObject *qdict_get(const QDict *qdict, const char *key);
-bool qdict_is_equal(const QObject *x, const QObject *y);
-void qdict_iter(const QDict *qdict,
-                void (*iter)(const char *key, QObject *obj, void *opaque),
-                void *opaque);
 const QDictEntry *qdict_first(const QDict *qdict);
 const QDictEntry *qdict_next(const QDict *qdict, const QDictEntry *entry);
-void qdict_destroy_obj(QObject *obj);
 
 /* Helper to qdict_put_obj(), accepts any object */
 #define qdict_put(qdict, key, obj) \

@@ -19,9 +19,12 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "net/net.h"
 #include "qemu/fifo8.h"
+#include "hw/irq.h"
 #include "hw/net/allwinner_emac.h"
+#include "hw/qdev-properties.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include <zlib.h>
@@ -175,7 +178,7 @@ static uint32_t fifo8_pop_word(Fifo8 *fifo)
     return ret;
 }
 
-static int aw_emac_can_receive(NetClientState *nc)
+static bool aw_emac_can_receive(NetClientState *nc)
 {
     AwEmacState *s = qemu_get_nic_opaque(nc);
 
@@ -301,7 +304,7 @@ static uint64_t aw_emac_read(void *opaque, hwaddr offset, unsigned size)
     default:
         qemu_log_mask(LOG_UNIMP,
                       "allwinner_emac: read access to unknown register 0x"
-                      TARGET_FMT_plx "\n", offset);
+                      HWADDR_FMT_plx "\n", offset);
         ret = 0;
     }
 
@@ -404,7 +407,7 @@ static void aw_emac_write(void *opaque, hwaddr offset, uint64_t value,
     default:
         qemu_log_mask(LOG_UNIMP,
                       "allwinner_emac: write access to unknown register 0x"
-                      TARGET_FMT_plx "\n", offset);
+                      HWADDR_FMT_plx "\n", offset);
     }
 }
 
@@ -450,7 +453,8 @@ static void aw_emac_realize(DeviceState *dev, Error **errp)
 
     qemu_macaddr_default_if_unset(&s->conf.macaddr);
     s->nic = qemu_new_nic(&net_aw_emac_info, &s->conf,
-                          object_get_typename(OBJECT(dev)), dev->id, s);
+                          object_get_typename(OBJECT(dev)), dev->id,
+                          &dev->mem_reentrancy_guard, s);
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
 
     fifo8_create(&s->rx_fifo, RX_FIFO_SIZE);
@@ -468,7 +472,7 @@ static const VMStateDescription vmstate_mii = {
     .name = "rtl8201cp",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT16(bmcr, RTL8201CPState),
         VMSTATE_UINT16(bmsr, RTL8201CPState),
         VMSTATE_UINT16(anar, RTL8201CPState),
@@ -491,7 +495,7 @@ static const VMStateDescription vmstate_aw_emac = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = aw_emac_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_STRUCT(mii, AwEmacState, 1, vmstate_mii, RTL8201CPState),
         VMSTATE_UINT32(ctl, AwEmacState),
         VMSTATE_UINT32(tx_mode, AwEmacState),
@@ -516,7 +520,7 @@ static void aw_emac_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = aw_emac_realize;
-    dc->props = aw_emac_properties;
+    device_class_set_props(dc, aw_emac_properties);
     dc->reset = aw_emac_reset;
     dc->vmsd = &vmstate_aw_emac;
 }

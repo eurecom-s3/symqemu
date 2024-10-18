@@ -14,22 +14,28 @@
 
 #include "qemu/bitops.h"
 #include "hw/sysbus.h"
+#include "qom/object.h"
 
 
 enum IMX7SNVSRegisters {
     SNVS_LPCR = 0x38,
     SNVS_LPCR_TOP   = BIT(6),
-    SNVS_LPCR_DP_EN = BIT(5)
+    SNVS_LPCR_DP_EN = BIT(5),
+    SNVS_LPSRTCMR = 0x050, /* Secure Real Time Counter MSB Register */
+    SNVS_LPSRTCLR = 0x054, /* Secure Real Time Counter LSB Register */
 };
 
 #define TYPE_IMX7_SNVS "imx7.snvs"
-#define IMX7_SNVS(obj) OBJECT_CHECK(IMX7SNVSState, (obj), TYPE_IMX7_SNVS)
+OBJECT_DECLARE_SIMPLE_TYPE(IMX7SNVSState, IMX7_SNVS)
 
-typedef struct IMX7SNVSState {
+struct IMX7SNVSState {
     /* <private> */
     SysBusDevice parent_obj;
 
     MemoryRegion mmio;
-} IMX7SNVSState;
+
+    uint64_t tick_offset;
+    uint64_t lpcr;
+};
 
 #endif /* IMX7_SNVS_H */

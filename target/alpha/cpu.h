@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,8 +22,7 @@
 
 #include "cpu-qom.h"
 #include "exec/cpu-defs.h"
-
-#define ALIGNED_ONLY
+#include "qemu/cpu-float.h"
 
 /* Alpha processors have a weak memory model */
 #define TCG_GUEST_DEFAULT_MO      (0)
@@ -192,18 +191,14 @@ enum {
 
    That said, we're only emulating Unix PALcode, and not attempting VMS,
    so we don't need to implement Executive and Supervisor.  QEMU's own
-   PALcode cheats and usees the KSEG mapping for its code+data rather than
+   PALcode cheats and uses the KSEG mapping for its code+data rather than
    physical addresses.  */
 
-#define MMU_MODE0_SUFFIX _kernel
-#define MMU_MODE1_SUFFIX _user
 #define MMU_KERNEL_IDX   0
 #define MMU_USER_IDX     1
 #define MMU_PHYS_IDX     2
 
-typedef struct CPUAlphaState CPUAlphaState;
-
-struct CPUAlphaState {
+typedef struct CPUArchState {
     uint64_t ir[31];
     float64 fir[31];
     uint64_t pc;
@@ -255,7 +250,7 @@ struct CPUAlphaState {
     uint32_t features;
     uint32_t amask;
     int implver;
-};
+} CPUAlphaState;
 
 /**
  * AlphaCPU:
@@ -263,38 +258,39 @@ struct CPUAlphaState {
  *
  * An Alpha CPU.
  */
-struct AlphaCPU {
-    /*< private >*/
+struct ArchCPU {
     CPUState parent_obj;
-    /*< public >*/
 
-    CPUNegativeOffsetState neg;
     CPUAlphaState env;
 
     /* This alarm doesn't exist in real hardware; we wish it did.  */
     QEMUTimer *alarm_timer;
 };
 
+/**
+ * AlphaCPUClass:
+ * @parent_realize: The parent class' realize handler.
+ * @parent_reset: The parent class' reset handler.
+ *
+ * An Alpha CPU model.
+ */
+struct AlphaCPUClass {
+    CPUClass parent_class;
+
+    DeviceRealize parent_realize;
+    DeviceReset parent_reset;
+};
 
 #ifndef CONFIG_USER_ONLY
-extern const struct VMStateDescription vmstate_alpha_cpu;
-#endif
+extern const VMStateDescription vmstate_alpha_cpu;
 
 void alpha_cpu_do_interrupt(CPUState *cpu);
 bool alpha_cpu_exec_interrupt(CPUState *cpu, int int_req);
-void alpha_cpu_dump_state(CPUState *cs, FILE *f, int flags);
 hwaddr alpha_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
-int alpha_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
+#endif /* !CONFIG_USER_ONLY */
+void alpha_cpu_dump_state(CPUState *cs, FILE *f, int flags);
+int alpha_cpu_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg);
 int alpha_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
-void alpha_cpu_do_unaligned_access(CPUState *cpu, vaddr addr,
-                                   MMUAccessType access_type,
-                                   int mmu_idx, uintptr_t retaddr);
-
-#define cpu_list alpha_cpu_list
-#define cpu_signal_handler cpu_alpha_signal_handler
-
-typedef CPUAlphaState CPUArchState;
-typedef AlphaCPU ArchCPU;
 
 #include "exec/cpu-all.h"
 
@@ -374,7 +370,7 @@ enum {
    The Unix PALcode only uses bit 4.  */
 #define PS_USER_MODE  8u
 
-/* CPUAlphaState->flags constants.  These are layed out so that we
+/* CPUAlphaState->flags constants.  These are laid out so that we
    can set or reset the pieces individually by assigning to the byte,
    or manipulated as a whole.  */
 
@@ -391,7 +387,9 @@ enum {
 #define ENV_FLAG_TB_MASK \
     (ENV_FLAG_PAL_MODE | ENV_FLAG_PS_USER | ENV_FLAG_FEN)
 
-static inline int cpu_mmu_index(CPUAlphaState *env, bool ifetch)
+#define TB_FLAG_UNALIGN       (1u << 1)
+
+static inline int alpha_env_mmu_index(CPUAlphaState *env)
 {
     int ret = env->flags & ENV_FLAG_PS_USER ? MMU_USER_IDX : MMU_KERNEL_IDX;
     if (env->flags & ENV_FLAG_PAL_MODE) {
@@ -439,27 +437,29 @@ enum {
 
 void alpha_translate_init(void);
 
-#define ALPHA_CPU_TYPE_SUFFIX "-" TYPE_ALPHA_CPU
-#define ALPHA_CPU_TYPE_NAME(model) model ALPHA_CPU_TYPE_SUFFIX
 #define CPU_RESOLVING_TYPE TYPE_ALPHA_CPU
 
-void alpha_cpu_list(void);
-/* you can call this signal handler from your SIGBUS and SIGSEGV
-   signal handlers to inform the virtual CPU of exceptions. non zero
-   is returned if the signal was handled by the virtual CPU.  */
-int cpu_alpha_signal_handler(int host_signum, void *pinfo,
-                             void *puc);
-bool alpha_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
-                        MMUAccessType access_type, int mmu_idx,
-                        bool probe, uintptr_t retaddr);
-void QEMU_NORETURN dynamic_excp(CPUAlphaState *, uintptr_t, int, int);
-void QEMU_NORETURN arith_excp(CPUAlphaState *, uintptr_t, int, uint64_t);
+G_NORETURN void dynamic_excp(CPUAlphaState *, uintptr_t, int, int);
+G_NORETURN void arith_excp(CPUAlphaState *, uintptr_t, int, uint64_t);
 
 uint64_t cpu_alpha_load_fpcr (CPUAlphaState *env);
 void cpu_alpha_store_fpcr (CPUAlphaState *env, uint64_t val);
 uint64_t cpu_alpha_load_gr(CPUAlphaState *env, unsigned reg);
 void cpu_alpha_store_gr(CPUAlphaState *env, unsigned reg, uint64_t val);
-#ifndef CONFIG_USER_ONLY
+
+#ifdef CONFIG_USER_ONLY
+void alpha_cpu_record_sigsegv(CPUState *cs, vaddr address,
+                              MMUAccessType access_type,
+                              bool maperr, uintptr_t retaddr);
+void alpha_cpu_record_sigbus(CPUState *cs, vaddr address,
+                             MMUAccessType access_type, uintptr_t retaddr);
+#else
+bool alpha_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
+                        MMUAccessType access_type, int mmu_idx,
+                        bool probe, uintptr_t retaddr);
+G_NORETURN void alpha_cpu_do_unaligned_access(CPUState *cpu, vaddr addr,
+                                              MMUAccessType access_type, int mmu_idx,
+                                              uintptr_t retaddr);
 void alpha_cpu_do_transaction_failed(CPUState *cs, hwaddr physaddr,
                                      vaddr addr, unsigned size,
                                      MMUAccessType access_type,
@@ -467,12 +467,15 @@ void alpha_cpu_do_transaction_failed(CPUState *cs, hwaddr physaddr,
                                      MemTxResult response, uintptr_t retaddr);
 #endif
 
-static inline void cpu_get_tb_cpu_state(CPUAlphaState *env, target_ulong *pc,
-                                        target_ulong *cs_base, uint32_t *pflags)
+static inline void cpu_get_tb_cpu_state(CPUAlphaState *env, vaddr *pc,
+                                        uint64_t *cs_base, uint32_t *pflags)
 {
     *pc = env->pc;
     *cs_base = 0;
     *pflags = env->flags & ENV_FLAG_TB_MASK;
+#ifdef CONFIG_USER_ONLY
+    *pflags |= TB_FLAG_UNALIGN * !env_cpu(env)->prctl_unalign_sigbus;
+#endif
 }
 
 #ifdef CONFIG_USER_ONLY

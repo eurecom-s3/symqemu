@@ -16,22 +16,23 @@
 #include "qemu/module.h"
 #include "qom/object_interfaces.h"
 
-#define TYPE_MEMORY_BACKEND_RAM "memory-backend-ram"
-
-static void
+static bool
 ram_backend_memory_alloc(HostMemoryBackend *backend, Error **errp)
 {
-    char *name;
+    g_autofree char *name = NULL;
+    uint32_t ram_flags;
 
     if (!backend->size) {
         error_setg(errp, "can't create backend with size 0");
-        return;
+        return false;
     }
 
     name = host_memory_backend_get_name(backend);
-    memory_region_init_ram_shared_nomigrate(&backend->mr, OBJECT(backend), name,
-                           backend->size, backend->share, errp);
-    g_free(name);
+    ram_flags = backend->share ? RAM_SHARED : 0;
+    ram_flags |= backend->reserve ? 0 : RAM_NORESERVE;
+    return memory_region_init_ram_flags_nomigrate(&backend->mr, OBJECT(backend),
+                                                  name, backend->size,
+                                                  ram_flags, errp);
 }
 
 static void

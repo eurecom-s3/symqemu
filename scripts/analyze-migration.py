@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 #  Migration Stream Analyzer
 #
@@ -7,7 +7,7 @@
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
 # License as published by the Free Software Foundation; either
-# version 2 of the License, or (at your option) any later version.
+# version 2.1 of the License, or (at your option) any later version.
 #
 # This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,12 +17,13 @@
 # You should have received a copy of the GNU Lesser General Public
 # License along with this library; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import print_function
-import numpy as np
 import json
 import os
 import argparse
 import collections
+import struct
+import sys
+
 
 def mkdir_p(path):
     try:
@@ -30,29 +31,26 @@ def mkdir_p(path):
     except OSError:
         pass
 
+
 class MigrationFile(object):
     def __init__(self, filename):
         self.filename = filename
         self.file = open(self.filename, "rb")
 
     def read64(self):
-        return np.asscalar(np.fromfile(self.file, count=1, dtype='>i8')[0])
+        return int.from_bytes(self.file.read(8), byteorder='big', signed=False)
 
     def read32(self):
-        return np.asscalar(np.fromfile(self.file, count=1, dtype='>i4')[0])
+        return int.from_bytes(self.file.read(4), byteorder='big', signed=False)
 
     def read16(self):
-        return np.asscalar(np.fromfile(self.file, count=1, dtype='>i2')[0])
+        return int.from_bytes(self.file.read(2), byteorder='big', signed=False)
 
     def read8(self):
-        return np.asscalar(np.fromfile(self.file, count=1, dtype='>i1')[0])
+        return int.from_bytes(self.file.read(1), byteorder='big', signed=True)
 
     def readstr(self, len = None):
-        if len is None:
-            len = self.read8()
-        if len == 0:
-            return ""
-        return np.fromfile(self.file, count=1, dtype=('S%d' % len))[0]
+        return self.readvar(len).decode('utf-8')
 
     def readvar(self, size = None):
         if size is None:
@@ -86,8 +84,8 @@ class MigrationFile(object):
 
         # Find the last NULL byte, then the first brace after that. This should
         # be the beginning of our JSON data.
-        nulpos = data.rfind("\0")
-        jsonpos = data.find("{", nulpos)
+        nulpos = data.rfind(b'\0')
+        jsonpos = data.find(b'{', nulpos)
 
         # Check backwards from there and see whether we guessed right
         self.file.seek(datapos + jsonpos - 5, 0)
@@ -99,7 +97,8 @@ class MigrationFile(object):
         # Seek back to where we were at the beginning
         self.file.seek(entrypos, 0)
 
-        return data[jsonpos:jsonpos + jsonlen]
+        # explicit decode() needed for Python 3.5 compatibility
+        return data[jsonpos:jsonpos + jsonlen].decode("utf-8")
 
     def close(self):
         self.file.close()
@@ -112,6 +111,8 @@ class RamSection(object):
     RAM_SAVE_FLAG_CONTINUE = 0x20
     RAM_SAVE_FLAG_XBZRLE   = 0x40
     RAM_SAVE_FLAG_HOOK     = 0x80
+    RAM_SAVE_FLAG_COMPRESS_PAGE = 0x100
+    RAM_SAVE_FLAG_MULTIFD_FLUSH = 0x200
 
     def __init__(self, file, version_id, ramargs, section_key):
         if version_id != 4:
@@ -122,6 +123,7 @@ class RamSection(object):
         self.TARGET_PAGE_SIZE = ramargs['page_size']
         self.dump_memory = ramargs['dump_memory']
         self.write_memory = ramargs['write_memory']
+        self.ignore_shared = ramargs['ignore_shared']
         self.sizeinfo = collections.OrderedDict()
         self.data = collections.OrderedDict()
         self.data['section sizes'] = self.sizeinfo
@@ -149,17 +151,12 @@ class RamSection(object):
             addr &= ~(self.TARGET_PAGE_SIZE - 1)
 
             if flags & self.RAM_SAVE_FLAG_MEM_SIZE:
-                while True:
+                total_length = addr
+                while total_length > 0:
                     namelen = self.file.read8()
-                    # We assume that no RAM chunk is big enough to ever
-                    # hit the first byte of the address, so when we see
-                    # a zero here we know it has to be an address, not the
-                    # length of the next block.
-                    if namelen == 0:
-                        self.file.file.seek(-1, 1)
-                        break
                     self.name = self.file.readstr(len = namelen)
                     len = self.file.read64()
+                    total_length -= len
                     self.sizeinfo[self.name] = '0x%016x' % len
                     if self.write_memory:
                         print(self.name)
@@ -168,6 +165,8 @@ class RamSection(object):
                         f.truncate(0)
                         f.truncate(len)
                         self.files[self.name] = f
+                    if self.ignore_shared:
+                        mr_addr = self.file.read64()
                 flags &= ~self.RAM_SAVE_FLAG_MEM_SIZE
 
             if flags & self.RAM_SAVE_FLAG_COMPRESS:
@@ -206,6 +205,8 @@ class RamSection(object):
                 raise Exception("XBZRLE RAM compression is not supported yet")
             elif flags & self.RAM_SAVE_FLAG_HOOK:
                 raise Exception("RAM hooks don't make sense with files")
+            if flags & self.RAM_SAVE_FLAG_MULTIFD_FLUSH:
+                continue
 
             # End of RAM section
             if flags & self.RAM_SAVE_FLAG_EOS:
@@ -257,13 +258,70 @@ class HTABSection(object):
         return ""
 
 
-class ConfigurationSection(object):
-    def __init__(self, file):
+class S390StorageAttributes(object):
+    STATTR_FLAG_EOS   = 0x01
+    STATTR_FLAG_MORE  = 0x02
+    STATTR_FLAG_ERROR = 0x04
+    STATTR_FLAG_DONE  = 0x08
+
+    def __init__(self, file, version_id, device, section_key):
+        if version_id != 0:
+            raise Exception("Unknown storage_attributes version %d" % version_id)
+
         self.file = file
+        self.section_key = section_key
 
     def read(self):
-        name_len = self.file.read32()
-        name = self.file.readstr(len = name_len)
+        while True:
+            addr_flags = self.file.read64()
+            flags = addr_flags & 0xfff
+            if (flags & (self.STATTR_FLAG_DONE | self.STATTR_FLAG_EOS)):
+                return
+            if (flags & self.STATTR_FLAG_ERROR):
+                raise Exception("Error in migration stream")
+            count = self.file.read64()
+            self.file.readvar(count)
+
+    def getDict(self):
+        return ""
+
+
+class ConfigurationSection(object):
+    def __init__(self, file, desc):
+        self.file = file
+        self.desc = desc
+        self.caps = []
+
+    def parse_capabilities(self, vmsd_caps):
+        if not vmsd_caps:
+            return
+
+        ncaps = vmsd_caps.data['caps_count'].data
+        self.caps = vmsd_caps.data['capabilities']
+
+        if type(self.caps) != list:
+            self.caps = [self.caps]
+
+        if len(self.caps) != ncaps:
+            raise Exception("Number of capabilities doesn't match "
+                            "caps_count field")
+
+    def has_capability(self, cap):
+        return any([str(c) == cap for c in self.caps])
+
+    def read(self):
+        if self.desc:
+            version_id = self.desc['version']
+            section = VMSDSection(self.file, version_id, self.desc,
+                                  'configuration')
+            section.read()
+            self.parse_capabilities(
+                section.data.get("configuration/capabilities"))
+        else:
+            # backward compatibility for older streams that don't have
+            # the configuration section in the json
+            name_len = self.file.read32()
+            name = self.file.readstr(len = name_len)
 
 class VMSDFieldGeneric(object):
     def __init__(self, desc, file):
@@ -275,7 +333,7 @@ class VMSDFieldGeneric(object):
         return str(self.__str__())
 
     def __str__(self):
-        return " ".join("{0:02x}".format(ord(c)) for c in self.data)
+        return " ".join("{0:02x}".format(c) for c in self.data)
 
     def getDict(self):
         return self.__str__()
@@ -284,6 +342,23 @@ class VMSDFieldGeneric(object):
         size = int(self.desc['size'])
         self.data = self.file.readvar(size)
         return self.data
+
+class VMSDFieldCap(object):
+    def __init__(self, desc, file):
+        self.file = file
+        self.desc = desc
+        self.data = ""
+
+    def __repr__(self):
+        return self.data
+
+    def __str__(self):
+        return self.data
+
+    def read(self):
+        len = self.file.read8()
+        self.data = self.file.readstr(len)
+
 
 class VMSDFieldInt(VMSDFieldGeneric):
     def __init__(self, desc, file):
@@ -307,8 +382,8 @@ class VMSDFieldInt(VMSDFieldGeneric):
 
     def read(self):
         super(VMSDFieldInt, self).read()
-        self.sdata = np.fromstring(self.data, count=1, dtype=(self.sdtype))[0]
-        self.udata = np.fromstring(self.data, count=1, dtype=(self.udtype))[0]
+        self.sdata = int.from_bytes(self.data, byteorder='big', signed=True)
+        self.udata = int.from_bytes(self.data, byteorder='big', signed=False)
         self.data = self.sdata
         return self.data
 
@@ -363,7 +438,7 @@ class VMSDFieldStruct(VMSDFieldGeneric):
             array_len = field.pop('array_len')
             field['index'] = 0
             new_fields.append(field)
-            for i in xrange(1, array_len):
+            for i in range(1, array_len):
                 c = field.copy()
                 c['index'] = i
                 new_fields.append(c)
@@ -459,6 +534,7 @@ vmsd_field_readers = {
     "unused_buffer" : VMSDFieldGeneric,
     "bitmap" : VMSDFieldGeneric,
     "struct" : VMSDFieldStruct,
+    "capability": VMSDFieldCap,
     "unknown" : VMSDFieldGeneric,
 }
 
@@ -491,8 +567,11 @@ class MigrationDump(object):
     QEMU_VM_SECTION_FOOTER= 0x7e
 
     def __init__(self, filename):
-        self.section_classes = { ( 'ram', 0 ) : [ RamSection, None ],
-                                 ( 'spapr/htab', 0) : ( HTABSection, None ) }
+        self.section_classes = {
+            ( 'ram', 0 ) : [ RamSection, None ],
+            ( 's390-storage_attributes', 0 ) : [ S390StorageAttributes, None],
+            ( 'spapr/htab', 0) : ( HTABSection, None )
+        }
         self.filename = filename
         self.vmsd_desc = None
 
@@ -522,6 +601,7 @@ class MigrationDump(object):
         ramargs['page_size'] = self.vmsd_desc['page_size']
         ramargs['dump_memory'] = dump_memory
         ramargs['write_memory'] = write_memory
+        ramargs['ignore_shared'] = False
         self.section_classes[('ram',0)][1] = ramargs
 
         while True:
@@ -529,8 +609,10 @@ class MigrationDump(object):
             if section_type == self.QEMU_VM_EOF:
                 break
             elif section_type == self.QEMU_VM_CONFIGURATION:
-                section = ConfigurationSection(file)
+                config_desc = self.vmsd_desc.get('configuration')
+                section = ConfigurationSection(file, config_desc)
                 section.read()
+                ramargs['ignore_shared'] = section.has_capability('x-ignore-shared')
             elif section_type == self.QEMU_VM_SECTION_START or section_type == self.QEMU_VM_SECTION_FULL:
                 section_id = file.read32()
                 name = file.readstr()
@@ -589,7 +671,7 @@ if args.extract:
 
     dump.read(desc_only = True)
     print("desc.json")
-    f = open("desc.json", "wb")
+    f = open("desc.json", "w")
     f.truncate()
     f.write(jsonenc.encode(dump.vmsd_desc))
     f.close()
@@ -597,7 +679,7 @@ if args.extract:
     dump.read(write_memory = True)
     dict = dump.getDict()
     print("state.json")
-    f = open("state.json", "wb")
+    f = open("state.json", "w")
     f.truncate()
     f.write(jsonenc.encode(dict))
     f.close()
@@ -611,4 +693,4 @@ elif args.dump == "desc":
     dump.read(desc_only = True)
     print(jsonenc.encode(dump.vmsd_desc))
 else:
-    raise Exception("Please specify either -x, -d state or -d dump")
+    raise Exception("Please specify either -x, -d state or -d desc")

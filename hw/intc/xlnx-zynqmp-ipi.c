@@ -27,11 +27,13 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/register.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/intc/xlnx-zynqmp-ipi.h"
+#include "hw/irq.h"
 
 #ifndef XLNX_ZYNQMP_IPI_ERR_DEBUG
 #define XLNX_ZYNQMP_IPI_ERR_DEBUG 0
@@ -347,7 +349,7 @@ static const VMStateDescription vmstate_zynqmp_pmu_ipi = {
     .name = TYPE_XLNX_ZYNQMP_IPI,
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, XlnxZynqMPIPI, R_XLNX_ZYNQMP_IPI_MAX),
         VMSTATE_END_OF_LIST(),
     }

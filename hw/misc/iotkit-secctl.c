@@ -15,8 +15,12 @@
 #include "qapi/error.h"
 #include "trace.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/registerfields.h"
+#include "hw/irq.h"
 #include "hw/misc/iotkit-secctl.h"
+#include "hw/arm/armsse-version.h"
+#include "hw/qdev-properties.h"
 
 /* Registers in the secure privilege control block */
 REG32(SECRESPCFG, 0x10)
@@ -93,11 +97,24 @@ static const uint8_t iotkit_secctl_ns_idregs[] = {
     0x0d, 0xf0, 0x05, 0xb1,
 };
 
+static const uint8_t iotkit_secctl_s_sse300_idregs[] = {
+    0x04, 0x00, 0x00, 0x00,
+    0x52, 0xb8, 0x2b, 0x00,
+    0x0d, 0xf0, 0x05, 0xb1,
+};
+
+static const uint8_t iotkit_secctl_ns_sse300_idregs[] = {
+    0x04, 0x00, 0x00, 0x00,
+    0x53, 0xb8, 0x2b, 0x00,
+    0x0d, 0xf0, 0x05, 0xb1,
+};
+
+
 /* The register sets for the various PPCs (AHB internal, APB internal,
  * AHB expansion, APB expansion) are all set up so that they are
  * in 16-aligned blocks so offsets 0xN0, 0xN4, 0xN8, 0xNC are PPCs
  * 0, 1, 2, 3 of that type, so we can convert a register address offset
- * into an an index into a PPC array easily.
+ * into an index into a PPC array easily.
  */
 static inline int offset_to_ppc_idx(uint32_t offset)
 {
@@ -211,7 +228,14 @@ static MemTxResult iotkit_secctl_s_read(void *opaque, hwaddr addr,
     case A_CID1:
     case A_CID2:
     case A_CID3:
-        r = iotkit_secctl_s_idregs[(offset - A_PID4) / 4];
+        switch (s->sse_version) {
+        case ARMSSE_SSE300:
+            r = iotkit_secctl_s_sse300_idregs[(offset - A_PID4) / 4];
+            break;
+        default:
+            r = iotkit_secctl_s_idregs[(offset - A_PID4) / 4];
+            break;
+        }
         break;
     case A_SECPPCINTCLR:
     case A_SECMSCINTCLR:
@@ -338,7 +362,7 @@ static MemTxResult iotkit_secctl_s_write(void *opaque, hwaddr addr,
         qemu_set_irq(s->sec_resp_cfg, s->secrespcfg);
         break;
     case A_SECPPCINTCLR:
-        value &= 0x00f000f3;
+        s->secppcintstat &= ~(value & 0x00f000f3);
         foreach_ppc(s, iotkit_secctl_ppc_update_irq_clear);
         break;
     case A_SECPPCINTEN:
@@ -471,7 +495,14 @@ static MemTxResult iotkit_secctl_ns_read(void *opaque, hwaddr addr,
     case A_CID1:
     case A_CID2:
     case A_CID3:
-        r = iotkit_secctl_ns_idregs[(offset - A_PID4) / 4];
+        switch (s->sse_version) {
+        case ARMSSE_SSE300:
+            r = iotkit_secctl_ns_sse300_idregs[(offset - A_PID4) / 4];
+            break;
+        default:
+            r = iotkit_secctl_ns_idregs[(offset - A_PID4) / 4];
+            break;
+        }
         break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -708,11 +739,21 @@ static void iotkit_secctl_init(Object *obj)
     sysbus_init_mmio(sbd, &s->ns_regs);
 }
 
+static void iotkit_secctl_realize(DeviceState *dev, Error **errp)
+{
+    IoTKitSecCtl *s = IOTKIT_SECCTL(dev);
+
+    if (!armsse_version_valid(s->sse_version)) {
+        error_setg(errp, "invalid sse-version value %d", s->sse_version);
+        return;
+    }
+}
+
 static const VMStateDescription iotkit_secctl_ppc_vmstate = {
     .name = "iotkit-secctl-ppc",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(ns, IoTKitSecCtlPPC),
         VMSTATE_UINT32(sp, IoTKitSecCtlPPC),
         VMSTATE_UINT32(nsp, IoTKitSecCtlPPC),
@@ -724,7 +765,7 @@ static const VMStateDescription iotkit_secctl_mpcintstatus_vmstate = {
     .name = "iotkit-secctl-mpcintstatus",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(mpcintstatus, IoTKitSecCtl),
         VMSTATE_END_OF_LIST()
     }
@@ -740,7 +781,7 @@ static const VMStateDescription iotkit_secctl_msc_vmstate = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = needed_always,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(secmscintstat, IoTKitSecCtl),
         VMSTATE_UINT32(secmscinten, IoTKitSecCtl),
         VMSTATE_UINT32(nsmscexp, IoTKitSecCtl),
@@ -752,7 +793,7 @@ static const VMStateDescription iotkit_secctl_vmstate = {
     .name = "iotkit-secctl",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(secppcintstat, IoTKitSecCtl),
         VMSTATE_UINT32(secppcinten, IoTKitSecCtl),
         VMSTATE_UINT32(secrespcfg, IoTKitSecCtl),
@@ -766,11 +807,16 @@ static const VMStateDescription iotkit_secctl_vmstate = {
                              iotkit_secctl_ppc_vmstate, IoTKitSecCtlPPC),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription*[]) {
+    .subsections = (const VMStateDescription * const []) {
         &iotkit_secctl_mpcintstatus_vmstate,
         &iotkit_secctl_msc_vmstate,
         NULL
     },
+};
+
+static Property iotkit_secctl_props[] = {
+    DEFINE_PROP_UINT32("sse-version", IoTKitSecCtl, sse_version, 0),
+    DEFINE_PROP_END_OF_LIST()
 };
 
 static void iotkit_secctl_class_init(ObjectClass *klass, void *data)
@@ -779,6 +825,8 @@ static void iotkit_secctl_class_init(ObjectClass *klass, void *data)
 
     dc->vmsd = &iotkit_secctl_vmstate;
     dc->reset = iotkit_secctl_reset;
+    dc->realize = iotkit_secctl_realize;
+    device_class_set_props(dc, iotkit_secctl_props);
 }
 
 static const TypeInfo iotkit_secctl_info = {

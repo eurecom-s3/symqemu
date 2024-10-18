@@ -2,7 +2,7 @@
  * QEMU SMBus device emulation.
  *
  * This code is a helper for SMBus device emulation.  It implements an
- * I2C device inteface and runs the SMBus protocol from the device
+ * I2C device interface and runs the SMBus protocol from the device
  * point of view and maps those to simple calls to emulate.
  *
  * Copyright (c) 2007 CodeSourcery.
@@ -14,9 +14,9 @@
 /* TODO: Implement PEC.  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/i2c/i2c.h"
 #include "hw/i2c/smbus_slave.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
 
 //#define DEBUG_SMBUS 1
@@ -25,11 +25,15 @@
 #define DPRINTF(fmt, ...) \
 do { printf("smbus(%02x): " fmt , dev->i2c.address, ## __VA_ARGS__); } while (0)
 #define BADF(fmt, ...) \
-do { fprintf(stderr, "smbus: error: " fmt , ## __VA_ARGS__); exit(1);} while (0)
+do { g_autofree char *qom_path = object_get_canonical_path(OBJECT(dev));  \
+    fprintf(stderr, "%s: smbus: error: " fmt , qom_path, ## __VA_ARGS__); \
+            exit(1); } while (0)
 #else
 #define DPRINTF(fmt, ...) do {} while(0)
 #define BADF(fmt, ...) \
-do { fprintf(stderr, "smbus: error: " fmt , ## __VA_ARGS__);} while (0)
+do { g_autofree char *qom_path = object_get_canonical_path(OBJECT(dev));  \
+    fprintf(stderr, "%s: smbus: error: " fmt , qom_path, ## __VA_ARGS__); \
+             } while (0)
 #endif
 
 enum {
@@ -143,6 +147,10 @@ static int smbus_i2c_event(I2CSlave *s, enum i2c_event event)
             dev->mode = SMBUS_CONFUSED;
             break;
         }
+        break;
+
+    default:
+        return -1;
     }
 
     return 0;
@@ -211,7 +219,7 @@ const VMStateDescription vmstate_smbus_device = {
     .name = TYPE_SMBUS_DEVICE,
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields      = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_I2C_SLAVE(i2c, SMBusDevice),
         VMSTATE_INT32(mode, SMBusDevice),
         VMSTATE_INT32(data_len, SMBusDevice),

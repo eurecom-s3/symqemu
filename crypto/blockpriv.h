@@ -42,6 +42,8 @@ struct QCryptoBlock {
     size_t niv;
     uint64_t payload_offset; /* In bytes */
     uint64_t sector_size; /* In bytes */
+
+    bool detached_header; /* True if disk has a detached LUKS header */
 };
 
 struct QCryptoBlockDriver {
@@ -61,6 +63,14 @@ struct QCryptoBlockDriver {
                   QCryptoBlockWriteFunc writefunc,
                   void *opaque,
                   Error **errp);
+
+    int (*amend)(QCryptoBlock *block,
+                 QCryptoBlockReadFunc readfunc,
+                 QCryptoBlockWriteFunc writefunc,
+                 void *opaque,
+                 QCryptoBlockAmendOptions *options,
+                 bool force,
+                 Error **errp);
 
     int (*get_info)(QCryptoBlock *block,
                     QCryptoBlockInfo *info,

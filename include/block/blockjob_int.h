@@ -27,7 +27,6 @@
 #define BLOCKJOB_INT_H
 
 #include "block/blockjob.h"
-#include "block/block.h"
 
 /**
  * BlockJobDriver:
@@ -39,6 +38,13 @@ struct BlockJobDriver {
     JobDriver job_driver;
 
     /*
+     * I/O API functions. These functions are thread-safe.
+     *
+     * See include/block/block-io.h for more information about
+     * the I/O API.
+     */
+
+    /*
      * Returns whether the job has pending requests for the child or will
      * submit new requests before the next pause point. This callback is polled
      * in the context of draining a job node after requesting that the job be
@@ -47,23 +53,40 @@ struct BlockJobDriver {
     bool (*drained_poll)(BlockJob *job);
 
     /*
+     * Global state (GS) API. These functions run under the BQL.
+     *
+     * See include/block/block-global-state.h for more information about
+     * the GS API.
+     */
+
+    /*
      * If the callback is not NULL, it will be invoked before the job is
      * resumed in a new AioContext.  This is the place to move any resources
      * besides job->blk to the new AioContext.
      */
     void (*attached_aio_context)(BlockJob *job, AioContext *new_context);
 
+    void (*set_speed)(BlockJob *job, int64_t speed);
+
     /*
-     * If the callback is not NULL, it will be invoked when the job has to be
-     * synchronously cancelled or completed; it should drain BlockDriverStates
-     * as required to ensure progress.
+     * Change the @job's options according to @opts.
      *
-     * Block jobs must use the default implementation for job_driver.drain,
-     * which will in turn call this callback after doing generic block job
-     * stuff.
+     * Note that this can already be called before the job coroutine is running.
      */
-    void (*drain)(BlockJob *job);
+    void (*change)(BlockJob *job, BlockJobChangeOptions *opts, Error **errp);
+
+    /*
+     * Query information specific to this kind of block job.
+     */
+    void (*query)(BlockJob *job, BlockJobInfo *info);
 };
+
+/*
+ * Global state (GS) API. These functions run under the BQL.
+ *
+ * See include/block/block-global-state.h for more information about
+ * the GS API.
+ */
 
 /**
  * block_job_create:
@@ -88,10 +111,11 @@ struct BlockJobDriver {
  * This function is not part of the public job interface; it should be
  * called from a wrapper that is specific to the job type.
  */
-void *block_job_create(const char *job_id, const BlockJobDriver *driver,
-                       JobTxn *txn, BlockDriverState *bs, uint64_t perm,
-                       uint64_t shared_perm, int64_t speed, int flags,
-                       BlockCompletionFunc *cb, void *opaque, Error **errp);
+void * GRAPH_UNLOCKED
+block_job_create(const char *job_id, const BlockJobDriver *driver,
+                 JobTxn *txn, BlockDriverState *bs, uint64_t perm,
+                 uint64_t shared_perm, int64_t speed, int flags,
+                 BlockCompletionFunc *cb, void *opaque, Error **errp);
 
 /**
  * block_job_free:
@@ -107,21 +131,26 @@ void block_job_free(Job *job);
  */
 void block_job_user_resume(Job *job);
 
-/**
- * block_job_drain:
- * Callback to be used for JobDriver.drain in all block jobs. Drains the main
- * block node associated with the block jobs and calls BlockJobDriver.drain for
- * job-specific actions.
+/*
+ * I/O API functions. These functions are thread-safe.
+ *
+ * See include/block/block-io.h for more information about
+ * the I/O API.
  */
-void block_job_drain(Job *job);
 
 /**
- * block_job_ratelimit_get_delay:
+ * block_job_ratelimit_processed_bytes:
  *
- * Calculate and return delay for the next request in ns. See the documentation
- * of ratelimit_calculate_delay() for details.
+ * To be called after some work has been done. Adjusts the delay for the next
+ * request. See the documentation of ratelimit_calculate_delay() for details.
  */
-int64_t block_job_ratelimit_get_delay(BlockJob *job, uint64_t n);
+void block_job_ratelimit_processed_bytes(BlockJob *job, uint64_t n);
+
+/**
+ * Put the job to sleep (assuming that it wasn't canceled) to throttle it to the
+ * right speed according to its rate limiting.
+ */
+void block_job_ratelimit_sleep(BlockJob *job);
 
 /**
  * block_job_error_action:

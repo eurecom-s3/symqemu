@@ -9,19 +9,21 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/arm/pxa.h"
+#include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qom/object.h"
 
 #define PXA2XX_GPIO_BANKS	4
 
 #define TYPE_PXA2XX_GPIO "pxa2xx-gpio"
-#define PXA2XX_GPIO(obj) \
-    OBJECT_CHECK(PXA2xxGPIOInfo, (obj), TYPE_PXA2XX_GPIO)
+OBJECT_DECLARE_SIMPLE_TYPE(PXA2xxGPIOInfo, PXA2XX_GPIO)
 
-typedef struct PXA2xxGPIOInfo PXA2xxGPIOInfo;
 struct PXA2xxGPIOInfo {
     /*< private >*/
     SysBusDevice parent_obj;
@@ -30,7 +32,6 @@ struct PXA2xxGPIOInfo {
     MemoryRegion iomem;
     qemu_irq irq0, irq1, irqX;
     int lines;
-    int ncpu;
     ARMCPU *cpu;
 
     /* XXX: GNU C vectors are more suitable */
@@ -196,7 +197,8 @@ static uint64_t pxa2xx_gpio_read(void *opaque, hwaddr offset,
         return s->status[bank];
 
     default:
-        hw_error("%s: Bad offset " REG_FMT "\n", __func__, offset);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                      __func__, offset);
     }
 
     return 0;
@@ -249,7 +251,8 @@ static void pxa2xx_gpio_write(void *opaque, hwaddr offset,
         break;
 
     default:
-        hw_error("%s: Bad offset " REG_FMT "\n", __func__, offset);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                      __func__, offset);
     }
 }
 
@@ -262,13 +265,12 @@ static const MemoryRegionOps pxa_gpio_ops = {
 DeviceState *pxa2xx_gpio_init(hwaddr base,
                               ARMCPU *cpu, DeviceState *pic, int lines)
 {
-    CPUState *cs = CPU(cpu);
     DeviceState *dev;
 
-    dev = qdev_create(NULL, TYPE_PXA2XX_GPIO);
+    dev = qdev_new(TYPE_PXA2XX_GPIO);
     qdev_prop_set_int32(dev, "lines", lines);
-    qdev_prop_set_int32(dev, "ncpu", cs->cpu_index);
-    qdev_init_nofail(dev);
+    object_property_set_link(OBJECT(dev), "cpu", OBJECT(cpu), &error_abort);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
@@ -299,8 +301,6 @@ static void pxa2xx_gpio_realize(DeviceState *dev, Error **errp)
 {
     PXA2xxGPIOInfo *s = PXA2XX_GPIO(dev);
 
-    s->cpu = ARM_CPU(qemu_get_cpu(s->ncpu));
-
     qdev_init_gpio_in(dev, pxa2xx_gpio_set, s->lines);
     qdev_init_gpio_out(dev, s->handler, s->lines);
 }
@@ -320,7 +320,7 @@ static const VMStateDescription vmstate_pxa2xx_gpio_regs = {
     .name = "pxa2xx-gpio",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(ilevel, PXA2xxGPIOInfo, PXA2XX_GPIO_BANKS),
         VMSTATE_UINT32_ARRAY(olevel, PXA2xxGPIOInfo, PXA2XX_GPIO_BANKS),
         VMSTATE_UINT32_ARRAY(dir, PXA2xxGPIOInfo, PXA2XX_GPIO_BANKS),
@@ -335,7 +335,7 @@ static const VMStateDescription vmstate_pxa2xx_gpio_regs = {
 
 static Property pxa2xx_gpio_properties[] = {
     DEFINE_PROP_INT32("lines", PXA2xxGPIOInfo, lines, 0),
-    DEFINE_PROP_INT32("ncpu", PXA2xxGPIOInfo, ncpu, 0),
+    DEFINE_PROP_LINK("cpu", PXA2xxGPIOInfo, cpu, TYPE_ARM_CPU, ARMCPU *),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -344,7 +344,7 @@ static void pxa2xx_gpio_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->desc = "PXA2xx GPIO controller";
-    dc->props = pxa2xx_gpio_properties;
+    device_class_set_props(dc, pxa2xx_gpio_properties);
     dc->vmsd = &vmstate_pxa2xx_gpio_regs;
     dc->realize = pxa2xx_gpio_realize;
 }

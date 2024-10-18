@@ -56,7 +56,7 @@
  *
  * static int mysock_run_tls(int sockfd,
  *                           QCryptoTLSCreds *creds,
- *                           Error *errp)
+ *                           Error **errp)
  * {
  *    QCryptoTLSSession *sess;
  *
@@ -160,6 +160,8 @@ QCryptoTLSSession *qcrypto_tls_session_new(QCryptoTLSCreds *creds,
  */
 void qcrypto_tls_session_free(QCryptoTLSSession *sess);
 
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(QCryptoTLSSession, qcrypto_tls_session_free)
+
 /**
  * qcrypto_tls_session_check_credentials:
  * @sess: the TLS session object
@@ -245,6 +247,17 @@ ssize_t qcrypto_tls_session_write(QCryptoTLSSession *sess,
 ssize_t qcrypto_tls_session_read(QCryptoTLSSession *sess,
                                  char *buf,
                                  size_t len);
+
+/**
+ * qcrypto_tls_session_check_pending:
+ * @sess: the TLS session object
+ *
+ * Check if there are unread data in the TLS buffers that have
+ * already been read from the underlying data source.
+ *
+ * Returns: the number of bytes available or zero
+ */
+size_t qcrypto_tls_session_check_pending(QCryptoTLSSession *sess);
 
 /**
  * qcrypto_tls_session_handshake:

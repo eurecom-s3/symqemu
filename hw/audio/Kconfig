@@ -48,5 +48,10 @@ config PL041
 config CS4231
     bool
 
-config MARVELL_88W8618
+config ASC
     bool
+
+config VIRTIO_SND
+    bool
+    default y
+    depends on VIRTIO

@@ -25,8 +25,9 @@
 #ifndef THROTTLE_GROUPS_H
 #define THROTTLE_GROUPS_H
 
+#include "qemu/coroutine.h"
 #include "qemu/throttle.h"
-#include "block/block_int.h"
+#include "qom/object.h"
 
 /* The ThrottleGroupMember structure indicates membership in a ThrottleGroup
  * and holds related data.
@@ -36,7 +37,7 @@ typedef struct ThrottleGroupMember {
     AioContext   *aio_context;
     /* throttled_reqs_lock protects the CoQueues for throttled requests.  */
     CoMutex      throttled_reqs_lock;
-    CoQueue      throttled_reqs[2];
+    CoQueue      throttled_reqs[THROTTLE_MAX];
 
     /* Nonzero if the I/O limits are currently being ignored; generally
      * it is zero.  Accessed with atomic operations.
@@ -53,13 +54,13 @@ typedef struct ThrottleGroupMember {
      * throttle_state tells us if I/O limits are configured. */
     ThrottleState *throttle_state;
     ThrottleTimers throttle_timers;
-    unsigned       pending_reqs[2];
+    unsigned       pending_reqs[THROTTLE_MAX];
     QLIST_ENTRY(ThrottleGroupMember) round_robin;
 
 } ThrottleGroupMember;
 
 #define TYPE_THROTTLE_GROUP "throttle-group"
-#define THROTTLE_GROUP(obj) OBJECT_CHECK(ThrottleGroup, (obj), TYPE_THROTTLE_GROUP)
+OBJECT_DECLARE_SIMPLE_TYPE(ThrottleGroup, THROTTLE_GROUP)
 
 const char *throttle_group_get_name(ThrottleGroupMember *tgm);
 
@@ -76,8 +77,8 @@ void throttle_group_unregister_tgm(ThrottleGroupMember *tgm);
 void throttle_group_restart_tgm(ThrottleGroupMember *tgm);
 
 void coroutine_fn throttle_group_co_io_limits_intercept(ThrottleGroupMember *tgm,
-                                                        unsigned int bytes,
-                                                        bool is_write);
+                                                        int64_t bytes,
+                                                        ThrottleDirection direction);
 void throttle_group_attach_aio_context(ThrottleGroupMember *tgm,
                                        AioContext *new_context);
 void throttle_group_detach_aio_context(ThrottleGroupMember *tgm);

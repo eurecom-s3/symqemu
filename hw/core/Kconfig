@@ -7,5 +7,23 @@ config PTIMER
 config FITLOADER
     bool
 
+config GENERIC_LOADER
+    bool
+    default y
+
+config GUEST_LOADER
+    bool
+    default y
+    depends on TCG
+
+config OR_IRQ
+    bool
+
 config PLATFORM_BUS
+    bool
+
+config REGISTER
+    bool
+
+config SPLIT_IRQ
     bool

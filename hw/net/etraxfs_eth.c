@@ -30,6 +30,7 @@
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "trace.h"
+#include "qom/object.h"
 
 #define D(x)
 
@@ -323,11 +324,9 @@ static void mdio_cycle(struct qemu_mdio *bus)
 #define FS_ETH_MAX_REGS      0x17
 
 #define TYPE_ETRAX_FS_ETH "etraxfs-eth"
-#define ETRAX_FS_ETH(obj) \
-    OBJECT_CHECK(ETRAXFSEthState, (obj), TYPE_ETRAX_FS_ETH)
+OBJECT_DECLARE_SIMPLE_TYPE(ETRAXFSEthState, ETRAX_FS_ETH)
 
-typedef struct ETRAXFSEthState
-{
+struct ETRAXFSEthState {
     SysBusDevice parent_obj;
 
     MemoryRegion mmio;
@@ -338,14 +337,8 @@ typedef struct ETRAXFSEthState
     uint8_t macaddr[2][6];
     uint32_t regs[FS_ETH_MAX_REGS];
 
-    union {
-        void *vdma_out;
-        struct etraxfs_dma_client *dma_out;
-    };
-    union {
-        void *vdma_in;
-        struct etraxfs_dma_client *dma_in;
-    };
+    struct etraxfs_dma_client *dma_out;
+    struct etraxfs_dma_client *dma_in;
 
     /* MDIO bus.  */
     struct qemu_mdio mdio_bus;
@@ -354,7 +347,7 @@ typedef struct ETRAXFSEthState
 
     /* PHY.     */
     struct qemu_phy phy;
-} ETRAXFSEthState;
+};
 
 static void eth_validate_duplex(ETRAXFSEthState *eth)
 {
@@ -625,7 +618,8 @@ static void etraxfs_eth_realize(DeviceState *dev, Error **errp)
 
     qemu_macaddr_default_if_unset(&s->conf.macaddr);
     s->nic = qemu_new_nic(&net_etraxfs_info, &s->conf,
-                          object_get_typename(OBJECT(s)), dev->id, s);
+                          object_get_typename(OBJECT(s)), dev->id,
+                          &dev->mem_reentrancy_guard, s);
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
 
     s->phy.read = tdk_read;
@@ -635,8 +629,6 @@ static void etraxfs_eth_realize(DeviceState *dev, Error **errp)
 
 static Property etraxfs_eth_properties[] = {
     DEFINE_PROP_UINT32("phyaddr", ETRAXFSEthState, phyaddr, 1),
-    DEFINE_PROP_PTR("dma_out", ETRAXFSEthState, vdma_out),
-    DEFINE_PROP_PTR("dma_in", ETRAXFSEthState, vdma_in),
     DEFINE_NIC_PROPERTIES(ETRAXFSEthState, conf),
     DEFINE_PROP_END_OF_LIST(),
 };
@@ -647,9 +639,38 @@ static void etraxfs_eth_class_init(ObjectClass *klass, void *data)
 
     dc->realize = etraxfs_eth_realize;
     dc->reset = etraxfs_eth_reset;
-    dc->props = etraxfs_eth_properties;
-    /* Reason: pointer properties "dma_out", "dma_in" */
+    device_class_set_props(dc, etraxfs_eth_properties);
+    /* Reason: dma_out, dma_in are not user settable */
     dc->user_creatable = false;
+}
+
+
+/* Instantiate an ETRAXFS Ethernet MAC.  */
+DeviceState *
+etraxfs_eth_init(hwaddr base, int phyaddr,
+                 struct etraxfs_dma_client *dma_out,
+                 struct etraxfs_dma_client *dma_in)
+{
+    DeviceState *dev;
+
+    dev = qdev_new("etraxfs-eth");
+    qemu_configure_nic_device(dev, true, "fseth");
+    qdev_prop_set_uint32(dev, "phyaddr", phyaddr);
+
+    /*
+     * TODO: QOM design, define a QOM interface for "I am an etraxfs
+     * DMA client" (which replaces the current 'struct
+     * etraxfs_dma_client' ad-hoc interface), implement it on the
+     * ethernet device, and then have QOM link properties on the DMA
+     * controller device so that you can pass the interface
+     * implementations to it.
+     */
+    ETRAX_FS_ETH(dev)->dma_out = dma_out;
+    ETRAX_FS_ETH(dev)->dma_in = dma_in;
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
+
+    return dev;
 }
 
 static const TypeInfo etraxfs_eth_info = {

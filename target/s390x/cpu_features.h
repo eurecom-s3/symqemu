@@ -16,13 +16,14 @@
 
 #include "qemu/bitmap.h"
 #include "cpu_features_def.h"
-#include "gen-features.h"
+#include "target/s390x/gen-features.h"
 
 /* CPU features are announced via different ways */
 typedef enum {
     S390_FEAT_TYPE_STFL,
     S390_FEAT_TYPE_SCLP_CONF_CHAR,
     S390_FEAT_TYPE_SCLP_CONF_CHAR_EXT,
+    S390_FEAT_TYPE_SCLP_FAC134,
     S390_FEAT_TYPE_SCLP_CPU,
     S390_FEAT_TYPE_MISC,
     S390_FEAT_TYPE_PLO,
@@ -42,6 +43,7 @@ typedef enum {
     S390_FEAT_TYPE_KDSA,
     S390_FEAT_TYPE_SORTL,
     S390_FEAT_TYPE_DFLTCC,
+    S390_FEAT_TYPE_UV_FEAT_GUEST,
 } S390FeatType;
 
 /* Definition of a CPU feature */
@@ -80,6 +82,10 @@ const S390FeatGroupDef *s390_feat_group_def(S390FeatGroup group);
 
 #define BE_BIT_NR(BIT) (BIT ^ (BITS_PER_LONG - 1))
 
+static inline void clear_be_bit(unsigned int bit_nr, uint8_t *array)
+{
+    array[bit_nr / 8] &= ~(0x80 >> (bit_nr % 8));
+}
 static inline void set_be_bit(unsigned int bit_nr, uint8_t *array)
 {
     array[bit_nr / 8] |= 0x80 >> (bit_nr % 8);

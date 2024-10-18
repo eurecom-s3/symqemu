@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -18,14 +18,15 @@
  */
 
 #include "qemu/osdep.h"
-#include "sysemu/sysemu.h"
 #include "target/ppc/cpu.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "hw/irq.h"
 #include "hw/isa/isa.h"
-
+#include "hw/qdev-properties.h"
 #include "hw/ppc/pnv.h"
+#include "hw/ppc/pnv_chip.h"
 #include "hw/ppc/pnv_lpc.h"
 #include "hw/ppc/pnv_xscom.h"
 #include "hw/ppc/fdt.h"
@@ -86,7 +87,7 @@ enum {
 #define ISA_FW_SIZE             0x10000000
 #define LPC_IO_OPB_ADDR         0xd0010000
 #define LPC_IO_OPB_SIZE         0x00010000
-#define LPC_MEM_OPB_ADDR        0xe0010000
+#define LPC_MEM_OPB_ADDR        0xe0000000
 #define LPC_MEM_OPB_SIZE        0x10000000
 #define LPC_FW_OPB_ADDR         0xf0000000
 #define LPC_FW_OPB_SIZE         0x10000000
@@ -122,26 +123,36 @@ static int pnv_lpc_dt_xscom(PnvXScomInterface *dev, void *fdt, int xscom_offset)
 }
 
 /* POWER9 only */
-int pnv_dt_lpc(PnvChip *chip, void *fdt, int root_offset)
+int pnv_dt_lpc(PnvChip *chip, void *fdt, int root_offset, uint64_t lpcm_addr,
+               uint64_t lpcm_size)
 {
     const char compat[] = "ibm,power9-lpcm-opb\0simple-bus";
     const char lpc_compat[] = "ibm,power9-lpc\0ibm,lpc";
     char *name;
     int offset, lpcm_offset;
-    uint64_t lpcm_addr = PNV9_LPCM_BASE(chip);
     uint32_t opb_ranges[8] = { 0,
                                cpu_to_be32(lpcm_addr >> 32),
                                cpu_to_be32((uint32_t)lpcm_addr),
-                               cpu_to_be32(PNV9_LPCM_SIZE / 2),
-                               cpu_to_be32(PNV9_LPCM_SIZE / 2),
+                               cpu_to_be32(lpcm_size / 2),
+                               cpu_to_be32(lpcm_size / 2),
                                cpu_to_be32(lpcm_addr >> 32),
-                               cpu_to_be32(PNV9_LPCM_SIZE / 2),
-                               cpu_to_be32(PNV9_LPCM_SIZE / 2),
+                               cpu_to_be32(lpcm_size / 2),
+                               cpu_to_be32(lpcm_size / 2),
     };
     uint32_t opb_reg[4] = { cpu_to_be32(lpcm_addr >> 32),
                             cpu_to_be32((uint32_t)lpcm_addr),
-                            cpu_to_be32(PNV9_LPCM_SIZE >> 32),
-                            cpu_to_be32((uint32_t)PNV9_LPCM_SIZE),
+                            cpu_to_be32(lpcm_size >> 32),
+                            cpu_to_be32((uint32_t)lpcm_size),
+    };
+    uint32_t lpc_ranges[12] = { 0, 0,
+                                cpu_to_be32(LPC_MEM_OPB_ADDR),
+                                cpu_to_be32(LPC_MEM_OPB_SIZE),
+                                cpu_to_be32(1), 0,
+                                cpu_to_be32(LPC_IO_OPB_ADDR),
+                                cpu_to_be32(LPC_IO_OPB_SIZE),
+                                cpu_to_be32(3), 0,
+                                cpu_to_be32(LPC_FW_OPB_ADDR),
+                                cpu_to_be32(LPC_FW_OPB_SIZE),
     };
     uint32_t reg[2];
 
@@ -211,6 +222,8 @@ int pnv_dt_lpc(PnvChip *chip, void *fdt, int root_offset)
     _FDT((fdt_setprop_cell(fdt, offset, "#size-cells", 1)));
     _FDT((fdt_setprop(fdt, offset, "compatible", lpc_compat,
                       sizeof(lpc_compat))));
+    _FDT((fdt_setprop(fdt, offset, "ranges", lpc_ranges,
+                      sizeof(lpc_ranges))));
 
     return 0;
 }
@@ -226,16 +239,16 @@ static bool opb_read(PnvLpcController *lpc, uint32_t addr, uint8_t *data,
                      int sz)
 {
     /* XXX Handle access size limits and FW read caching here */
-    return !address_space_rw(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
-                             data, sz, false);
+    return !address_space_read(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
+                               data, sz);
 }
 
 static bool opb_write(PnvLpcController *lpc, uint32_t addr, uint8_t *data,
                       int sz)
 {
     /* XXX Handle access size limits here */
-    return !address_space_rw(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
-                             data, sz, true);
+    return !address_space_write(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
+                                data, sz);
 }
 
 #define ECCB_CTL_READ           PPC_BIT(15)
@@ -410,7 +423,6 @@ static const MemoryRegionOps pnv_lpc_mmio_ops = {
 static void pnv_lpc_eval_irqs(PnvLpcController *lpc)
 {
     bool lpc_to_opb_irq = false;
-    PnvLpcClass *plc = PNV_LPC_GET_CLASS(lpc);
 
     /* Update LPC controller to OPB line */
     if (lpc->lpc_hc_irqser_ctrl & LPC_HC_IRQSER_EN) {
@@ -433,7 +445,7 @@ static void pnv_lpc_eval_irqs(PnvLpcController *lpc)
     lpc->opb_irq_stat |= lpc->opb_irq_input & lpc->opb_irq_mask;
 
     /* Reflect the interrupt */
-    pnv_psi_irq_set(lpc->psi, plc->psi_irq, lpc->opb_irq_stat != 0);
+    qemu_set_irq(lpc->psi_irq, lpc->opb_irq_stat != 0);
 }
 
 static uint64_t lpc_hc_read(void *opaque, hwaddr addr, unsigned size)
@@ -625,8 +637,6 @@ static void pnv_lpc_power8_class_init(ObjectClass *klass, void *data)
 
     xdc->dt_xscom = pnv_lpc_dt_xscom;
 
-    plc->psi_irq = PSIHB_IRQ_LPC_I2C;
-
     device_class_set_parent_realize(dc, pnv_lpc_power8_realize,
                                     &plc->parent_realize);
 }
@@ -634,7 +644,6 @@ static void pnv_lpc_power8_class_init(ObjectClass *klass, void *data)
 static const TypeInfo pnv_lpc_power8_info = {
     .name          = TYPE_PNV8_LPC,
     .parent        = TYPE_PNV_LPC,
-    .instance_size = sizeof(PnvLpcController),
     .class_init    = pnv_lpc_power8_class_init,
     .interfaces = (InterfaceInfo[]) {
         { TYPE_PNV_XSCOM_INTERFACE },
@@ -666,8 +675,6 @@ static void pnv_lpc_power9_class_init(ObjectClass *klass, void *data)
 
     dc->desc = "PowerNV LPC Controller POWER9";
 
-    plc->psi_irq = PSIHB9_IRQ_LPCHC;
-
     device_class_set_parent_realize(dc, pnv_lpc_power9_realize,
                                     &plc->parent_realize);
 }
@@ -675,24 +682,25 @@ static void pnv_lpc_power9_class_init(ObjectClass *klass, void *data)
 static const TypeInfo pnv_lpc_power9_info = {
     .name          = TYPE_PNV9_LPC,
     .parent        = TYPE_PNV_LPC,
-    .instance_size = sizeof(PnvLpcController),
     .class_init    = pnv_lpc_power9_class_init,
+};
+
+static void pnv_lpc_power10_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->desc = "PowerNV LPC Controller POWER10";
+}
+
+static const TypeInfo pnv_lpc_power10_info = {
+    .name          = TYPE_PNV10_LPC,
+    .parent        = TYPE_PNV9_LPC,
+    .class_init    = pnv_lpc_power10_class_init,
 };
 
 static void pnv_lpc_realize(DeviceState *dev, Error **errp)
 {
     PnvLpcController *lpc = PNV_LPC(dev);
-    Object *obj;
-    Error *local_err = NULL;
-
-    obj = object_property_get_link(OBJECT(dev), "psi", &local_err);
-    if (!obj) {
-        error_propagate(errp, local_err);
-        error_prepend(errp, "required link 'psi' not found: ");
-        return;
-    }
-    /* The LPC controller needs PSI to generate interrupts  */
-    lpc->psi = PNV_PSI(obj);
 
     /* Reg inits */
     lpc->lpc_hc_fw_rd_acc_size = LPC_HC_FW_RD_4B;
@@ -726,12 +734,17 @@ static void pnv_lpc_realize(DeviceState *dev, Error **errp)
     /* Create MMIO regions for LPC HC and OPB registers */
     memory_region_init_io(&lpc->opb_master_regs, OBJECT(dev), &opb_master_ops,
                           lpc, "lpc-opb-master", LPC_OPB_REGS_OPB_SIZE);
+    lpc->opb_master_regs.disable_reentrancy_guard = true;
     memory_region_add_subregion(&lpc->opb_mr, LPC_OPB_REGS_OPB_ADDR,
                                 &lpc->opb_master_regs);
     memory_region_init_io(&lpc->lpc_hc_regs, OBJECT(dev), &lpc_hc_ops, lpc,
                           "lpc-hc", LPC_HC_REGS_OPB_SIZE);
+    /* xscom writes to lpc-hc. As such mark lpc-hc re-entrancy safe */
+    lpc->lpc_hc_regs.disable_reentrancy_guard = true;
     memory_region_add_subregion(&lpc->opb_mr, LPC_HC_REGS_OPB_ADDR,
                                 &lpc->lpc_hc_regs);
+
+    qdev_init_gpio_out(dev, &lpc->psi_irq, 1);
 }
 
 static void pnv_lpc_class_init(ObjectClass *klass, void *data)
@@ -740,11 +753,13 @@ static void pnv_lpc_class_init(ObjectClass *klass, void *data)
 
     dc->realize = pnv_lpc_realize;
     dc->desc = "PowerNV LPC Controller";
+    dc->user_creatable = false;
 }
 
 static const TypeInfo pnv_lpc_info = {
     .name          = TYPE_PNV_LPC,
     .parent        = TYPE_DEVICE,
+    .instance_size = sizeof(PnvLpcController),
     .class_init    = pnv_lpc_class_init,
     .class_size    = sizeof(PnvLpcClass),
     .abstract      = true,
@@ -755,6 +770,7 @@ static void pnv_lpc_register_types(void)
     type_register_static(&pnv_lpc_info);
     type_register_static(&pnv_lpc_power8_info);
     type_register_static(&pnv_lpc_power9_info);
+    type_register_static(&pnv_lpc_power10_info);
 }
 
 type_init(pnv_lpc_register_types)
@@ -780,7 +796,7 @@ static void pnv_lpc_isa_irq_handler_cpld(void *opaque, int n, int level)
     }
 
     if (pnv->cpld_irqstate != old_state) {
-        pnv_psi_irq_set(lpc->psi, PSIHB_IRQ_EXTERNAL, pnv->cpld_irqstate != 0);
+        qemu_set_irq(lpc->psi_irq, pnv->cpld_irqstate != 0);
     }
 }
 
@@ -803,7 +819,7 @@ ISABus *pnv_lpc_isa_create(PnvLpcController *lpc, bool use_cpld, Error **errp)
     qemu_irq_handler handler;
 
     /* let isa_bus_new() create its own bridge on SysBus otherwise
-     * devices speficied on the command line won't find the bus and
+     * devices specified on the command line won't find the bus and
      * will fail to create.
      */
     isa_bus = isa_bus_new(NULL, &lpc->isa_mem, &lpc->isa_io, &local_err);
@@ -824,6 +840,7 @@ ISABus *pnv_lpc_isa_create(PnvLpcController *lpc, bool use_cpld, Error **errp)
 
     irqs = qemu_allocate_irqs(handler, lpc, ISA_NUM_IRQS);
 
-    isa_bus_irqs(isa_bus, irqs);
+    isa_bus_register_input_irqs(isa_bus, irqs);
+
     return isa_bus;
 }

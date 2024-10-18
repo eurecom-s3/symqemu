@@ -19,7 +19,7 @@
 # Does the following:
 # - Header files without a recognizable header guard are skipped.
 # - Clean up any untidy header guards in-place.  Warn if the cleanup
-#   renames guard symbols, and explain how to find occurences of these
+#   renames guard symbols, and explain how to find occurrences of these
 #   symbols that may have to be updated manually.
 # - Warn about duplicate header guard symbols.  To make full use of
 #   this warning, you should clean up *all* headers in one run.
@@ -32,8 +32,8 @@ use warnings;
 use Getopt::Std;
 
 # Stuff we don't want to clean because we import it into our tree:
-my $exclude = qr,^(disas/libvixl/|include/standard-headers/
-    |linux-headers/|pc-bios/|tests/tcg/|tests/multiboot/),x;
+my $exclude = qr,^(include/standard-headers/|linux-headers/
+    |pc-bios/|tests/tcg/|tests/multiboot/),x;
 # Stuff that is expected to fail the preprocessing test:
 my $exclude_cpp = qr,^include/libdecnumber/decNumberLocal.h,;
 

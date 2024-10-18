@@ -1,4 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+# group: rw quick
 #
 # Test cases for the QMP 'blockdev-del' command
 #
@@ -25,21 +26,13 @@ import time
 
 base_img = os.path.join(iotests.test_dir, 'base.img')
 new_img = os.path.join(iotests.test_dir, 'new.img')
-if iotests.qemu_default_machine == 's390-ccw-virtio':
-    default_virtio_blk = 'virtio-blk-ccw'
-else:
-    default_virtio_blk = 'virtio-blk-pci'
 
 class TestBlockdevDel(iotests.QMPTestCase):
 
     def setUp(self):
         iotests.qemu_img('create', '-f', iotests.imgfmt, base_img, '1M')
         self.vm = iotests.VM()
-        if iotests.qemu_default_machine == 's390-ccw-virtio':
-            self.vm.add_device("virtio-scsi-ccw,id=virtio-scsi")
-        else:
-            self.vm.add_device("virtio-scsi-pci,id=virtio-scsi")
-
+        self.vm.add_device("{},id=virtio-scsi".format('virtio-scsi'))
         self.vm.launch()
 
     def tearDown(self):
@@ -65,8 +58,7 @@ class TestBlockdevDel(iotests.QMPTestCase):
                 'file': {'driver': 'file',
                          'node-name': file_node,
                          'filename': base_img}}
-        result = self.vm.qmp('blockdev-add', conv_keys = False, **opts)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('blockdev-add', conv_keys = False, **opts)
         self.checkBlockDriverState(node)
         self.checkBlockDriverState(file_node)
 
@@ -74,14 +66,13 @@ class TestBlockdevDel(iotests.QMPTestCase):
     def addBlockDriverStateOverlay(self, node):
         self.checkBlockDriverState(node, False)
         iotests.qemu_img('create', '-u', '-f', iotests.imgfmt,
-                         '-b', base_img, new_img, '1M')
+                         '-b', base_img, '-F', iotests.imgfmt, new_img, '1M')
         opts = {'driver': iotests.imgfmt,
                 'node-name': node,
                 'backing': None,
                 'file': {'driver': 'file',
                          'filename': new_img}}
-        result = self.vm.qmp('blockdev-add', conv_keys = False, **opts)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('blockdev-add', conv_keys = False, **opts)
         self.checkBlockDriverState(node)
 
     # Delete a BlockDriverState
@@ -95,18 +86,15 @@ class TestBlockdevDel(iotests.QMPTestCase):
         self.checkBlockDriverState(node, expect_error)
 
     # Add a device model
-    def addDeviceModel(self, device, backend, driver = default_virtio_blk):
-        result = self.vm.qmp('device_add', id = device,
-                             driver = driver, drive = backend)
-        self.assert_qmp(result, 'return', {})
+    def addDeviceModel(self, device, backend, driver = 'virtio-blk'):
+        self.vm.cmd('device_add', id = device,
+                    driver = driver, drive = backend)
 
     # Delete a device model
     def delDeviceModel(self, device, is_virtio_blk = True):
-        result = self.vm.qmp('device_del', id = device)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('device_del', id = device)
 
-        result = self.vm.qmp('system_reset')
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('system_reset')
 
         if is_virtio_blk:
             device_path = '/machine/peripheral/%s/virtio-backend' % device
@@ -133,9 +121,8 @@ class TestBlockdevDel(iotests.QMPTestCase):
     # Insert a BlockDriverState
     def insertDrive(self, device, node):
         self.checkBlockDriverState(node)
-        result = self.vm.qmp('blockdev-insert-medium',
-                             id = device, node_name = node)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('blockdev-insert-medium',
+                    id = device, node_name = node)
         self.checkBlockDriverState(node)
 
     # Create a snapshot using 'blockdev-snapshot-sync'
@@ -146,8 +133,7 @@ class TestBlockdevDel(iotests.QMPTestCase):
                 'snapshot-file': new_img,
                 'snapshot-node-name': overlay,
                 'format': iotests.imgfmt}
-        result = self.vm.qmp('blockdev-snapshot-sync', conv_keys=False, **opts)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('blockdev-snapshot-sync', conv_keys=False, **opts)
         self.checkBlockDriverState(node)
         self.checkBlockDriverState(overlay)
 
@@ -155,9 +141,8 @@ class TestBlockdevDel(iotests.QMPTestCase):
     def createSnapshot(self, node, overlay):
         self.checkBlockDriverState(node)
         self.checkBlockDriverState(overlay)
-        result = self.vm.qmp('blockdev-snapshot',
-                             node = node, overlay = overlay)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('blockdev-snapshot',
+                    node = node, overlay = overlay)
         self.checkBlockDriverState(node)
         self.checkBlockDriverState(overlay)
 
@@ -170,14 +155,12 @@ class TestBlockdevDel(iotests.QMPTestCase):
                 'node-name': new_node,
                 'sync': 'top',
                 'format': iotests.imgfmt}
-        result = self.vm.qmp('drive-mirror', conv_keys=False, **opts)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('drive-mirror', conv_keys=False, **opts)
         self.checkBlockDriverState(new_node)
 
     # Complete an existing block job
     def completeBlockJob(self, id, node_before, node_after):
-        result = self.vm.qmp('block-job-complete', device=id)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('block-job-complete', device=id)
         self.wait_until_completed(id)
 
     # Add a BlkDebug node
@@ -193,8 +176,7 @@ class TestBlockdevDel(iotests.QMPTestCase):
         opts = {'driver': 'blkdebug',
                 'node-name': debug,
                 'image': image}
-        result = self.vm.qmp('blockdev-add', conv_keys = False, **opts)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('blockdev-add', conv_keys = False, **opts)
         self.checkBlockDriverState(node)
         self.checkBlockDriverState(debug)
 
@@ -218,8 +200,7 @@ class TestBlockdevDel(iotests.QMPTestCase):
                 'node-name': blkverify,
                 'test': node_0,
                 'raw': node_1}
-        result = self.vm.qmp('blockdev-add', conv_keys = False, **opts)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('blockdev-add', conv_keys = False, **opts)
         self.checkBlockDriverState(test)
         self.checkBlockDriverState(raw)
         self.checkBlockDriverState(blkverify)
@@ -242,8 +223,7 @@ class TestBlockdevDel(iotests.QMPTestCase):
                 'node-name': quorum,
                 'vote-threshold': 1,
                 'children': [ child_0, child_1 ]}
-        result = self.vm.qmp('blockdev-add', conv_keys = False, **opts)
-        self.assert_qmp(result, 'return', {})
+        self.vm.cmd('blockdev-add', conv_keys = False, **opts)
         self.checkBlockDriverState(child0)
         self.checkBlockDriverState(child1)
         self.checkBlockDriverState(quorum)
@@ -347,9 +327,6 @@ class TestBlockdevDel(iotests.QMPTestCase):
 
     @iotests.skip_if_unsupported(['quorum'])
     def testQuorum(self):
-        if not iotests.supports_quorum():
-            return
-
         self.addQuorum('quorum0', 'node0', 'node1')
         # We cannot remove the children of a Quorum device
         self.delBlockDriverState('node0', expect_error = True)

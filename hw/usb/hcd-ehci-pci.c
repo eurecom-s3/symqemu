@@ -16,7 +16,9 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/qdev-properties.h"
 #include "hw/usb/hcd-ehci.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
 #include "qemu/range.h"
 
@@ -72,7 +74,7 @@ static void usb_ehci_pci_realize(PCIDevice *dev, Error **errp)
 
 static void usb_ehci_pci_init(Object *obj)
 {
-    DeviceClass *dc = OBJECT_GET_CLASS(DeviceClass, obj, TYPE_DEVICE);
+    DeviceClass *dc = DEVICE_GET_CLASS(obj);
     EHCIPCIState *i = PCI_EHCI(obj);
     EHCIState *s = &i->ehci;
 
@@ -81,7 +83,7 @@ static void usb_ehci_pci_init(Object *obj)
     s->capsbase = 0x00;
     s->opregbase = 0x20;
     s->portscbase = 0x44;
-    s->portnr = NB_PORTS;
+    s->portnr = EHCI_PORTS;
 
     if (!dc->hotpluggable) {
         s->companion_enable = true;
@@ -103,7 +105,7 @@ static void usb_ehci_pci_exit(PCIDevice *dev)
     EHCIPCIState *i = PCI_EHCI(dev);
     EHCIState *s = &i->ehci;
 
-    usb_ehci_unrealize(s, DEVICE(dev), NULL);
+    usb_ehci_unrealize(s, DEVICE(dev));
 
     g_free(s->irq);
     s->irq = NULL;
@@ -142,7 +144,7 @@ static const VMStateDescription vmstate_ehci_pci = {
     .name        = "ehci",
     .version_id  = 2,
     .minimum_version_id  = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_PCI_DEVICE(pcidev, EHCIPCIState),
         VMSTATE_STRUCT(ehci, EHCIPCIState, 2, vmstate_ehci, EHCIState),
         VMSTATE_END_OF_LIST()
@@ -159,7 +161,7 @@ static void ehci_class_init(ObjectClass *klass, void *data)
     k->class_id = PCI_CLASS_SERIAL_USB;
     k->config_write = usb_ehci_pci_write_config;
     dc->vmsd = &vmstate_ehci_pci;
-    dc->props = ehci_pci_properties;
+    device_class_set_props(dc, ehci_pci_properties);
     dc->reset = usb_ehci_pci_reset;
 }
 

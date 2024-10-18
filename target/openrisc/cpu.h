@@ -20,36 +20,25 @@
 #ifndef OPENRISC_CPU_H
 #define OPENRISC_CPU_H
 
+#include "cpu-qom.h"
 #include "exec/cpu-defs.h"
-#include "qom/cpu.h"
+#include "fpu/softfloat-types.h"
 
-/* cpu_openrisc_map_address_* in CPUOpenRISCTLBContext need this decl.  */
-struct OpenRISCCPU;
-
-#define TYPE_OPENRISC_CPU "or1k-cpu"
-
-#define OPENRISC_CPU_CLASS(klass) \
-    OBJECT_CLASS_CHECK(OpenRISCCPUClass, (klass), TYPE_OPENRISC_CPU)
-#define OPENRISC_CPU(obj) \
-    OBJECT_CHECK(OpenRISCCPU, (obj), TYPE_OPENRISC_CPU)
-#define OPENRISC_CPU_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(OpenRISCCPUClass, (obj), TYPE_OPENRISC_CPU)
+#define TCG_GUEST_DEFAULT_MO (0)
 
 /**
  * OpenRISCCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  *
  * A OpenRISC CPU model.
  */
-typedef struct OpenRISCCPUClass {
-    /*< private >*/
+struct OpenRISCCPUClass {
     CPUClass parent_class;
-    /*< public >*/
 
     DeviceRealize parent_realize;
-    void (*parent_reset)(CPUState *cpu);
-} OpenRISCCPUClass;
+    ResettablePhases parent_phases;
+};
 
 #define TARGET_INSN_START_EXTRA_WORDS 1
 
@@ -67,9 +56,6 @@ enum {
 #define UPDATE_FP_FLAGS(reg, v)   do {\
                                       (reg) |= ((v & 0x1f) << 2);\
                                   } while (0)
-
-/* Version Register */
-#define SPR_VR 0xFFFF003F
 
 /* Interrupt */
 #define NR_IRQS  32
@@ -99,11 +85,12 @@ enum {
     CPUCFGR_OF32S = (1 << 7),
     CPUCFGR_OF64S = (1 << 8),
     CPUCFGR_OV64S = (1 << 9),
-    /* CPUCFGR_ND = (1 << 10), */
-    /* CPUCFGR_AVRP = (1 << 11), */
+    CPUCFGR_ND = (1 << 10),
+    CPUCFGR_AVRP = (1 << 11),
     CPUCFGR_EVBARP = (1 << 12),
-    /* CPUCFGR_ISRP = (1 << 13), */
-    /* CPUCFGR_AECSRP = (1 << 14), */
+    CPUCFGR_ISRP = (1 << 13),
+    CPUCFGR_AECSRP = (1 << 14),
+    CPUCFGR_OF64A32S = (1 << 15),
 };
 
 /* DMMU configure register */
@@ -236,18 +223,18 @@ typedef struct CPUOpenRISCTLBContext {
     OpenRISCTLBEntry itlb[TLB_SIZE];
     OpenRISCTLBEntry dtlb[TLB_SIZE];
 
-    int (*cpu_openrisc_map_address_code)(struct OpenRISCCPU *cpu,
+    int (*cpu_openrisc_map_address_code)(OpenRISCCPU *cpu,
                                          hwaddr *physical,
                                          int *prot,
                                          target_ulong address, int rw);
-    int (*cpu_openrisc_map_address_data)(struct OpenRISCCPU *cpu,
+    int (*cpu_openrisc_map_address_data)(OpenRISCCPU *cpu,
                                          hwaddr *physical,
                                          int *prot,
                                          target_ulong address, int rw);
 } CPUOpenRISCTLBContext;
 #endif
 
-typedef struct CPUOpenRISCState {
+typedef struct CPUArchState {
     target_ulong shadow_gpr[16][32]; /* Shadow registers */
 
     target_ulong pc;          /* Program counter */
@@ -263,10 +250,6 @@ typedef struct CPUOpenRISCState {
     target_ulong sr_cy;       /* the SR_CY bit, values 0, 1.  */
     target_long  sr_ov;       /* the SR_OV bit (in the sign bit only) */
     uint32_t sr;              /* Supervisor register, without SR_{F,CY,OV} */
-    uint32_t vr;              /* Version register */
-    uint32_t upr;             /* Unit presence register */
-    uint32_t dmmucfgr;        /* DMMU configure register */
-    uint32_t immucfgr;        /* IMMU configure register */
     uint32_t esr;             /* Exception supervisor register */
     uint32_t evbar;           /* Exception vector base address register */
     uint32_t pmr;             /* Power Management Register */
@@ -286,7 +269,13 @@ typedef struct CPUOpenRISCState {
     struct {} end_reset_fields;
 
     /* Fields from here on are preserved across CPU reset. */
+    uint32_t vr;              /* Version register */
+    uint32_t vr2;             /* Version register 2 */
+    uint32_t avr;             /* Architecture version register */
+    uint32_t upr;             /* Unit presence register */
     uint32_t cpucfgr;         /* CPU configure register */
+    uint32_t dmmucfgr;        /* DMMU configure register */
+    uint32_t immucfgr;        /* IMMU configure register */
 
 #ifndef CONFIG_USER_ONLY
     QEMUTimer *timer;
@@ -294,9 +283,8 @@ typedef struct CPUOpenRISCState {
     int is_counting;
 
     uint32_t picmr;         /* Interrupt mask register */
-    uint32_t picsr;         /* Interrupt contrl register*/
+    uint32_t picsr;         /* Interrupt control register */
 #endif
-    void *irq[32];          /* Interrupt irq input */
 } CPUOpenRISCState;
 
 /**
@@ -305,35 +293,29 @@ typedef struct CPUOpenRISCState {
  *
  * A OpenRISC CPU.
  */
-typedef struct OpenRISCCPU {
-    /*< private >*/
+struct ArchCPU {
     CPUState parent_obj;
-    /*< public >*/
 
-    CPUNegativeOffsetState neg;
     CPUOpenRISCState env;
-} OpenRISCCPU;
+};
 
-
-void cpu_openrisc_list(void);
-void openrisc_cpu_do_interrupt(CPUState *cpu);
-bool openrisc_cpu_exec_interrupt(CPUState *cpu, int int_req);
 void openrisc_cpu_dump_state(CPUState *cpu, FILE *f, int flags);
-hwaddr openrisc_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
-int openrisc_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
+int openrisc_cpu_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg);
 int openrisc_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
 void openrisc_translate_init(void);
+int print_insn_or1k(bfd_vma addr, disassemble_info *info);
+
+#ifndef CONFIG_USER_ONLY
+hwaddr openrisc_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
+
 bool openrisc_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
                            MMUAccessType access_type, int mmu_idx,
                            bool probe, uintptr_t retaddr);
-int cpu_openrisc_signal_handler(int host_signum, void *pinfo, void *puc);
-int print_insn_or1k(bfd_vma addr, disassemble_info *info);
 
-#define cpu_list cpu_openrisc_list
-#define cpu_signal_handler cpu_openrisc_signal_handler
+extern const VMStateDescription vmstate_openrisc_cpu;
 
-#ifndef CONFIG_USER_ONLY
-extern const struct VMStateDescription vmstate_openrisc_cpu;
+void openrisc_cpu_do_interrupt(CPUState *cpu);
+bool openrisc_cpu_exec_interrupt(CPUState *cpu, int int_req);
 
 /* hw/openrisc_pic.c */
 void cpu_openrisc_pic_init(OpenRISCCPU *cpu);
@@ -348,12 +330,7 @@ void cpu_openrisc_count_start(OpenRISCCPU *cpu);
 void cpu_openrisc_count_stop(OpenRISCCPU *cpu);
 #endif
 
-#define OPENRISC_CPU_TYPE_SUFFIX "-" TYPE_OPENRISC_CPU
-#define OPENRISC_CPU_TYPE_NAME(model) model OPENRISC_CPU_TYPE_SUFFIX
 #define CPU_RESOLVING_TYPE TYPE_OPENRISC_CPU
-
-typedef CPUOpenRISCState CPUArchState;
-typedef OpenRISCCPU ArchCPU;
 
 #include "exec/cpu-all.h"
 
@@ -374,27 +351,14 @@ static inline void cpu_set_gpr(CPUOpenRISCState *env, int i, uint32_t val)
     env->shadow_gpr[0][i] = val;
 }
 
-static inline void cpu_get_tb_cpu_state(CPUOpenRISCState *env,
-                                        target_ulong *pc,
-                                        target_ulong *cs_base, uint32_t *flags)
+static inline void cpu_get_tb_cpu_state(CPUOpenRISCState *env, vaddr *pc,
+                                        uint64_t *cs_base, uint32_t *flags)
 {
     *pc = env->pc;
     *cs_base = 0;
     *flags = (env->dflag ? TB_FLAGS_DFLAG : 0)
            | (cpu_get_gpr(env, 0) ? 0 : TB_FLAGS_R0_0)
            | (env->sr & (SR_SM | SR_DME | SR_IME | SR_OVE));
-}
-
-static inline int cpu_mmu_index(CPUOpenRISCState *env, bool ifetch)
-{
-    int ret = MMU_NOMMU_IDX;  /* mmu is disabled */
-
-    if (env->sr & (ifetch ? SR_IME : SR_DME)) {
-        /* The mmu is enabled; test supervisor state.  */
-        ret = env->sr & SR_SM ? MMU_SUPERVISOR_IDX : MMU_USER_IDX;
-    }
-
-    return ret;
 }
 
 static inline uint32_t cpu_get_sr(const CPUOpenRISCState *env)
@@ -412,6 +376,8 @@ static inline void cpu_set_sr(CPUOpenRISCState *env, uint32_t val)
     env->sr_ov = (val & SR_OV ? -1 : 0);
     env->sr = (val & ~(SR_F | SR_CY | SR_OV)) | SR_FO;
 }
+
+void cpu_set_fpcsr(CPUOpenRISCState *env, uint32_t val);
 
 #define CPU_INTERRUPT_TIMER   CPU_INTERRUPT_TGT_INT_0
 

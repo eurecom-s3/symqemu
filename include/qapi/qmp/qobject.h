@@ -45,10 +45,16 @@ struct QObject {
     struct QObjectBase_ base;
 };
 
-#define QOBJECT(obj) ({                                         \
+/*
+ * Preprocessor sorcery ahead: use a different identifier for the
+ * local variable in each expansion, so we can nest macro calls
+ * without shadowing variables.
+ */
+#define QOBJECT_INTERNAL(obj, _obj) ({                          \
     typeof(obj) _obj = (obj);                                   \
-    _obj ? container_of(&(_obj)->base, QObject, base) : NULL;   \
+    _obj ? container_of(&_obj->base, QObject, base) : NULL;     \
 })
+#define QOBJECT(obj) QOBJECT_INTERNAL((obj), MAKE_IDENTFIER(_obj))
 
 /* Required for qobject_to() */
 #define QTYPE_CAST_TO_QNull     QTYPE_QNULL
@@ -63,14 +69,6 @@ QEMU_BUILD_BUG_MSG(QTYPE__MAX != 7,
 
 #define qobject_to(type, obj)                                       \
     ((type *)qobject_check_type(obj, glue(QTYPE_CAST_TO_, type)))
-
-/* Initialize an object to default values */
-static inline void qobject_init(QObject *obj, QType type)
-{
-    assert(QTYPE_NONE < type && type < QTYPE__MAX);
-    obj->base.refcnt = 1;
-    obj->base.type = type;
-}
 
 static inline void qobject_ref_impl(QObject *obj)
 {
@@ -90,6 +88,7 @@ bool qobject_is_equal(const QObject *x, const QObject *y);
 
 /**
  * qobject_destroy(): Free resources used by the object
+ * For use via qobject_unref() only!
  */
 void qobject_destroy(QObject *obj);
 

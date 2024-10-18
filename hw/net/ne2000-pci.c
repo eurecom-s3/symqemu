@@ -21,8 +21,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
-#include "hw/pci/pci.h"
+#include "hw/irq.h"
+#include "hw/pci/pci_device.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "ne2000.h"
 #include "sysemu/sysemu.h"
 
@@ -35,7 +39,7 @@ static const VMStateDescription vmstate_pci_ne2000 = {
     .name = "ne2000",
     .version_id = 3,
     .minimum_version_id = 3,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_PCI_DEVICE(dev, PCINE2000State),
         VMSTATE_STRUCT(ne2000, PCINE2000State, 0, vmstate_ne2000, NE2000State),
         VMSTATE_END_OF_LIST()
@@ -67,7 +71,8 @@ static void pci_ne2000_realize(PCIDevice *pci_dev, Error **errp)
 
     s->nic = qemu_new_nic(&net_ne2000_info, &s->c,
                           object_get_typename(OBJECT(pci_dev)),
-                          pci_dev->qdev.id, s);
+                          pci_dev->qdev.id,
+                          &pci_dev->qdev.mem_reentrancy_guard, s);
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->c.macaddr.a);
 }
 
@@ -88,7 +93,7 @@ static void ne2000_instance_init(Object *obj)
 
     device_add_bootindex_property(obj, &s->c.bootindex,
                                   "bootindex", "/ethernet-phy@0",
-                                  &pci_dev->qdev, NULL);
+                                  &pci_dev->qdev);
 }
 
 static Property ne2000_properties[] = {
@@ -108,7 +113,7 @@ static void ne2000_class_init(ObjectClass *klass, void *data)
     k->device_id = PCI_DEVICE_ID_REALTEK_8029;
     k->class_id = PCI_CLASS_NETWORK_ETHERNET;
     dc->vmsd = &vmstate_pci_ne2000;
-    dc->props = ne2000_properties;
+    device_class_set_props(dc, ne2000_properties);
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
 }
 

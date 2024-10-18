@@ -12,12 +12,11 @@
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
-#include "cpu.h"
 #include "hw/i386/apic_internal.h"
 #include "hw/pci/msi.h"
 #include "sysemu/hw_accel.h"
 #include "sysemu/kvm.h"
-#include "target/i386/kvm_i386.h"
+#include "kvm/kvm_i386.h"
 
 static inline void kvm_apic_set_reg(struct kvm_lapic_state *kapic,
                                     int reg_id, uint32_t val)
@@ -96,9 +95,10 @@ void kvm_get_apic_state(DeviceState *dev, struct kvm_lapic_state *kapic)
     apic_next_timer(s, s->initial_count_load_time);
 }
 
-static void kvm_apic_set_base(APICCommonState *s, uint64_t val)
+static int kvm_apic_set_base(APICCommonState *s, uint64_t val)
 {
     s->apicbase = val;
+    return 0;
 }
 
 static void kvm_apic_set_tpr(APICCommonState *s, uint8_t val)
@@ -146,7 +146,7 @@ static void kvm_apic_put(CPUState *cs, run_on_cpu_data data)
 
     ret = kvm_vcpu_ioctl(CPU(s->cpu), KVM_SET_LAPIC, &kapic);
     if (ret < 0) {
-        fprintf(stderr, "KVM_SET_LAPIC failed: %s\n", strerror(ret));
+        fprintf(stderr, "KVM_SET_LAPIC failed: %s\n", strerror(-ret));
         abort();
     }
 }
@@ -182,6 +182,13 @@ static void kvm_apic_external_nmi(APICCommonState *s)
 static void kvm_send_msi(MSIMessage *msg)
 {
     int ret;
+
+    /*
+     * The message has already passed through interrupt remapping if enabled,
+     * but the legacy extended destination ID in low bits still needs to be
+     * handled.
+     */
+    msg->address = kvm_swizzle_msi_ext_dest_id(msg->address);
 
     ret = kvm_irqchip_send_msi(kvm_state, *msg);
     if (ret < 0) {
@@ -225,12 +232,11 @@ static void kvm_apic_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&s->io_memory, OBJECT(s), &kvm_apic_io_ops, s,
                           "kvm-apic-msi", APIC_SPACE_SIZE);
 
-    if (kvm_has_gsi_routing()) {
-        msi_nonbroken = true;
-    }
+    assert(kvm_has_gsi_routing());
+    msi_nonbroken = true;
 }
 
-static void kvm_apic_unrealize(DeviceState *dev, Error **errp)
+static void kvm_apic_unrealize(DeviceState *dev)
 {
 }
 

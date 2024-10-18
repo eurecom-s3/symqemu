@@ -7,7 +7,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -19,7 +19,7 @@
  */
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "exec/gdbstub.h"
+#include "gdbstub/helpers.h"
 
 #ifdef TARGET_ABI32
 #define gdb_get_rega(buf, val) gdb_get_reg32(buf, val)
@@ -27,10 +27,9 @@
 #define gdb_get_rega(buf, val) gdb_get_regl(buf, val)
 #endif
 
-int sparc_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
+int sparc_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
 {
-    SPARCCPU *cpu = SPARC_CPU(cs);
-    CPUSPARCState *env = &cpu->env;
+    CPUSPARCState *env = cpu_env(cs);
 
     if (n < 8) {
         /* g0..g7 */
@@ -64,7 +63,7 @@ int sparc_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
     case 69:
         return gdb_get_rega(mem_buf, env->npc);
     case 70:
-        return gdb_get_rega(mem_buf, env->fsr);
+        return gdb_get_rega(mem_buf, cpu_get_fsr(env));
     case 71:
         return gdb_get_rega(mem_buf, 0); /* csr */
     default:
@@ -94,7 +93,7 @@ int sparc_cpu_gdb_read_register(CPUState *cs, uint8_t *mem_buf, int n)
                                      ((env->pstate & 0xfff) << 8) |
                                      cpu_get_cwp64(env));
     case 83:
-        return gdb_get_regl(mem_buf, env->fsr);
+        return gdb_get_regl(mem_buf, cpu_get_fsr(env));
     case 84:
         return gdb_get_regl(mem_buf, env->fprs);
     case 85:
@@ -156,7 +155,7 @@ int sparc_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
             env->npc = tmp;
             break;
         case 70:
-            env->fsr = tmp;
+            cpu_put_fsr(env, tmp);
             break;
         default:
             return 0;
@@ -191,7 +190,7 @@ int sparc_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
             cpu_put_cwp64(env, tmp & 0xff);
             break;
         case 83:
-            env->fsr = tmp;
+            cpu_put_fsr(env, tmp);
             break;
         case 84:
             env->fprs = tmp;

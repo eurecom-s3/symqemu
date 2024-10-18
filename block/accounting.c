@@ -38,13 +38,31 @@ void block_acct_init(BlockAcctStats *stats)
     if (qtest_enabled()) {
         clock_type = QEMU_CLOCK_VIRTUAL;
     }
+    stats->account_invalid = true;
+    stats->account_failed = true;
 }
 
-void block_acct_setup(BlockAcctStats *stats, bool account_invalid,
-                      bool account_failed)
+static bool bool_from_onoffauto(OnOffAuto val, bool def)
 {
-    stats->account_invalid = account_invalid;
-    stats->account_failed = account_failed;
+    switch (val) {
+    case ON_OFF_AUTO_AUTO:
+        return def;
+    case ON_OFF_AUTO_ON:
+        return true;
+    case ON_OFF_AUTO_OFF:
+        return false;
+    default:
+        abort();
+    }
+}
+
+void block_acct_setup(BlockAcctStats *stats, enum OnOffAuto account_invalid,
+                      enum OnOffAuto account_failed)
+{
+    stats->account_invalid = bool_from_onoffauto(account_invalid,
+                                                 stats->account_invalid);
+    stats->account_failed = bool_from_onoffauto(account_failed,
+                                                stats->account_failed);
 }
 
 void block_acct_cleanup(BlockAcctStats *stats)
@@ -195,28 +213,32 @@ static void block_account_one_io(BlockAcctStats *stats, BlockAcctCookie *cookie,
 
     assert(cookie->type < BLOCK_MAX_IOTYPE);
 
-    qemu_mutex_lock(&stats->lock);
-
-    if (failed) {
-        stats->failed_ops[cookie->type]++;
-    } else {
-        stats->nr_bytes[cookie->type] += cookie->bytes;
-        stats->nr_ops[cookie->type]++;
+    if (cookie->type == BLOCK_ACCT_NONE) {
+        return;
     }
 
-    block_latency_histogram_account(&stats->latency_histogram[cookie->type],
-                                    latency_ns);
+    WITH_QEMU_LOCK_GUARD(&stats->lock) {
+        if (failed) {
+            stats->failed_ops[cookie->type]++;
+        } else {
+            stats->nr_bytes[cookie->type] += cookie->bytes;
+            stats->nr_ops[cookie->type]++;
+        }
 
-    if (!failed || stats->account_failed) {
-        stats->total_time_ns[cookie->type] += latency_ns;
-        stats->last_access_time_ns = time_ns;
+        block_latency_histogram_account(&stats->latency_histogram[cookie->type],
+                                        latency_ns);
 
-        QSLIST_FOREACH(s, &stats->intervals, entries) {
-            timed_average_account(&s->latency[cookie->type], latency_ns);
+        if (!failed || stats->account_failed) {
+            stats->total_time_ns[cookie->type] += latency_ns;
+            stats->last_access_time_ns = time_ns;
+
+            QSLIST_FOREACH(s, &stats->intervals, entries) {
+                timed_average_account(&s->latency[cookie->type], latency_ns);
+            }
         }
     }
 
-    qemu_mutex_unlock(&stats->lock);
+    cookie->type = BLOCK_ACCT_NONE;
 }
 
 void block_acct_done(BlockAcctStats *stats, BlockAcctCookie *cookie)

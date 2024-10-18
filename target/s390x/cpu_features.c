@@ -14,6 +14,9 @@
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "cpu_features.h"
+#ifndef CONFIG_USER_ONLY
+#include "target/s390x/kvm/pv.h"
+#endif
 
 #define DEF_FEAT(_FEAT, _NAME, _TYPE, _BIT, _DESC) \
     [S390_FEAT_##_FEAT] = {                        \
@@ -23,7 +26,7 @@
         .desc = _DESC,                             \
     },
 static const S390FeatDef s390_features[S390_FEAT_MAX] = {
-    #include "cpu_features_def.inc.h"
+    #include "cpu_features_def.h.inc"
 };
 #undef DEF_FEAT
 
@@ -105,6 +108,49 @@ void s390_fill_feat_block(const S390FeatBitmap features, S390FeatType type,
         }
         feat = find_next_bit(features, S390_FEAT_MAX, feat + 1);
     }
+
+#ifndef CONFIG_USER_ONLY
+    if (!s390_is_pv()) {
+        return;
+    }
+
+    /*
+     * Some facilities are not available for CPUs in protected mode:
+     * - All SIE facilities because SIE is not available
+     * - DIAG318
+     *
+     * As VMs can move in and out of protected mode the CPU model
+     * doesn't protect us from that problem because it is only
+     * validated at the start of the VM.
+     */
+    switch (type) {
+    case S390_FEAT_TYPE_SCLP_CPU:
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_F2)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_SKEY)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_GPERE)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_SIIF)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_SIGPIF)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_IB)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_CEI)->bit, data);
+        break;
+    case S390_FEAT_TYPE_SCLP_CONF_CHAR:
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_GSLS)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_HPMA2)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_KSS)->bit, data);
+        break;
+    case S390_FEAT_TYPE_SCLP_CONF_CHAR_EXT:
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_64BSCAO)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_CMMA)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_PFMFI)->bit, data);
+        clear_be_bit(s390_feat_def(S390_FEAT_SIE_IBS)->bit, data);
+        break;
+    case S390_FEAT_TYPE_SCLP_FAC134:
+        clear_be_bit(s390_feat_def(S390_FEAT_DIAG_318)->bit, data);
+        break;
+    default:
+        return;
+    }
+#endif
 }
 
 void s390_add_from_feat_block(S390FeatBitmap features, S390FeatType type,
@@ -203,7 +249,7 @@ static void init_groups(void)
 {
     int i;
 
-    /* init all bitmaps from gnerated data initially */
+    /* init all bitmaps from generated data initially */
     for (i = 0; i < ARRAY_SIZE(s390_feature_groups); i++) {
         s390_init_feat_bitmap(s390_feature_groups[i].init,
                               s390_feature_groups[i].feat);

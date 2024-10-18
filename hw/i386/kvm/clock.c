@@ -14,24 +14,26 @@
  */
 
 #include "qemu/osdep.h"
-#include "cpu.h"
 #include "qemu/host-utils.h"
 #include "qemu/module.h"
-#include "sysemu/sysemu.h"
 #include "sysemu/kvm.h"
+#include "sysemu/runstate.h"
 #include "sysemu/hw_accel.h"
-#include "kvm_i386.h"
+#include "kvm/kvm_i386.h"
+#include "migration/vmstate.h"
 #include "hw/sysbus.h"
-#include "hw/kvm/clock.h"
+#include "hw/i386/kvm/clock.h"
+#include "hw/qdev-properties.h"
 #include "qapi/error.h"
 
 #include <linux/kvm.h>
 #include "standard-headers/asm-x86/kvm_para.h"
+#include "qom/object.h"
 
 #define TYPE_KVM_CLOCK "kvmclock"
-#define KVM_CLOCK(obj) OBJECT_CHECK(KVMClockState, (obj), TYPE_KVM_CLOCK)
+OBJECT_DECLARE_SIMPLE_TYPE(KVMClockState, KVM_CLOCK)
 
-typedef struct KVMClockState {
+struct KVMClockState {
     /*< private >*/
     SysBusDevice busdev;
     /*< public >*/
@@ -39,13 +41,16 @@ typedef struct KVMClockState {
     uint64_t clock;
     bool clock_valid;
 
+    /* whether the 'clock' value was obtained in the 'paused' state */
+    bool runstate_paused;
+
     /* whether machine type supports reliable KVM_GET_CLOCK */
     bool mach_use_reliable_get_clock;
 
     /* whether the 'clock' value was obtained in a host with
      * reliable KVM_GET_CLOCK */
     bool clock_is_reliable;
-} KVMClockState;
+};
 
 struct pvclock_vcpu_time_info {
     uint32_t   version;
@@ -61,7 +66,7 @@ struct pvclock_vcpu_time_info {
 static uint64_t kvmclock_current_nsec(KVMClockState *s)
 {
     CPUState *cpu = first_cpu;
-    CPUX86State *env = cpu->env_ptr;
+    CPUX86State *env = cpu_env(cpu);
     hwaddr kvmclock_struct_pa;
     uint64_t migration_tsc = env->tsc;
     struct pvclock_vcpu_time_info time;
@@ -100,7 +105,7 @@ static void kvm_update_clock(KVMClockState *s)
 
     ret = kvm_vm_ioctl(kvm_state, KVM_GET_CLOCK, &data);
     if (ret < 0) {
-        fprintf(stderr, "KVM_GET_CLOCK failed: %s\n", strerror(ret));
+        fprintf(stderr, "KVM_GET_CLOCK failed: %s\n", strerror(-ret));
                 abort();
     }
     s->clock = data.clock;
@@ -156,7 +161,7 @@ static void do_kvmclock_ctrl(CPUState *cpu, run_on_cpu_data data)
     }
 }
 
-static void kvmclock_vm_state_change(void *opaque, int running,
+static void kvmclock_vm_state_change(void *opaque, bool running,
                                      RunState state)
 {
     KVMClockState *s = opaque;
@@ -184,7 +189,7 @@ static void kvmclock_vm_state_change(void *opaque, int running,
         data.clock = s->clock;
         ret = kvm_vm_ioctl(kvm_state, KVM_SET_CLOCK, &data);
         if (ret < 0) {
-            fprintf(stderr, "KVM_SET_CLOCK failed: %s\n", strerror(ret));
+            fprintf(stderr, "KVM_SET_CLOCK failed: %s\n", strerror(-ret));
             abort();
         }
 
@@ -199,6 +204,8 @@ static void kvmclock_vm_state_change(void *opaque, int running,
         if (s->clock_valid) {
             return;
         }
+
+        s->runstate_paused = runstate_check(RUN_STATE_PAUSED);
 
         kvm_synchronize_all_tsc();
 
@@ -238,7 +245,7 @@ static const VMStateDescription kvmclock_reliable_get_clock = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = kvmclock_clock_is_reliable_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_BOOL(clock_is_reliable, KVMClockState),
         VMSTATE_END_OF_LIST()
     }
@@ -258,9 +265,9 @@ static int kvmclock_pre_load(void *opaque)
 }
 
 /*
- * When migrating, read the clock just before migration,
- * so that the guest clock counts during the events
- * between:
+ * When migrating a running guest, read the clock just
+ * before migration, so that the guest clock counts
+ * during the events between:
  *
  *  * vm_stop()
  *  *
@@ -275,7 +282,9 @@ static int kvmclock_pre_save(void *opaque)
 {
     KVMClockState *s = opaque;
 
-    kvm_update_clock(s);
+    if (!s->runstate_paused) {
+        kvm_update_clock(s);
+    }
 
     return 0;
 }
@@ -286,11 +295,11 @@ static const VMStateDescription kvmclock_vmsd = {
     .minimum_version_id = 1,
     .pre_load = kvmclock_pre_load,
     .pre_save = kvmclock_pre_save,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(clock, KVMClockState),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription * []) {
+    .subsections = (const VMStateDescription * const []) {
         &kvmclock_reliable_get_clock,
         NULL
     }
@@ -308,7 +317,7 @@ static void kvmclock_class_init(ObjectClass *klass, void *data)
 
     dc->realize = kvmclock_realize;
     dc->vmsd = &kvmclock_vmsd;
-    dc->props = kvmclock_properties;
+    device_class_set_props(dc, kvmclock_properties);
 }
 
 static const TypeInfo kvmclock_info = {
@@ -319,11 +328,12 @@ static const TypeInfo kvmclock_info = {
 };
 
 /* Note: Must be called after VCPU initialization. */
-void kvmclock_create(void)
+void kvmclock_create(bool create_always)
 {
     X86CPU *cpu = X86_CPU(first_cpu);
 
-    if (kvm_enabled() &&
+    assert(kvm_enabled());
+    if (create_always ||
         cpu->env.features[FEAT_KVM] & ((1ULL << KVM_FEATURE_CLOCKSOURCE) |
                                        (1ULL << KVM_FEATURE_CLOCKSOURCE2))) {
         sysbus_create_simple(TYPE_KVM_CLOCK, -1, NULL);

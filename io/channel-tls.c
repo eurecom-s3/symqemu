@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -23,6 +23,7 @@
 #include "qemu/module.h"
 #include "io/channel-tls.h"
 #include "trace.h"
+#include "qemu/atomic.h"
 
 
 static ssize_t qio_channel_tls_write_handler(const char *buf,
@@ -68,34 +69,40 @@ qio_channel_tls_new_server(QIOChannel *master,
                            const char *aclname,
                            Error **errp)
 {
-    QIOChannelTLS *ioc;
+    QIOChannelTLS *tioc;
+    QIOChannel *ioc;
 
-    ioc = QIO_CHANNEL_TLS(object_new(TYPE_QIO_CHANNEL_TLS));
+    tioc = QIO_CHANNEL_TLS(object_new(TYPE_QIO_CHANNEL_TLS));
+    ioc = QIO_CHANNEL(tioc);
 
-    ioc->master = master;
+    tioc->master = master;
+    ioc->follow_coroutine_ctx = master->follow_coroutine_ctx;
+    if (qio_channel_has_feature(master, QIO_CHANNEL_FEATURE_SHUTDOWN)) {
+        qio_channel_set_feature(ioc, QIO_CHANNEL_FEATURE_SHUTDOWN);
+    }
     object_ref(OBJECT(master));
 
-    ioc->session = qcrypto_tls_session_new(
+    tioc->session = qcrypto_tls_session_new(
         creds,
         NULL,
         aclname,
         QCRYPTO_TLS_CREDS_ENDPOINT_SERVER,
         errp);
-    if (!ioc->session) {
+    if (!tioc->session) {
         goto error;
     }
 
     qcrypto_tls_session_set_callbacks(
-        ioc->session,
+        tioc->session,
         qio_channel_tls_write_handler,
         qio_channel_tls_read_handler,
-        ioc);
+        tioc);
 
-    trace_qio_channel_tls_new_server(ioc, master, creds, aclname);
-    return ioc;
+    trace_qio_channel_tls_new_server(tioc, master, creds, aclname);
+    return tioc;
 
  error:
-    object_unref(OBJECT(ioc));
+    object_unref(OBJECT(tioc));
     return NULL;
 }
 
@@ -112,6 +119,7 @@ qio_channel_tls_new_client(QIOChannel *master,
     ioc = QIO_CHANNEL(tioc);
 
     tioc->master = master;
+    ioc->follow_coroutine_ctx = master->follow_coroutine_ctx;
     if (qio_channel_has_feature(master, QIO_CHANNEL_FEATURE_SHUTDOWN)) {
         qio_channel_set_feature(ioc, QIO_CHANNEL_FEATURE_SHUTDOWN);
     }
@@ -194,12 +202,13 @@ static void qio_channel_tls_handshake_task(QIOChannelTLS *ioc,
         }
 
         trace_qio_channel_tls_handshake_pending(ioc, status);
-        qio_channel_add_watch_full(ioc->master,
-                                   condition,
-                                   qio_channel_tls_handshake_io,
-                                   data,
-                                   NULL,
-                                   context);
+        ioc->hs_ioc_tag =
+            qio_channel_add_watch_full(ioc->master,
+                                       condition,
+                                       qio_channel_tls_handshake_io,
+                                       data,
+                                       NULL,
+                                       context);
     }
 }
 
@@ -214,6 +223,7 @@ static gboolean qio_channel_tls_handshake_io(QIOChannel *ioc,
     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(
         qio_task_get_source(task));
 
+    tioc->hs_ioc_tag = 0;
     g_free(data);
     qio_channel_tls_handshake_task(tioc, task, context);
 
@@ -259,6 +269,7 @@ static ssize_t qio_channel_tls_readv(QIOChannel *ioc,
                                      size_t niov,
                                      int **fds,
                                      size_t *nfds,
+                                     int flags,
                                      Error **errp)
 {
     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(ioc);
@@ -277,7 +288,8 @@ static ssize_t qio_channel_tls_readv(QIOChannel *ioc,
                     return QIO_CHANNEL_ERR_BLOCK;
                 }
             } else if (errno == ECONNABORTED &&
-                       (tioc->shutdown & QIO_CHANNEL_SHUTDOWN_READ)) {
+                       (qatomic_load_acquire(&tioc->shutdown) &
+                        QIO_CHANNEL_SHUTDOWN_READ)) {
                 return 0;
             }
 
@@ -299,6 +311,7 @@ static ssize_t qio_channel_tls_writev(QIOChannel *ioc,
                                       size_t niov,
                                       int *fds,
                                       size_t nfds,
+                                      int flags,
                                       Error **errp)
 {
     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(ioc);
@@ -361,7 +374,7 @@ static int qio_channel_tls_shutdown(QIOChannel *ioc,
 {
     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(ioc);
 
-    tioc->shutdown |= how;
+    qatomic_or(&tioc->shutdown, how);
 
     return qio_channel_shutdown(tioc->master, how, errp);
 }
@@ -371,26 +384,98 @@ static int qio_channel_tls_close(QIOChannel *ioc,
 {
     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(ioc);
 
+    if (tioc->hs_ioc_tag) {
+        trace_qio_channel_tls_handshake_cancel(ioc);
+        g_clear_handle_id(&tioc->hs_ioc_tag, g_source_remove);
+    }
+
     return qio_channel_close(tioc->master, errp);
 }
 
 static void qio_channel_tls_set_aio_fd_handler(QIOChannel *ioc,
-                                               AioContext *ctx,
+                                               AioContext *read_ctx,
                                                IOHandler *io_read,
+                                               AioContext *write_ctx,
                                                IOHandler *io_write,
                                                void *opaque)
 {
     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(ioc);
 
-    qio_channel_set_aio_fd_handler(tioc->master, ctx, io_read, io_write, opaque);
+    qio_channel_set_aio_fd_handler(tioc->master, read_ctx, io_read,
+            write_ctx, io_write, opaque);
+}
+
+typedef struct QIOChannelTLSSource QIOChannelTLSSource;
+struct QIOChannelTLSSource {
+    GSource parent;
+    QIOChannelTLS *tioc;
+};
+
+static gboolean
+qio_channel_tls_source_check(GSource *source)
+{
+    QIOChannelTLSSource *tsource = (QIOChannelTLSSource *)source;
+
+    return qcrypto_tls_session_check_pending(tsource->tioc->session) > 0;
+}
+
+static gboolean
+qio_channel_tls_source_prepare(GSource *source, gint *timeout)
+{
+    *timeout = -1;
+    return qio_channel_tls_source_check(source);
+}
+
+static gboolean
+qio_channel_tls_source_dispatch(GSource *source, GSourceFunc callback,
+                                gpointer user_data)
+{
+    return G_SOURCE_CONTINUE;
+}
+
+static void
+qio_channel_tls_source_finalize(GSource *source)
+{
+    QIOChannelTLSSource *tsource = (QIOChannelTLSSource *)source;
+
+    object_unref(OBJECT(tsource->tioc));
+}
+
+static GSourceFuncs qio_channel_tls_source_funcs = {
+    qio_channel_tls_source_prepare,
+    qio_channel_tls_source_check,
+    qio_channel_tls_source_dispatch,
+    qio_channel_tls_source_finalize
+};
+
+static void
+qio_channel_tls_read_watch(QIOChannelTLS *tioc, GSource *source)
+{
+    GSource *child;
+    QIOChannelTLSSource *tlssource;
+
+    child = g_source_new(&qio_channel_tls_source_funcs,
+                          sizeof(QIOChannelTLSSource));
+    tlssource = (QIOChannelTLSSource *)child;
+
+    tlssource->tioc = tioc;
+    object_ref(OBJECT(tioc));
+
+    g_source_add_child_source(source, child);
+    g_source_unref(child);
 }
 
 static GSource *qio_channel_tls_create_watch(QIOChannel *ioc,
                                              GIOCondition condition)
 {
     QIOChannelTLS *tioc = QIO_CHANNEL_TLS(ioc);
+    GSource *source = qio_channel_create_watch(tioc->master, condition);
 
-    return qio_channel_create_watch(tioc->master, condition);
+    if (condition & G_IO_IN) {
+        qio_channel_tls_read_watch(tioc, source);
+    }
+
+    return source;
 }
 
 QCryptoTLSSession *

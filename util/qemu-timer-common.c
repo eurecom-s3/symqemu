@@ -27,6 +27,8 @@
 /***********************************************************/
 /* real time host monotonic timer */
 
+int64_t clock_start;
+
 #ifdef _WIN32
 
 int64_t clock_freq;
@@ -41,6 +43,7 @@ static void __attribute__((constructor)) init_get_clock(void)
         exit(1);
     }
     clock_freq = freq.QuadPart;
+    clock_start = get_clock();
 }
 
 #else
@@ -49,14 +52,12 @@ int use_rt_clock;
 
 static void __attribute__((constructor)) init_get_clock(void)
 {
+    struct timespec ts;
+
     use_rt_clock = 0;
-#ifdef CLOCK_MONOTONIC
-    {
-        struct timespec ts;
-        if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
-            use_rt_clock = 1;
-        }
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        use_rt_clock = 1;
     }
-#endif
+    clock_start = get_clock();
 }
 #endif

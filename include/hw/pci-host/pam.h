@@ -80,13 +80,16 @@
 #define SMRAM_C_BASE_SEG_MASK  ((uint8_t)0x7)
 #define SMRAM_C_BASE_SEG       ((uint8_t)0x2)  /* hardwired to b010 */
 
+#define PAM_REGIONS_COUNT       13
+
 typedef struct PAMMemoryRegion {
     MemoryRegion alias[4];  /* index = PAM value */
     unsigned current;
 } PAMMemoryRegion;
 
-void init_pam(DeviceState *dev, MemoryRegion *ram, MemoryRegion *system,
-              MemoryRegion *pci, PAMMemoryRegion *mem, uint32_t start, uint32_t size);
+void init_pam(PAMMemoryRegion *mem, Object *owner, MemoryRegion *ram,
+              MemoryRegion *system, MemoryRegion *pci,
+              uint32_t start, uint32_t size);
 void pam_update(PAMMemoryRegion *mem, int idx, uint8_t val);
 
 #endif /* QEMU_PAM_H */

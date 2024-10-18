@@ -1,6 +1,10 @@
 /*
  * S/390 virtual CPU header
  *
+ * For details on the s390x architecture and used definitions (e.g.,
+ * PSW, PER and DAT (Dynamic Address Translation)), please refer to
+ * the "z/Architecture Principles of Operations" - a.k.a. PoP.
+ *
  *  Copyright (c) 2009 Ulrich Hecht
  *  Copyright IBM Corp. 2012, 2018
  *
@@ -24,29 +28,34 @@
 #include "cpu-qom.h"
 #include "cpu_models.h"
 #include "exec/cpu-defs.h"
+#include "qemu/cpu-float.h"
+#include "qapi/qapi-types-machine-common.h"
 
 #define ELF_MACHINE_UNAME "S390X"
 
 /* The z/Architecture has a strong memory model with some store-after-load re-ordering */
 #define TCG_GUEST_DEFAULT_MO      (TCG_MO_ALL & ~TCG_MO_ST_LD)
 
-#define TARGET_INSN_START_EXTRA_WORDS 1
+#define TARGET_HAS_PRECISE_SMC
 
-#define MMU_MODE0_SUFFIX _primary
-#define MMU_MODE1_SUFFIX _secondary
-#define MMU_MODE2_SUFFIX _home
-#define MMU_MODE3_SUFFIX _real
+#define TARGET_INSN_START_EXTRA_WORDS 2
 
 #define MMU_USER_IDX 0
 
 #define S390_MAX_CPUS 248
+
+#ifndef CONFIG_KVM
+#define S390_ADAPTER_SUPPRESSIBLE 0x01
+#else
+#define S390_ADAPTER_SUPPRESSIBLE KVM_S390_ADAPTER_SUPPRESSIBLE
+#endif
 
 typedef struct PSW {
     uint64_t mask;
     uint64_t addr;
 } PSW;
 
-struct CPUS390XState {
+typedef struct CPUArchState {
     uint64_t regs[16];     /* GP registers */
     /*
      * The floating point registers are part of the vector registers.
@@ -54,10 +63,11 @@ struct CPUS390XState {
      */
     uint64_t vregs[32][2] QEMU_ALIGNED(16);  /* vector registers */
     uint32_t aregs[16];    /* access registers */
-    uint8_t riccb[64];     /* runtime instrumentation control */
     uint64_t gscb[4];      /* guarded storage control */
     uint64_t etoken;       /* etoken */
     uint64_t etoken_extension; /* etoken extension */
+
+    uint64_t diag318_info;
 
     /* Fields up to this point are not cleared by initial CPU reset */
     struct {} start_initial_reset_fields;
@@ -68,9 +78,6 @@ struct CPUS390XState {
 
     float_status fpu_status; /* passed to softfloat lib */
 
-    /* The low part of a 128-bit return, or remainder of a divide.  */
-    uint64_t retxl;
-
     PSW psw;
 
     S390CrashReason crash_reason;
@@ -80,6 +87,7 @@ struct CPUS390XState {
     uint64_t cc_vr;
 
     uint64_t ex_value;
+    uint64_t ex_target;
 
     uint64_t __excp_addr;
     uint64_t psa;
@@ -95,10 +103,6 @@ struct CPUS390XState {
 
     uint64_t cregs[16]; /* control registers */
 
-    int pending_int;
-    uint16_t external_call_addr;
-    DECLARE_BITMAP(emergency_signals, S390_MAX_CPUS);
-
     uint64_t ckc;
     uint64_t cputm;
     uint32_t todpr;
@@ -110,11 +114,29 @@ struct CPUS390XState {
     uint64_t gbea;
     uint64_t pp;
 
+    /* Fields up to this point are not cleared by normal CPU reset */
+    struct {} start_normal_reset_fields;
+    uint8_t riccb[64];     /* runtime instrumentation control */
+
+    int pending_int;
+    uint16_t external_call_addr;
+    DECLARE_BITMAP(emergency_signals, S390_MAX_CPUS);
+
+#if !defined(CONFIG_USER_ONLY)
+    uint64_t tlb_fill_tec;   /* translation exception code during tlb_fill */
+    int tlb_fill_exc;        /* exception number seen during tlb_fill */
+#endif
+
     /* Fields up to this point are cleared by a CPU reset */
     struct {} end_reset_fields;
 
 #if !defined(CONFIG_USER_ONLY)
     uint32_t core_id; /* PoP "CPU address", same as cpu_index */
+    int32_t socket_id;
+    int32_t book_id;
+    int32_t drawer_id;
+    bool dedicated;
+    CpuS390Entitlement entitlement; /* Used only for vertical polarization */
     uint64_t cpuid;
 #endif
 
@@ -135,7 +157,7 @@ struct CPUS390XState {
     /* currently processed sigp order */
     uint8_t sigp_order;
 
-};
+} CPUS390XState;
 
 static inline uint64_t *get_freg(CPUS390XState *cs, int nr)
 {
@@ -148,12 +170,9 @@ static inline uint64_t *get_freg(CPUS390XState *cs, int nr)
  *
  * An S/390 CPU.
  */
-struct S390CPU {
-    /*< private >*/
+struct ArchCPU {
     CPUState parent_obj;
-    /*< public >*/
 
-    CPUNegativeOffsetState neg;
     CPUS390XState env;
     S390CPUModel *model;
     /* needed for live migration */
@@ -161,9 +180,39 @@ struct S390CPU {
     uint32_t irqstate_saved_size;
 };
 
+typedef enum cpu_reset_type {
+    S390_CPU_RESET_NORMAL,
+    S390_CPU_RESET_INITIAL,
+    S390_CPU_RESET_CLEAR,
+} cpu_reset_type;
+
+/**
+ * S390CPUClass:
+ * @parent_realize: The parent class' realize handler.
+ * @parent_reset: The parent class' reset handler.
+ * @load_normal: Performs a load normal.
+ * @cpu_reset: Performs a CPU reset.
+ * @initial_cpu_reset: Performs an initial CPU reset.
+ *
+ * An S/390 CPU model.
+ */
+struct S390CPUClass {
+    CPUClass parent_class;
+
+    const S390CPUDef *cpu_def;
+    bool kvm_required;
+    bool is_static;
+    bool is_migration_safe;
+    const char *desc;
+
+    DeviceRealize parent_realize;
+    DeviceReset parent_reset;
+    void (*load_normal)(CPUState *cpu);
+    void (*reset)(CPUState *cpu, cpu_reset_type type);
+};
 
 #ifndef CONFIG_USER_ONLY
-extern const struct VMStateDescription vmstate_s390_cpu;
+extern const VMStateDescription vmstate_s390_cpu;
 #endif
 
 /* distinguish between 24 bit and 31 bit addressing */
@@ -248,6 +297,7 @@ extern const struct VMStateDescription vmstate_s390_cpu;
 #undef PSW_SHIFT_ASC
 #undef PSW_MASK_CC
 #undef PSW_MASK_PM
+#undef PSW_MASK_RI
 #undef PSW_SHIFT_MASK_PM
 #undef PSW_MASK_64
 #undef PSW_MASK_32
@@ -261,6 +311,7 @@ extern const struct VMStateDescription vmstate_s390_cpu;
 #define PSW_MASK_EXT            0x0100000000000000ULL
 #define PSW_MASK_KEY            0x00F0000000000000ULL
 #define PSW_SHIFT_KEY           52
+#define PSW_MASK_SHORTPSW       0x0008000000000000ULL
 #define PSW_MASK_MCHECK         0x0004000000000000ULL
 #define PSW_MASK_WAIT           0x0002000000000000ULL
 #define PSW_MASK_PSTATE         0x0001000000000000ULL
@@ -269,9 +320,12 @@ extern const struct VMStateDescription vmstate_s390_cpu;
 #define PSW_MASK_CC             0x0000300000000000ULL
 #define PSW_MASK_PM             0x00000F0000000000ULL
 #define PSW_SHIFT_MASK_PM       40
+#define PSW_MASK_RI             0x0000008000000000ULL
 #define PSW_MASK_64             0x0000000100000000ULL
 #define PSW_MASK_32             0x0000000080000000ULL
-#define PSW_MASK_ESA_ADDR       0x000000007fffffffULL
+#define PSW_MASK_SHORT_ADDR     0x000000007fffffffULL
+#define PSW_MASK_SHORT_CTRL     0xffffffff80000000ULL
+#define PSW_MASK_RESERVED       0xb80800fe7fffffffULL
 
 #undef PSW_ASC_PRIMARY
 #undef PSW_ASC_ACCREG
@@ -311,6 +365,7 @@ extern const struct VMStateDescription vmstate_s390_cpu;
 #define CR0_EDAT                0x0000000000800000ULL
 #define CR0_AFP                 0x0000000000040000ULL
 #define CR0_VECTOR              0x0000000000020000ULL
+#define CR0_IEP                 0x0000000000100000ULL
 #define CR0_EMERGENCY_SIGNAL_SC 0x0000000000004000ULL
 #define CR0_EXTERNAL_CALL_SC    0x0000000000002000ULL
 #define CR0_CKC_SC              0x0000000000000800ULL
@@ -326,10 +381,20 @@ extern const struct VMStateDescription vmstate_s390_cpu;
 #define MMU_HOME_IDX            2
 #define MMU_REAL_IDX            3
 
-static inline int cpu_mmu_index(CPUS390XState *env, bool ifetch)
+static inline int s390x_env_mmu_index(CPUS390XState *env, bool ifetch)
 {
+#ifdef CONFIG_USER_ONLY
+    return MMU_USER_IDX;
+#else
     if (!(env->psw.mask & PSW_MASK_DAT)) {
         return MMU_REAL_IDX;
+    }
+
+    if (ifetch) {
+        if ((env->psw.mask & PSW_MASK_ASC) == PSW_ASC_HOME) {
+            return MMU_HOME_IDX;
+        }
+        return MMU_PRIMARY_IDX;
     }
 
     switch (env->psw.mask & PSW_MASK_ASC) {
@@ -344,11 +409,24 @@ static inline int cpu_mmu_index(CPUS390XState *env, bool ifetch)
     default:
         abort();
     }
+#endif
 }
 
-static inline void cpu_get_tb_cpu_state(CPUS390XState* env, target_ulong *pc,
-                                        target_ulong *cs_base, uint32_t *flags)
+#ifdef CONFIG_TCG
+
+#include "tcg/tcg_s390x.h"
+
+static inline void cpu_get_tb_cpu_state(CPUS390XState *env, vaddr *pc,
+                                        uint64_t *cs_base, uint32_t *flags)
 {
+    if (env->psw.addr & 1) {
+        /*
+         * Instructions must be at even addresses.
+         * This needs to be checked before address translation.
+         */
+        env->int_pgm_ilen = 2; /* see s390_cpu_tlb_fill() */
+        tcg_s390_program_interrupt(env, PGM_SPECIFICATION, 0);
+    }
     *pc = env->psw.addr;
     *cs_base = env->ex_value;
     *flags = (env->psw.mask >> FLAG_MASK_PSW_SHIFT) & FLAG_MASK_PSW;
@@ -359,6 +437,8 @@ static inline void cpu_get_tb_cpu_state(CPUS390XState* env, target_ulong *pc,
         *flags |= FLAG_MASK_VECTOR;
     }
 }
+
+#endif /* CONFIG_TCG */
 
 /* PER bits from control register 9 */
 #define PER_CR9_EVENT_BRANCH           0x80000000
@@ -411,8 +491,6 @@ static inline void cpu_get_tb_cpu_state(CPUS390XState* env, target_ulong *pc,
 #define S390_R13_REGNUM 15
 #define S390_R14_REGNUM 16
 #define S390_R15_REGNUM 17
-/* Total Core Registers. */
-#define S390_NUM_CORE_REGS 18
 
 static inline void setcc(S390CPU *cpu, uint64_t cc)
 {
@@ -523,6 +601,29 @@ typedef struct SysIB_322 {
 } SysIB_322;
 QEMU_BUILD_BUG_ON(sizeof(SysIB_322) != 4096);
 
+/*
+ * Topology Magnitude fields (MAG) indicates the maximum number of
+ * topology list entries (TLE) at the corresponding nesting level.
+ */
+#define S390_TOPOLOGY_MAG  6
+#define S390_TOPOLOGY_MAG6 0
+#define S390_TOPOLOGY_MAG5 1
+#define S390_TOPOLOGY_MAG4 2
+#define S390_TOPOLOGY_MAG3 3
+#define S390_TOPOLOGY_MAG2 4
+#define S390_TOPOLOGY_MAG1 5
+/* Configuration topology */
+typedef struct SysIB_151x {
+    uint8_t  reserved0[2];
+    uint16_t length;
+    uint8_t  mag[S390_TOPOLOGY_MAG];
+    uint8_t  reserved1;
+    uint8_t  mnest;
+    uint32_t reserved2;
+    char tle[];
+} SysIB_151x;
+QEMU_BUILD_BUG_ON(sizeof(SysIB_151x) != 16);
+
 typedef union SysIB {
     SysIB_111 sysib_111;
     SysIB_121 sysib_121;
@@ -530,8 +631,61 @@ typedef union SysIB {
     SysIB_221 sysib_221;
     SysIB_222 sysib_222;
     SysIB_322 sysib_322;
+    SysIB_151x sysib_151x;
 } SysIB;
 QEMU_BUILD_BUG_ON(sizeof(SysIB) != 4096);
+
+/*
+ * CPU Topology List provided by STSI with fc=15 provides a list
+ * of two different Topology List Entries (TLE) types to specify
+ * the topology hierarchy.
+ *
+ * - Container Topology List Entry
+ *   Defines a container to contain other Topology List Entries
+ *   of any type, nested containers or CPU.
+ * - CPU Topology List Entry
+ *   Specifies the CPUs position, type, entitlement and polarization
+ *   of the CPUs contained in the last container TLE.
+ *
+ * There can be theoretically up to five levels of containers, QEMU
+ * uses only three levels, the drawer's, book's and socket's level.
+ *
+ * A container with a nesting level (NL) greater than 1 can only
+ * contain another container of nesting level NL-1.
+ *
+ * A container of nesting level 1 (socket), contains as many CPU TLE
+ * as needed to describe the position and qualities of all CPUs inside
+ * the container.
+ * The qualities of a CPU are polarization, entitlement and type.
+ *
+ * The CPU TLE defines the position of the CPUs of identical qualities
+ * using a 64bits mask which first bit has its offset defined by
+ * the CPU address origin field of the CPU TLE like in:
+ * CPU address = origin * 64 + bit position within the mask
+ */
+/* Container type Topology List Entry */
+typedef struct SYSIBContainerListEntry {
+        uint8_t nl;
+        uint8_t reserved[6];
+        uint8_t id;
+} SYSIBContainerListEntry;
+QEMU_BUILD_BUG_ON(sizeof(SYSIBContainerListEntry) != 8);
+
+/* CPU type Topology List Entry */
+typedef struct SysIBCPUListEntry {
+        uint8_t nl;
+        uint8_t reserved0[3];
+#define SYSIB_TLE_POLARITY_MASK 0x03
+#define SYSIB_TLE_DEDICATED     0x04
+        uint8_t flags;
+        uint8_t type;
+        uint16_t origin;
+        uint64_t mask;
+} SysIBCPUListEntry;
+QEMU_BUILD_BUG_ON(sizeof(SysIBCPUListEntry) != 16);
+
+void insert_stsi_15_1_x(S390CPU *cpu, int sel2, uint64_t addr, uint8_t ar, uintptr_t ra);
+void s390_cpu_topology_set_changed(bool changed);
 
 /* MMU defines */
 #define ASCE_ORIGIN           (~0xfffULL) /* segment table origin             */
@@ -547,26 +701,60 @@ QEMU_BUILD_BUG_ON(sizeof(SysIB) != 4096);
 #define ASCE_TYPE_SEGMENT     0x00        /* segment table type               */
 #define ASCE_TABLE_LENGTH     0x03        /* region table length              */
 
-#define REGION_ENTRY_ORIGIN   (~0xfffULL) /* region/segment table origin    */
-#define REGION_ENTRY_RO       0x200       /* region/segment protection bit  */
-#define REGION_ENTRY_TF       0xc0        /* region/segment table offset    */
-#define REGION_ENTRY_INV      0x20        /* invalid region table entry     */
-#define REGION_ENTRY_TYPE_MASK 0x0c       /* region/segment table type mask */
-#define REGION_ENTRY_TYPE_R1  0x0c        /* region first table type        */
-#define REGION_ENTRY_TYPE_R2  0x08        /* region second table type       */
-#define REGION_ENTRY_TYPE_R3  0x04        /* region third table type        */
-#define REGION_ENTRY_LENGTH   0x03        /* region third length            */
+#define REGION_ENTRY_ORIGIN         0xfffffffffffff000ULL
+#define REGION_ENTRY_P              0x0000000000000200ULL
+#define REGION_ENTRY_TF             0x00000000000000c0ULL
+#define REGION_ENTRY_I              0x0000000000000020ULL
+#define REGION_ENTRY_TT             0x000000000000000cULL
+#define REGION_ENTRY_TL             0x0000000000000003ULL
 
-#define SEGMENT_ENTRY_ORIGIN  (~0x7ffULL) /* segment table origin        */
-#define SEGMENT_ENTRY_FC      0x400       /* format control              */
-#define SEGMENT_ENTRY_RO      0x200       /* page protection bit         */
-#define SEGMENT_ENTRY_INV     0x20        /* invalid segment table entry */
+#define REGION_ENTRY_TT_REGION1     0x000000000000000cULL
+#define REGION_ENTRY_TT_REGION2     0x0000000000000008ULL
+#define REGION_ENTRY_TT_REGION3     0x0000000000000004ULL
 
-#define VADDR_PX              0xff000     /* page index bits   */
+#define REGION3_ENTRY_RFAA          0xffffffff80000000ULL
+#define REGION3_ENTRY_AV            0x0000000000010000ULL
+#define REGION3_ENTRY_ACC           0x000000000000f000ULL
+#define REGION3_ENTRY_F             0x0000000000000800ULL
+#define REGION3_ENTRY_FC            0x0000000000000400ULL
+#define REGION3_ENTRY_IEP           0x0000000000000100ULL
+#define REGION3_ENTRY_CR            0x0000000000000010ULL
 
-#define PAGE_RO               0x200       /* HW read-only bit  */
-#define PAGE_INVALID          0x400       /* HW invalid bit    */
-#define PAGE_RES0             0x800       /* bit must be zero  */
+#define SEGMENT_ENTRY_ORIGIN        0xfffffffffffff800ULL
+#define SEGMENT_ENTRY_SFAA          0xfffffffffff00000ULL
+#define SEGMENT_ENTRY_AV            0x0000000000010000ULL
+#define SEGMENT_ENTRY_ACC           0x000000000000f000ULL
+#define SEGMENT_ENTRY_F             0x0000000000000800ULL
+#define SEGMENT_ENTRY_FC            0x0000000000000400ULL
+#define SEGMENT_ENTRY_P             0x0000000000000200ULL
+#define SEGMENT_ENTRY_IEP           0x0000000000000100ULL
+#define SEGMENT_ENTRY_I             0x0000000000000020ULL
+#define SEGMENT_ENTRY_CS            0x0000000000000010ULL
+#define SEGMENT_ENTRY_TT            0x000000000000000cULL
+
+#define SEGMENT_ENTRY_TT_SEGMENT    0x0000000000000000ULL
+
+#define PAGE_ENTRY_0                0x0000000000000800ULL
+#define PAGE_ENTRY_I                0x0000000000000400ULL
+#define PAGE_ENTRY_P                0x0000000000000200ULL
+#define PAGE_ENTRY_IEP              0x0000000000000100ULL
+
+#define VADDR_REGION1_TX_MASK       0xffe0000000000000ULL
+#define VADDR_REGION2_TX_MASK       0x001ffc0000000000ULL
+#define VADDR_REGION3_TX_MASK       0x000003ff80000000ULL
+#define VADDR_SEGMENT_TX_MASK       0x000000007ff00000ULL
+#define VADDR_PAGE_TX_MASK          0x00000000000ff000ULL
+
+#define VADDR_REGION1_TX(vaddr)     (((vaddr) & VADDR_REGION1_TX_MASK) >> 53)
+#define VADDR_REGION2_TX(vaddr)     (((vaddr) & VADDR_REGION2_TX_MASK) >> 42)
+#define VADDR_REGION3_TX(vaddr)     (((vaddr) & VADDR_REGION3_TX_MASK) >> 31)
+#define VADDR_SEGMENT_TX(vaddr)     (((vaddr) & VADDR_SEGMENT_TX_MASK) >> 20)
+#define VADDR_PAGE_TX(vaddr)        (((vaddr) & VADDR_PAGE_TX_MASK) >> 12)
+
+#define VADDR_REGION1_TL(vaddr)     (((vaddr) & 0xc000000000000000ULL) >> 62)
+#define VADDR_REGION2_TL(vaddr)     (((vaddr) & 0x0018000000000000ULL) >> 51)
+#define VADDR_REGION3_TL(vaddr)     (((vaddr) & 0x0000030000000000ULL) >> 40)
+#define VADDR_SEGMENT_TL(vaddr)     (((vaddr) & 0x0000000060000000ULL) >> 29)
 
 #define SK_C                    (0x1 << 1)
 #define SK_R                    (0x1 << 2)
@@ -608,11 +796,6 @@ QEMU_BUILD_BUG_ON(sizeof(SysIB) != 4096);
 #define SIGP_STAT_INOPERATIVE       0x00000004UL
 #define SIGP_STAT_INVALID_ORDER     0x00000002UL
 #define SIGP_STAT_RECEIVER_CHECK    0x00000001UL
-
-/* SIGP SET ARCHITECTURE modes */
-#define SIGP_MODE_ESA_S390 0
-#define SIGP_MODE_Z_ARCH_TRANS_ALL_PSW 1
-#define SIGP_MODE_Z_ARCH_TRANS_CUR_PSW 2
 
 /* SIGP order code mask corresponding to bit positions 56-63 */
 #define SIGP_ORDER_MASK 0x000000ff
@@ -691,14 +874,14 @@ static inline void s390_do_cpu_reset(CPUState *cs, run_on_cpu_data arg)
 {
     S390CPUClass *scc = S390_CPU_GET_CLASS(cs);
 
-    scc->cpu_reset(cs);
+    scc->reset(cs, S390_CPU_RESET_NORMAL);
 }
 
 static inline void s390_do_cpu_initial_reset(CPUState *cs, run_on_cpu_data arg)
 {
     S390CPUClass *scc = S390_CPU_GET_CLASS(cs);
 
-    scc->initial_cpu_reset(cs);
+    scc->reset(cs, S390_CPU_RESET_INITIAL);
 }
 
 static inline void s390_do_cpu_load_normal(CPUState *cs, run_on_cpu_data arg)
@@ -715,6 +898,7 @@ int s390_set_memory_limit(uint64_t new_limit, uint64_t *hw_limit);
 void s390_set_max_pagesize(uint64_t pagesize, Error **errp);
 void s390_cmma_reset(void);
 void s390_enable_css_support(S390CPU *cpu);
+void s390_do_cpu_set_diag318(CPUState *cs, run_on_cpu_data arg);
 int s390_assign_subch_ioeventfd(EventNotifier *notifier, uint32_t sch_id,
                                 int vq, bool assign);
 #ifndef CONFIG_USER_ONLY
@@ -739,26 +923,11 @@ void s390_set_qemu_cpu_model(uint16_t type, uint8_t gen, uint8_t ec_ga,
 
 
 /* helper.c */
-#define S390_CPU_TYPE_SUFFIX "-" TYPE_S390_CPU
-#define S390_CPU_TYPE_NAME(name) (name S390_CPU_TYPE_SUFFIX)
 #define CPU_RESOLVING_TYPE TYPE_S390_CPU
 
-/* you can call this signal handler from your SIGBUS and SIGSEGV
-   signal handlers to inform the virtual CPU of exceptions. non zero
-   is returned if the signal was handled by the virtual CPU.  */
-int cpu_s390x_signal_handler(int host_signum, void *pinfo, void *puc);
-#define cpu_signal_handler cpu_s390x_signal_handler
-
-
 /* interrupt.c */
-void s390_crw_mchk(void);
-void s390_io_interrupt(uint16_t subchannel_id, uint16_t subchannel_nr,
-                       uint32_t io_int_parm, uint32_t io_int_word);
-/* automatically detect the instruction length */
-#define ILEN_AUTO                   0xff
 #define RA_IGNORED                  0
-void s390_program_interrupt(CPUS390XState *env, uint32_t code, int ilen,
-                            uintptr_t ra);
+void s390_program_interrupt(CPUS390XState *env, uint32_t code, uintptr_t ra);
 /* service interrupts are floating therefore we must not pass an cpustate */
 void s390_sclp_extint(uint32_t parm);
 
@@ -774,18 +943,23 @@ int s390_cpu_virt_mem_rw(S390CPU *cpu, vaddr laddr, uint8_t ar, void *hostbuf,
 #define s390_cpu_virt_mem_check_write(cpu, laddr, ar, len)   \
         s390_cpu_virt_mem_rw(cpu, laddr, ar, NULL, len, true)
 void s390_cpu_virt_mem_handle_exc(S390CPU *cpu, uintptr_t ra);
-
+int s390_cpu_pv_mem_rw(S390CPU *cpu, unsigned int offset, void *hostbuf,
+                       int len, bool is_write);
+#define s390_cpu_pv_mem_read(cpu, offset, dest, len)    \
+        s390_cpu_pv_mem_rw(cpu, offset, dest, len, false)
+#define s390_cpu_pv_mem_write(cpu, offset, dest, len)       \
+        s390_cpu_pv_mem_rw(cpu, offset, dest, len, true)
 
 /* sigp.c */
 int s390_cpu_restart(S390CPU *cpu);
 void s390_init_sigp(void);
 
+/* helper.c */
+void s390_cpu_set_psw(CPUS390XState *env, uint64_t mask, uint64_t addr);
+uint64_t s390_cpu_get_psw_mask(CPUS390XState *env);
 
 /* outside of target/s390x/ */
 S390CPU *s390_cpu_addr2state(uint16_t cpu_addr);
-
-typedef CPUS390XState CPUArchState;
-typedef S390CPU ArchCPU;
 
 #include "exec/cpu-all.h"
 

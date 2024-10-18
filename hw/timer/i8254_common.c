@@ -24,12 +24,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/isa/isa.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/timer/i8254.h"
 #include "hw/timer/i8254_internal.h"
+#include "migration/vmstate.h"
 
 /* val must be 0 or 1 */
 void pit_set_gate(ISADevice *dev, int channel, int val)
@@ -52,10 +52,8 @@ int pit_get_out(PITChannelState *s, int64_t current_time)
     switch (s->mode) {
     default:
     case 0:
-        out = (d >= s->count);
-        break;
     case 1:
-        out = (d < s->count);
+        out = (d >= s->count);
         break;
     case 2:
         if ((d % s->count) == 0 && d != 0) {
@@ -182,7 +180,7 @@ static const VMStateDescription vmstate_pit_channel = {
     .name = "pit channel",
     .version_id = 2,
     .minimum_version_id = 2,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_INT32(count, PITChannelState),
         VMSTATE_UINT16(latched_count, PITChannelState),
         VMSTATE_UINT8(count_latched, PITChannelState),
@@ -200,43 +198,6 @@ static const VMStateDescription vmstate_pit_channel = {
         VMSTATE_END_OF_LIST()
     }
 };
-
-static int pit_load_old(QEMUFile *f, void *opaque, int version_id)
-{
-    PITCommonState *pit = opaque;
-    PITCommonClass *c = PIT_COMMON_GET_CLASS(pit);
-    PITChannelState *s;
-    int i;
-
-    if (version_id != 1) {
-        return -EINVAL;
-    }
-
-    for (i = 0; i < 3; i++) {
-        s = &pit->channels[i];
-        s->count = qemu_get_be32(f);
-        qemu_get_be16s(f, &s->latched_count);
-        qemu_get_8s(f, &s->count_latched);
-        qemu_get_8s(f, &s->status_latched);
-        qemu_get_8s(f, &s->status);
-        qemu_get_8s(f, &s->read_state);
-        qemu_get_8s(f, &s->write_state);
-        qemu_get_8s(f, &s->write_latch);
-        qemu_get_8s(f, &s->rw_mode);
-        qemu_get_8s(f, &s->mode);
-        qemu_get_8s(f, &s->bcd);
-        qemu_get_8s(f, &s->gate);
-        s->count_load_time = qemu_get_be64(f);
-        s->irq_disabled = 0;
-        if (i == 0) {
-            s->next_transition_time = qemu_get_be64(f);
-        }
-    }
-    if (c->post_load) {
-        c->post_load(pit);
-    }
-    return 0;
-}
 
 static int pit_dispatch_pre_save(void *opaque)
 {
@@ -265,11 +226,9 @@ static const VMStateDescription vmstate_pit_common = {
     .name = "i8254",
     .version_id = 3,
     .minimum_version_id = 2,
-    .minimum_version_id_old = 1,
-    .load_state_old = pit_load_old,
     .pre_save = pit_dispatch_pre_save,
     .post_load = pit_dispatch_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32_V(channels[0].irq_disabled, PITCommonState, 3),
         VMSTATE_STRUCT_ARRAY(channels, PITCommonState, 3, 2,
                              vmstate_pit_channel, PITChannelState),
@@ -277,6 +236,11 @@ static const VMStateDescription vmstate_pit_common = {
                       PITCommonState), /* formerly irq_timer */
         VMSTATE_END_OF_LIST()
     }
+};
+
+static Property pit_common_properties[] = {
+    DEFINE_PROP_UINT32("iobase", PITCommonState, iobase,  -1),
+    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void pit_common_class_init(ObjectClass *klass, void *data)
@@ -291,6 +255,7 @@ static void pit_common_class_init(ObjectClass *klass, void *data)
      * done by board code.
      */
     dc->user_creatable = false;
+    device_class_set_props(dc, pit_common_properties);
 }
 
 static const TypeInfo pit_common_type = {

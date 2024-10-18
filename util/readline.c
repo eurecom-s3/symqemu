@@ -240,6 +240,9 @@ static void readline_hist_add(ReadLineState *rs, const char *cmdline)
         }
         if (strcmp(hist_entry, cmdline) == 0) {
         same_entry:
+            if (idx == READLINE_MAX_CMDS - 1) {
+                return;
+            }
             new_entry = hist_entry;
             /* Put this entry at the end of history */
             memmove(&rs->history[idx], &rs->history[idx + 1],
@@ -280,6 +283,14 @@ void readline_add_completion(ReadLineState *rs, const char *str)
             }
         }
         rs->completions[rs->nb_completions++] = g_strdup(str);
+    }
+}
+
+void readline_add_completion_of(ReadLineState *rs,
+                                const char *pfx, const char *str)
+{
+    if (!strncmp(str, pfx, strlen(pfx))) {
+        readline_add_completion(rs, str);
     }
 }
 

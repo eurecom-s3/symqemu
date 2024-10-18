@@ -29,6 +29,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/intc/aspeed_vic.h"
+#include "hw/irq.h"
+#include "migration/vmstate.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -324,7 +326,7 @@ static const VMStateDescription vmstate_aspeed_vic = {
     .name = "aspeed.new-vic",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT64(level, AspeedVICState),
         VMSTATE_UINT64(raw, AspeedVICState),
         VMSTATE_UINT64(select, AspeedVICState),

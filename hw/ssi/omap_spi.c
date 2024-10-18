@@ -19,9 +19,11 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "hw/hw.h"
+#include "hw/irq.h"
 #include "hw/arm/omap.h"
 
 /* Multichannel SPI */
@@ -132,10 +134,9 @@ void omap_mcspi_reset(struct omap_mcspi_s *s)
     omap_mcspi_interrupt_update(s);
 }
 
-static uint64_t omap_mcspi_read(void *opaque, hwaddr addr,
-                                unsigned size)
+static uint64_t omap_mcspi_read(void *opaque, hwaddr addr, unsigned size)
 {
-    struct omap_mcspi_s *s = (struct omap_mcspi_s *) opaque;
+    struct omap_mcspi_s *s = opaque;
     int ch = 0;
     uint32_t ret;
 
@@ -224,7 +225,7 @@ static uint64_t omap_mcspi_read(void *opaque, hwaddr addr,
 static void omap_mcspi_write(void *opaque, hwaddr addr,
                              uint64_t value, unsigned size)
 {
-    struct omap_mcspi_s *s = (struct omap_mcspi_s *) opaque;
+    struct omap_mcspi_s *s = opaque;
     int ch = 0;
 
     if (size != 4) {

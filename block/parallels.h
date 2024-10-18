@@ -48,7 +48,8 @@ typedef struct ParallelsHeader {
     uint64_t nb_sectors;
     uint32_t inuse;
     uint32_t data_off;
-    char padding[12];
+    uint32_t flags;
+    uint64_t ext_off;
 } QEMU_PACKED ParallelsHeader;
 
 typedef enum ParallelsPreallocMode {
@@ -71,17 +72,26 @@ typedef struct BDRVParallelsState {
     unsigned long *bat_dirty_bmap;
     unsigned int  bat_dirty_block;
 
+    unsigned long *used_bmap;
+    unsigned long used_bmap_size;
+
     uint32_t *bat_bitmap;
     unsigned int bat_size;
 
+    int64_t  data_start;
     int64_t  data_end;
     uint64_t prealloc_size;
     ParallelsPreallocMode prealloc_mode;
 
     unsigned int tracks;
+    unsigned int cluster_size;
 
     unsigned int off_multiplier;
     Error *migration_blocker;
 } BDRVParallelsState;
+
+int GRAPH_RDLOCK
+parallels_read_format_extension(BlockDriverState *bs, int64_t ext_off,
+                                Error **errp);
 
 #endif

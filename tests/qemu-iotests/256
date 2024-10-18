@@ -1,4 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+# group: rw auto quick
 #
 # Test incremental/backup across iothread contexts
 #
@@ -23,7 +24,9 @@ import os
 import iotests
 from iotests import log
 
-iotests.verify_image_format(supported_fmts=['qcow2'])
+iotests.verify_virtio_scsi_pci_or_ccw()
+
+iotests.script_initialize(supported_fmts=['qcow2'])
 size = 64 * 1024 * 1024
 
 with iotests.FilePath('img0') as img0_path, \
@@ -37,31 +40,31 @@ with iotests.FilePath('img0') as img0_path, \
     def create_target(filepath, name, size):
         basename = os.path.basename(filepath)
         nodename = "file_{}".format(basename)
-        log(vm.command('blockdev-create', job_id='job1',
-                       options={
-                           'driver': 'file',
-                           'filename': filepath,
-                           'size': 0,
-                       }))
+        log(vm.cmd('blockdev-create', job_id='job1',
+                   options={
+                       'driver': 'file',
+                       'filename': filepath,
+                       'size': 0,
+                   }))
         vm.run_job('job1')
-        log(vm.command('blockdev-add', driver='file',
-                       node_name=nodename, filename=filepath))
-        log(vm.command('blockdev-create', job_id='job2',
-                       options={
-                           'driver': iotests.imgfmt,
-                           'file': nodename,
-                           'size': size,
-                       }))
+        log(vm.cmd('blockdev-add', driver='file',
+                   node_name=nodename, filename=filepath))
+        log(vm.cmd('blockdev-create', job_id='job2',
+                   options={
+                       'driver': iotests.imgfmt,
+                       'file': nodename,
+                       'size': size,
+                   }))
         vm.run_job('job2')
-        log(vm.command('blockdev-add', driver=iotests.imgfmt,
-                       node_name=name,
-                       file=nodename))
+        log(vm.cmd('blockdev-add', driver=iotests.imgfmt,
+                   node_name=name,
+                   file=nodename))
 
     log('--- Preparing images & VM ---\n')
     vm.add_object('iothread,id=iothread0')
     vm.add_object('iothread,id=iothread1')
-    vm.add_device('virtio-scsi-pci,id=scsi0,iothread=iothread0')
-    vm.add_device('virtio-scsi-pci,id=scsi1,iothread=iothread1')
+    vm.add_device('virtio-scsi,id=scsi0,iothread=iothread0')
+    vm.add_device('virtio-scsi,id=scsi1,iothread=iothread1')
     iotests.qemu_img_create('-f', iotests.imgfmt, img0_path, str(size))
     iotests.qemu_img_create('-f', iotests.imgfmt, img1_path, str(size))
     vm.add_drive(img0_path, interface='none')

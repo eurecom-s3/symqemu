@@ -33,8 +33,11 @@
 #include "qapi/error.h"
 #include "qemu/timer.h"
 #include "chardev/char-fe.h"
-#include "sysemu/sysemu.h"
 #include "hw/ipmi/ipmi.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
+#include "migration/vmstate.h"
+#include "qom/object.h"
 
 #define VM_MSG_CHAR        0xA0 /* Marks end of message */
 #define VM_CMD_CHAR        0xA1 /* Marks end of a command */
@@ -60,9 +63,8 @@
 #define VM_CMD_GRACEFUL_SHUTDOWN   0x09
 
 #define TYPE_IPMI_BMC_EXTERN "ipmi-bmc-extern"
-#define IPMI_BMC_EXTERN(obj) OBJECT_CHECK(IPMIBmcExtern, (obj), \
-                                        TYPE_IPMI_BMC_EXTERN)
-typedef struct IPMIBmcExtern {
+OBJECT_DECLARE_SIMPLE_TYPE(IPMIBmcExtern, IPMI_BMC_EXTERN)
+struct IPMIBmcExtern {
     IPMIBmc parent;
 
     CharBackend chr;
@@ -84,11 +86,7 @@ typedef struct IPMIBmcExtern {
 
     /* A reset event is pending to be sent upstream. */
     bool send_reset;
-} IPMIBmcExtern;
-
-static int can_receive(void *opaque);
-static void receive(void *opaque, const uint8_t *buf, int size);
-static void chr_event(void *opaque, int event);
+};
 
 static unsigned char
 ipmb_checksum(const unsigned char *data, int size, unsigned char start)
@@ -176,8 +174,7 @@ static void addchar(IPMIBmcExtern *ibe, unsigned char ch)
         ibe->outbuf[ibe->outlen] = VM_ESCAPE_CHAR;
         ibe->outlen++;
         ch |= 0x10;
-        /* No break */
-
+        /* fall through */
     default:
         ibe->outbuf[ibe->outlen] = ch;
         ibe->outlen++;
@@ -304,7 +301,7 @@ static void handle_msg(IPMIBmcExtern *ibe)
         ipmi_debug("msg checksum failure\n");
         return;
     } else {
-        ibe->inpos--; /* Remove checkum */
+        ibe->inpos--; /* Remove checksum */
     }
 
     timer_del(ibe->extern_timer);
@@ -383,7 +380,7 @@ static void receive(void *opaque, const uint8_t *buf, int size)
     handle_hw_op(ibe, hw_op);
 }
 
-static void chr_event(void *opaque, int event)
+static void chr_event(void *opaque, QEMUChrEvent event)
 {
     IPMIBmcExtern *ibe = opaque;
     IPMIInterface *s = ibe->parent.intf;
@@ -439,6 +436,12 @@ static void chr_event(void *opaque, int event)
             k->handle_rsp(s, ibe->outbuf[0], ibe->inbuf + 1, 3);
         }
         break;
+
+    case CHR_EVENT_BREAK:
+    case CHR_EVENT_MUX_IN:
+    case CHR_EVENT_MUX_OUT:
+        /* Ignore */
+        break;
     }
 }
 
@@ -448,19 +451,6 @@ static void ipmi_bmc_extern_handle_reset(IPMIBmc *b)
 
     ibe->send_reset = true;
     continue_send(ibe);
-}
-
-static void ipmi_bmc_extern_realize(DeviceState *dev, Error **errp)
-{
-    IPMIBmcExtern *ibe = IPMI_BMC_EXTERN(dev);
-
-    if (!qemu_chr_fe_backend_connected(&ibe->chr)) {
-        error_setg(errp, "IPMI external bmc requires chardev attribute");
-        return;
-    }
-
-    qemu_chr_fe_set_handlers(&ibe->chr, can_receive, receive,
-                             chr_event, NULL, ibe, NULL, true);
 }
 
 static int ipmi_bmc_extern_post_migrate(void *opaque, int version_id)
@@ -489,26 +479,39 @@ static const VMStateDescription vmstate_ipmi_bmc_extern = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = ipmi_bmc_extern_post_migrate,
-    .fields      = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_BOOL(send_reset, IPMIBmcExtern),
         VMSTATE_BOOL(waiting_rsp, IPMIBmcExtern),
         VMSTATE_END_OF_LIST()
     }
 };
 
+static void ipmi_bmc_extern_realize(DeviceState *dev, Error **errp)
+{
+    IPMIBmcExtern *ibe = IPMI_BMC_EXTERN(dev);
+
+    if (!qemu_chr_fe_backend_connected(&ibe->chr)) {
+        error_setg(errp, "IPMI external bmc requires chardev attribute");
+        return;
+    }
+
+    qemu_chr_fe_set_handlers(&ibe->chr, can_receive, receive,
+                             chr_event, NULL, ibe, NULL, true);
+
+    vmstate_register(NULL, 0, &vmstate_ipmi_bmc_extern, ibe);
+}
+
 static void ipmi_bmc_extern_init(Object *obj)
 {
     IPMIBmcExtern *ibe = IPMI_BMC_EXTERN(obj);
 
     ibe->extern_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, extern_timeout, ibe);
-    vmstate_register(NULL, 0, &vmstate_ipmi_bmc_extern, ibe);
 }
 
 static void ipmi_bmc_extern_finalize(Object *obj)
 {
     IPMIBmcExtern *ibe = IPMI_BMC_EXTERN(obj);
 
-    timer_del(ibe->extern_timer);
     timer_free(ibe->extern_timer);
 }
 
@@ -526,7 +529,7 @@ static void ipmi_bmc_extern_class_init(ObjectClass *oc, void *data)
     bk->handle_reset = ipmi_bmc_extern_handle_reset;
     dc->hotpluggable = false;
     dc->realize = ipmi_bmc_extern_realize;
-    dc->props = ipmi_bmc_extern_properties;
+    device_class_set_props(dc, ipmi_bmc_extern_properties);
 }
 
 static const TypeInfo ipmi_bmc_extern_type = {

@@ -1,15 +1,20 @@
 #include "qemu/osdep.h"
-#include "qom/cpu.h"
-#include "sysemu/replay.h"
-#include "sysemu/sysemu.h"
-
-bool enable_cpu_pm = false;
+#include "hw/core/cpu.h"
+#include "exec/replay-core.h"
 
 void cpu_resume(CPUState *cpu)
 {
 }
 
+void cpu_remove_sync(CPUState *cpu)
+{
+}
+
 void qemu_init_vcpu(CPUState *cpu)
+{
+}
+
+void cpu_exec_reset_hold(CPUState *cpu)
 {
 }
 

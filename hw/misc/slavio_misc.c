@@ -23,10 +23,13 @@
  */
 
 #include "qemu/osdep.h"
-#include "sysemu/sysemu.h"
+#include "hw/irq.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
+#include "sysemu/runstate.h"
 #include "trace.h"
+#include "qom/object.h"
 
 /*
  * This is the auxio port, chip control and system control part of
@@ -37,9 +40,9 @@
  */
 
 #define TYPE_SLAVIO_MISC "slavio_misc"
-#define SLAVIO_MISC(obj) OBJECT_CHECK(MiscState, (obj), TYPE_SLAVIO_MISC)
+OBJECT_DECLARE_SIMPLE_TYPE(MiscState, SLAVIO_MISC)
 
-typedef struct MiscState {
+struct MiscState {
     SysBusDevice parent_obj;
 
     MemoryRegion cfg_iomem;
@@ -57,17 +60,19 @@ typedef struct MiscState {
     uint8_t diag, mctrl;
     uint8_t sysctrl;
     uint16_t leds;
-} MiscState;
+};
 
 #define TYPE_APC "apc"
-#define APC(obj) OBJECT_CHECK(APCState, (obj), TYPE_APC)
+typedef struct APCState APCState;
+DECLARE_INSTANCE_CHECKER(APCState, APC,
+                         TYPE_APC)
 
-typedef struct APCState {
+struct APCState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
     qemu_irq cpu_halt;
-} APCState;
+};
 
 #define MISC_SIZE 1
 #define LED_SIZE 2
@@ -403,7 +408,7 @@ static const VMStateDescription vmstate_misc = {
     .name ="slavio_misc",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(dummy, MiscState),
         VMSTATE_UINT8(config, MiscState),
         VMSTATE_UINT8(aux1, MiscState),

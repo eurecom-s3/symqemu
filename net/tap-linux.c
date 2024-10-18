@@ -24,7 +24,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "tap_int.h"
 #include "tap-linux.h"
 #include "net/tap.h"
@@ -32,7 +31,6 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 
-#include "sysemu/sysemu.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/cutils.h"
@@ -47,7 +45,7 @@ int tap_open(char *ifname, int ifname_size, int *vnet_hdr,
     int len = sizeof(struct virtio_net_hdr);
     unsigned int features;
 
-    TFR(fd = open(PATH_NET_TUN, O_RDWR));
+    fd = RETRY_ON_EINTR(open(PATH_NET_TUN, O_RDWR));
     if (fd < 0) {
         error_setg_errno(errp, errno, "could not open %s", PATH_NET_TUN);
         return -1;
@@ -115,7 +113,7 @@ int tap_open(char *ifname, int ifname_size, int *vnet_hdr,
         return -1;
     }
     pstrcpy(ifname, ifname_size, ifr.ifr_name);
-    fcntl(fd, F_SETFL, O_NONBLOCK);
+    g_unix_set_fd_nonblocking(fd, true, NULL);
     return fd;
 }
 
@@ -148,13 +146,16 @@ void tap_set_sndbuf(int fd, const NetdevTapOptions *tap, Error **errp)
     }
 }
 
-int tap_probe_vnet_hdr(int fd)
+int tap_probe_vnet_hdr(int fd, Error **errp)
 {
     struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
 
     if (ioctl(fd, TUNGETIFF, &ifr) != 0) {
-        error_report("TUNGETIFF ioctl() failed: %s", strerror(errno));
-        return 0;
+        /* TUNGETIFF is available since kernel v2.6.27 */
+        error_setg_errno(errp, errno,
+                         "Unable to query TUNGETIFF on FD %d", fd);
+        return -1;
     }
 
     return ifr.ifr_flags & IFF_VNET_HDR;
@@ -169,6 +170,18 @@ int tap_probe_has_ufo(int fd)
     if (ioctl(fd, TUNSETOFFLOAD, offload) < 0)
         return 0;
 
+    return 1;
+}
+
+int tap_probe_has_uso(int fd)
+{
+    unsigned offload;
+
+    offload = TUN_F_CSUM | TUN_F_USO4 | TUN_F_USO6;
+
+    if (ioctl(fd, TUNSETOFFLOAD, offload) < 0) {
+        return 0;
+    }
     return 1;
 }
 
@@ -236,7 +249,7 @@ int tap_fd_set_vnet_be(int fd, int is_be)
 }
 
 void tap_fd_set_offload(int fd, int csum, int tso4,
-                        int tso6, int ecn, int ufo)
+                        int tso6, int ecn, int ufo, int uso4, int uso6)
 {
     unsigned int offload = 0;
 
@@ -255,13 +268,22 @@ void tap_fd_set_offload(int fd, int csum, int tso4,
             offload |= TUN_F_TSO_ECN;
         if (ufo)
             offload |= TUN_F_UFO;
+        if (uso4) {
+            offload |= TUN_F_USO4;
+        }
+        if (uso6) {
+            offload |= TUN_F_USO6;
+        }
     }
 
     if (ioctl(fd, TUNSETOFFLOAD, offload) != 0) {
-        offload &= ~TUN_F_UFO;
+        offload &= ~(TUN_F_USO4 | TUN_F_USO6);
         if (ioctl(fd, TUNSETOFFLOAD, offload) != 0) {
-            fprintf(stderr, "TUNSETOFFLOAD ioctl() failed: %s\n",
+            offload &= ~TUN_F_UFO;
+            if (ioctl(fd, TUNSETOFFLOAD, offload) != 0) {
+                fprintf(stderr, "TUNSETOFFLOAD ioctl() failed: %s\n",
                     strerror(errno));
+            }
         }
     }
 }
@@ -313,5 +335,18 @@ int tap_fd_get_ifname(int fd, char *ifname)
     }
 
     pstrcpy(ifname, sizeof(ifr.ifr_name), ifr.ifr_name);
+    return 0;
+}
+
+int tap_fd_set_steering_ebpf(int fd, int prog_fd)
+{
+    if (ioctl(fd, TUNSETSTEERINGEBPF, (void *) &prog_fd) != 0) {
+        error_report("Issue while setting TUNSETSTEERINGEBPF:"
+                    " %s with fd: %d, prog_fd: %d",
+                    strerror(errno), fd, prog_fd);
+
+       return -1;
+    }
+
     return 0;
 }

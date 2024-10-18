@@ -29,6 +29,7 @@ void superh_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
                                     MMUAccessType access_type,
                                     int mmu_idx, uintptr_t retaddr)
 {
+    cpu_env(cs)->tea = addr;
     switch (access_type) {
     case MMU_INST_FETCH:
     case MMU_DATA_LOAD:
@@ -37,6 +38,8 @@ void superh_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
     case MMU_DATA_STORE:
         cs->exception_index = 0x100;
         break;
+    default:
+        g_assert_not_reached();
     }
     cpu_loop_exit_restore(cs, retaddr);
 }
@@ -52,8 +55,9 @@ void helper_ldtlb(CPUSH4State *env)
 #endif
 }
 
-static inline void QEMU_NORETURN raise_exception(CPUSH4State *env, int index,
-                                                 uintptr_t retaddr)
+static inline G_NORETURN
+void raise_exception(CPUSH4State *env, int index,
+                     uintptr_t retaddr)
 {
     CPUState *cs = env_cpu(env);
 
@@ -79,11 +83,6 @@ void helper_raise_fpu_disable(CPUSH4State *env)
 void helper_raise_slot_fpu_disable(CPUSH4State *env)
 {
     raise_exception(env, 0x820, 0);
-}
-
-void helper_debug(CPUSH4State *env)
-{
-    raise_exception(env, EXCP_DEBUG, 0);
 }
 
 void helper_sleep(CPUSH4State *env)
@@ -113,12 +112,12 @@ void helper_movcal(CPUSH4State *env, uint32_t address, uint32_t value)
     {
         memory_content *r = g_new(memory_content, 1);
 
-	r->address = address;
-	r->value = value;
-	r->next = NULL;
+        r->address = address;
+        r->value = value;
+        r->next = NULL;
 
-	*(env->movcal_backup_tail) = r;
-	env->movcal_backup_tail = &(r->next);
+        *(env->movcal_backup_tail) = r;
+        env->movcal_backup_tail = &(r->next);
     }
 }
 
@@ -128,12 +127,12 @@ void helper_discard_movcal_backup(CPUSH4State *env)
 
     while(current)
     {
-	memory_content *next = current->next;
+        memory_content *next = current->next;
         g_free(current);
-	env->movcal_backup = current = next;
-	if (current == NULL)
-	    env->movcal_backup_tail = &(env->movcal_backup);
-    } 
+        env->movcal_backup = current = next;
+        if (current == NULL)
+            env->movcal_backup_tail = &(env->movcal_backup);
+    }
 }
 
 void helper_ocbi(CPUSH4State *env, uint32_t address)
@@ -141,56 +140,65 @@ void helper_ocbi(CPUSH4State *env, uint32_t address)
     memory_content **current = &(env->movcal_backup);
     while (*current)
     {
-	uint32_t a = (*current)->address;
-	if ((a & ~0x1F) == (address & ~0x1F))
-	{
-	    memory_content *next = (*current)->next;
+        uint32_t a = (*current)->address;
+        if ((a & ~0x1F) == (address & ~0x1F))
+        {
+            memory_content *next = (*current)->next;
             cpu_stl_data(env, a, (*current)->value);
-	    
-	    if (next == NULL)
-	    {
-		env->movcal_backup_tail = current;
-	    }
+
+            if (next == NULL)
+            {
+                env->movcal_backup_tail = current;
+            }
 
             g_free(*current);
-	    *current = next;
-	    break;
-	}
+            *current = next;
+            break;
+        }
     }
 }
 
-void helper_macl(CPUSH4State *env, uint32_t arg0, uint32_t arg1)
+void helper_macl(CPUSH4State *env, int32_t arg0, int32_t arg1)
 {
+    const int64_t min = -(1ll << 47);
+    const int64_t max = (1ll << 47) - 1;
+    int64_t mul = (int64_t)arg0 * arg1;
+    int64_t mac = env->mac;
     int64_t res;
 
-    res = ((uint64_t) env->mach << 32) | env->macl;
-    res += (int64_t) (int32_t) arg0 *(int64_t) (int32_t) arg1;
-    env->mach = (res >> 32) & 0xffffffff;
-    env->macl = res & 0xffffffff;
-    if (env->sr & (1u << SR_S)) {
-	if (res < 0)
-	    env->mach |= 0xffff0000;
-	else
-	    env->mach &= 0x00007fff;
+    if (!(env->sr & (1u << SR_S))) {
+        res = mac + mul;
+    } else if (sadd64_overflow(mac, mul, &res)) {
+        res = mac < 0 ? min : max;
+    } else {
+        res = MIN(MAX(res, min), max);
     }
+
+    env->mac = res;
 }
 
-void helper_macw(CPUSH4State *env, uint32_t arg0, uint32_t arg1)
+void helper_macw(CPUSH4State *env, int32_t arg0, int32_t arg1)
 {
-    int64_t res;
+    /* Inputs are already sign-extended from 16 bits. */
+    int32_t mul = arg0 * arg1;
 
-    res = ((uint64_t) env->mach << 32) | env->macl;
-    res += (int64_t) (int16_t) arg0 *(int64_t) (int16_t) arg1;
-    env->mach = (res >> 32) & 0xffffffff;
-    env->macl = res & 0xffffffff;
     if (env->sr & (1u << SR_S)) {
-	if (res < -0x80000000) {
-	    env->mach = 1;
-	    env->macl = 0x80000000;
-	} else if (res > 0x000000007fffffff) {
-	    env->mach = 1;
-	    env->macl = 0x7fffffff;
-	}
+        /*
+         * In saturation arithmetic mode, the accumulator is 32-bit
+         * with carry. MACH is not considered during the addition
+         * operation nor the 32-bit saturation logic.
+         */
+        int32_t res, macl = env->macl;
+
+        if (sadd32_overflow(macl, mul, &res)) {
+            res = macl < 0 ? INT32_MIN : INT32_MAX;
+            /* If overflow occurs, the MACH register is set to 1. */
+            env->mach = 1;
+        }
+        env->macl = res;
+    } else {
+        /* In non-saturation arithmetic mode, the accumulator is 64-bit */
+        env->mac += mul;
     }
 }
 
@@ -198,9 +206,9 @@ void helper_ld_fpscr(CPUSH4State *env, uint32_t val)
 {
     env->fpscr = val & FPSCR_MASK;
     if ((val & FPSCR_RM_MASK) == FPSCR_RM_ZERO) {
-	set_float_rounding_mode(float_round_to_zero, &env->fp_status);
+        set_float_rounding_mode(float_round_to_zero, &env->fp_status);
     } else {
-	set_float_rounding_mode(float_round_nearest_even, &env->fp_status);
+        set_float_rounding_mode(float_round_nearest_even, &env->fp_status);
     }
     set_flush_to_zero((val & FPSCR_DN) != 0, &env->fp_status);
 }
@@ -398,9 +406,11 @@ float32 helper_fsrra_FT(CPUSH4State *env, float32 t0)
     /* "Approximate" 1/sqrt(x) via actual computation.  */
     t0 = float32_sqrt(t0, &env->fp_status);
     t0 = float32_div(float32_one, t0, &env->fp_status);
-    /* Since this is supposed to be an approximation, an imprecision
-       exception is required.  One supposes this also follows the usual
-       IEEE rule that other exceptions take precidence.  */
+    /*
+     * Since this is supposed to be an approximation, an imprecision
+     * exception is required.  One supposes this also follows the usual
+     * IEEE rule that other exceptions take precedence.
+     */
     if (get_float_exception_flags(&env->fp_status) == 0) {
         set_float_exception_flags(float_flag_inexact, &env->fp_status);
     }

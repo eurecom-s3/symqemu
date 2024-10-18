@@ -16,8 +16,9 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
+
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
 #include "ui/console.h"
 #include "hw/arm/omap.h"
 #include "framebuffer.h"
@@ -69,30 +70,155 @@ static void omap_lcd_interrupts(struct omap_lcd_panel_s *s)
     qemu_irq_lower(s->irq);
 }
 
-#define draw_line_func drawfn
+/*
+ * 2-bit colour
+ */
+static void draw_line2_32(void *opaque, uint8_t *d, const uint8_t *s,
+                          int width, int deststep)
+{
+    uint16_t *pal = opaque;
+    uint8_t v, r, g, b;
 
-#define DEPTH 32
-#include "omap_lcd_template.h"
+    do {
+        v = ldub_p((void *) s);
+        r = (pal[v & 3] >> 4) & 0xf0;
+        g = pal[v & 3] & 0xf0;
+        b = (pal[v & 3] << 4) & 0xf0;
+        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        d += 4;
+        v >>= 2;
+        r = (pal[v & 3] >> 4) & 0xf0;
+        g = pal[v & 3] & 0xf0;
+        b = (pal[v & 3] << 4) & 0xf0;
+        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        d += 4;
+        v >>= 2;
+        r = (pal[v & 3] >> 4) & 0xf0;
+        g = pal[v & 3] & 0xf0;
+        b = (pal[v & 3] << 4) & 0xf0;
+        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        d += 4;
+        v >>= 2;
+        r = (pal[v & 3] >> 4) & 0xf0;
+        g = pal[v & 3] & 0xf0;
+        b = (pal[v & 3] << 4) & 0xf0;
+        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        d += 4;
+        s++;
+        width -= 4;
+    } while (width > 0);
+}
+
+/*
+ * 4-bit colour
+ */
+static void draw_line4_32(void *opaque, uint8_t *d, const uint8_t *s,
+                          int width, int deststep)
+{
+    uint16_t *pal = opaque;
+    uint8_t v, r, g, b;
+
+    do {
+        v = ldub_p((void *) s);
+        r = (pal[v & 0xf] >> 4) & 0xf0;
+        g = pal[v & 0xf] & 0xf0;
+        b = (pal[v & 0xf] << 4) & 0xf0;
+        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        d += 4;
+        v >>= 4;
+        r = (pal[v & 0xf] >> 4) & 0xf0;
+        g = pal[v & 0xf] & 0xf0;
+        b = (pal[v & 0xf] << 4) & 0xf0;
+        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        d += 4;
+        s++;
+        width -= 2;
+    } while (width > 0);
+}
+
+/*
+ * 8-bit colour
+ */
+static void draw_line8_32(void *opaque, uint8_t *d, const uint8_t *s,
+                          int width, int deststep)
+{
+    uint16_t *pal = opaque;
+    uint8_t v, r, g, b;
+
+    do {
+        v = ldub_p((void *) s);
+        r = (pal[v] >> 4) & 0xf0;
+        g = pal[v] & 0xf0;
+        b = (pal[v] << 4) & 0xf0;
+        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        s++;
+        d += 4;
+    } while (-- width != 0);
+}
+
+/*
+ * 12-bit colour
+ */
+static void draw_line12_32(void *opaque, uint8_t *d, const uint8_t *s,
+                           int width, int deststep)
+{
+    uint16_t v;
+    uint8_t r, g, b;
+
+    do {
+        v = lduw_le_p((void *) s);
+        r = (v >> 4) & 0xf0;
+        g = v & 0xf0;
+        b = (v << 4) & 0xf0;
+        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        s += 2;
+        d += 4;
+    } while (-- width != 0);
+}
+
+/*
+ * 16-bit colour
+ */
+static void draw_line16_32(void *opaque, uint8_t *d, const uint8_t *s,
+                           int width, int deststep)
+{
+    uint16_t v;
+    uint8_t r, g, b;
+
+    do {
+        v = lduw_le_p((void *) s);
+        r = (v >> 8) & 0xf8;
+        g = (v >> 3) & 0xfc;
+        b = (v << 3) & 0xf8;
+        ((uint32_t *) d)[0] = rgb_to_pixel32(r, g, b);
+        s += 2;
+        d += 4;
+    } while (-- width != 0);
+}
 
 static void omap_update_display(void *opaque)
 {
-    struct omap_lcd_panel_s *omap_lcd = (struct omap_lcd_panel_s *) opaque;
-    DisplaySurface *surface = qemu_console_surface(omap_lcd->con);
-    draw_line_func draw_line;
+    struct omap_lcd_panel_s *omap_lcd = opaque;
+    DisplaySurface *surface;
+    drawfn draw_line;
     int size, height, first, last;
     int width, linesize, step, bpp, frame_offset;
     hwaddr frame_base;
 
-    if (!omap_lcd || omap_lcd->plm == 1 || !omap_lcd->enable ||
-        !surface_bits_per_pixel(surface)) {
+    if (!omap_lcd || omap_lcd->plm == 1 || !omap_lcd->enable) {
+        return;
+    }
+
+    surface = qemu_console_surface(omap_lcd->con);
+    if (!surface_bits_per_pixel(surface)) {
         return;
     }
 
     frame_offset = 0;
     if (omap_lcd->plm != 2) {
-        cpu_physical_memory_read(omap_lcd->dma->phys_framebuffer[
-                                  omap_lcd->dma->current_frame],
-                                 (void *)omap_lcd->palette, 0x200);
+        cpu_physical_memory_read(
+                omap_lcd->dma->phys_framebuffer[omap_lcd->dma->current_frame],
+                omap_lcd->palette, 0x200);
         switch (omap_lcd->palette[0] >> 12 & 7) {
         case 3 ... 7:
             frame_offset += 0x200;
@@ -243,17 +369,16 @@ static void omap_lcd_update(struct omap_lcd_panel_s *s) {
 
     if (s->plm != 2 && !s->palette_done) {
         cpu_physical_memory_read(
-            s->dma->phys_framebuffer[s->dma->current_frame],
-            (void *)s->palette, 0x200);
+                            s->dma->phys_framebuffer[s->dma->current_frame],
+                            s->palette, 0x200);
         s->palette_done = 1;
         omap_lcd_interrupts(s);
     }
 }
 
-static uint64_t omap_lcdc_read(void *opaque, hwaddr addr,
-                               unsigned size)
+static uint64_t omap_lcdc_read(void *opaque, hwaddr addr, unsigned size)
 {
-    struct omap_lcd_panel_s *s = (struct omap_lcd_panel_s *) opaque;
+    struct omap_lcd_panel_s *s = opaque;
 
     switch (addr) {
     case 0x00:	/* LCD_CONTROL */
@@ -286,7 +411,7 @@ static uint64_t omap_lcdc_read(void *opaque, hwaddr addr,
 static void omap_lcdc_write(void *opaque, hwaddr addr,
                             uint64_t value, unsigned size)
 {
-    struct omap_lcd_panel_s *s = (struct omap_lcd_panel_s *) opaque;
+    struct omap_lcd_panel_s *s = opaque;
 
     switch (addr) {
     case 0x00:	/* LCD_CONTROL */

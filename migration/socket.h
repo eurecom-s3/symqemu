@@ -19,17 +19,15 @@
 
 #include "io/channel.h"
 #include "io/task.h"
+#include "qemu/sockets.h"
 
 void socket_send_channel_create(QIOTaskFunc f, void *data);
-int socket_send_channel_destroy(QIOChannel *send);
+QIOChannel *socket_send_channel_create_sync(Error **errp);
 
-void tcp_start_incoming_migration(const char *host_port, Error **errp);
+void socket_start_incoming_migration(SocketAddress *saddr, Error **errp);
 
-void tcp_start_outgoing_migration(MigrationState *s, const char *host_port,
-                                  Error **errp);
+void socket_start_outgoing_migration(MigrationState *s,
+                                     SocketAddress *saddr, Error **errp);
+void socket_cleanup_outgoing_migration(void);
 
-void unix_start_incoming_migration(const char *path, Error **errp);
-
-void unix_start_outgoing_migration(MigrationState *s, const char *path,
-                                   Error **errp);
 #endif

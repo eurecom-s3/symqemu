@@ -13,80 +13,137 @@ This work is licensed under the terms of the GNU GPL, version 2.
 See the COPYING file in the top-level directory.
 """
 
-from qapi.common import *
+from typing import List, Optional
+
+from .common import (
+    c_enum_const,
+    c_name,
+    indent,
+    mcgen,
+)
+from .gen import (
+    QAPISchemaModularCVisitor,
+    gen_special_features,
+    ifcontext,
+)
+from .schema import (
+    QAPISchema,
+    QAPISchemaEnumMember,
+    QAPISchemaEnumType,
+    QAPISchemaFeature,
+    QAPISchemaIfCond,
+    QAPISchemaObjectType,
+    QAPISchemaObjectTypeMember,
+    QAPISchemaType,
+    QAPISchemaVariants,
+)
+from .source import QAPISourceInfo
 
 
-def gen_visit_decl(name, scalar=False):
+def gen_visit_decl(name: str, scalar: bool = False) -> str:
     c_type = c_name(name) + ' *'
     if not scalar:
         c_type += '*'
     return mcgen('''
-void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_type)sobj, Error **errp);
+
+bool visit_type_%(c_name)s(Visitor *v, const char *name,
+                 %(c_type)sobj, Error **errp);
 ''',
                  c_name=c_name(name), c_type=c_type)
 
 
-def gen_visit_members_decl(name):
+def gen_visit_members_decl(name: str) -> str:
     return mcgen('''
 
-void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp);
+bool visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp);
 ''',
                  c_name=c_name(name))
 
 
-def gen_visit_object_members(name, base, members, variants):
+def gen_visit_object_members(name: str,
+                             base: Optional[QAPISchemaObjectType],
+                             members: List[QAPISchemaObjectTypeMember],
+                             variants: Optional[QAPISchemaVariants]) -> str:
     ret = mcgen('''
 
-void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp)
+bool visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp)
 {
-    Error *err = NULL;
-
 ''',
                 c_name=c_name(name))
 
+    sep = ''
+    for memb in members:
+        if memb.optional and not memb.need_has():
+            ret += memb.ifcond.gen_if()
+            ret += mcgen('''
+    bool has_%(c_name)s = !!obj->%(c_name)s;
+''',
+                         c_name=c_name(memb.name))
+            sep = '\n'
+            ret += memb.ifcond.gen_endif()
+    ret += sep
+
     if base:
         ret += mcgen('''
-    visit_type_%(c_type)s_members(v, (%(c_type)s *)obj, &err);
-    if (err) {
-        goto out;
+    if (!visit_type_%(c_type)s_members(v, (%(c_type)s *)obj, errp)) {
+        return false;
     }
 ''',
                      c_type=base.c_name())
 
     for memb in members:
-        ret += gen_if(memb.ifcond)
+        ret += memb.ifcond.gen_if()
         if memb.optional:
+            has = 'has_' + c_name(memb.name)
+            if memb.need_has():
+                has = 'obj->' + has
             ret += mcgen('''
-    if (visit_optional(v, "%(name)s", &obj->has_%(c_name)s)) {
+    if (visit_optional(v, "%(name)s", &%(has)s)) {
 ''',
-                         name=memb.name, c_name=c_name(memb.name))
-            push_indent()
+                         name=memb.name, has=has)
+            indent.increase()
+        special_features = gen_special_features(memb.features)
+        if special_features != '0':
+            ret += mcgen('''
+    if (visit_policy_reject(v, "%(name)s", %(special_features)s, errp)) {
+        return false;
+    }
+    if (!visit_policy_skip(v, "%(name)s", %(special_features)s)) {
+''',
+                         name=memb.name, special_features=special_features)
+            indent.increase()
         ret += mcgen('''
-    visit_type_%(c_type)s(v, "%(name)s", &obj->%(c_name)s, &err);
-    if (err) {
-        goto out;
+    if (!visit_type_%(c_type)s(v, "%(name)s", &obj->%(c_name)s, errp)) {
+        return false;
     }
 ''',
                      c_type=memb.type.c_name(), name=memb.name,
                      c_name=c_name(memb.name))
-        if memb.optional:
-            pop_indent()
+        if special_features != '0':
+            indent.decrease()
             ret += mcgen('''
     }
 ''')
-        ret += gen_endif(memb.ifcond)
+        if memb.optional:
+            indent.decrease()
+            ret += mcgen('''
+    }
+''')
+        ret += memb.ifcond.gen_endif()
 
     if variants:
+        tag_member = variants.tag_member
+        assert isinstance(tag_member.type, QAPISchemaEnumType)
+
         ret += mcgen('''
     switch (obj->%(c_name)s) {
 ''',
-                     c_name=c_name(variants.tag_member.name))
+                     c_name=c_name(tag_member.name))
 
         for var in variants.variants:
-            case_str = c_enum_const(variants.tag_member.type.name,
-                                    var.name,
-                                    variants.tag_member.type.prefix)
-            ret += gen_if(var.ifcond)
+            case_str = c_enum_const(tag_member.type.name, var.name,
+                                    tag_member.type.prefix)
+            ret += var.ifcond.gen_if()
             if var.type.name == 'q_empty':
                 # valid variant and nothing to do
                 ret += mcgen('''
@@ -97,96 +154,90 @@ void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp)
             else:
                 ret += mcgen('''
     case %(case)s:
-        visit_type_%(c_type)s_members(v, &obj->u.%(c_name)s, &err);
-        break;
+        return visit_type_%(c_type)s_members(v, &obj->u.%(c_name)s, errp);
 ''',
                              case=case_str,
                              c_type=var.type.c_name(), c_name=c_name(var.name))
 
-            ret += gen_endif(var.ifcond)
+            ret += var.ifcond.gen_endif()
         ret += mcgen('''
     default:
         abort();
     }
 ''')
 
-    # 'goto out' produced for base, for each member, and if variants were
-    # present
-    if base or members or variants:
-        ret += mcgen('''
-
-out:
-''')
     ret += mcgen('''
-    error_propagate(errp, err);
+    return true;
 }
 ''')
     return ret
 
 
-def gen_visit_list(name, element_type):
+def gen_visit_list(name: str, element_type: QAPISchemaType) -> str:
     return mcgen('''
 
-void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error **errp)
+bool visit_type_%(c_name)s(Visitor *v, const char *name,
+                 %(c_name)s **obj, Error **errp)
 {
-    Error *err = NULL;
+    bool ok = false;
     %(c_name)s *tail;
     size_t size = sizeof(**obj);
 
-    visit_start_list(v, name, (GenericList **)obj, size, &err);
-    if (err) {
-        goto out;
+    if (!visit_start_list(v, name, (GenericList **)obj, size, errp)) {
+        return false;
     }
 
     for (tail = *obj; tail;
          tail = (%(c_name)s *)visit_next_list(v, (GenericList *)tail, size)) {
-        visit_type_%(c_elt_type)s(v, NULL, &tail->value, &err);
-        if (err) {
-            break;
+        if (!visit_type_%(c_elt_type)s(v, NULL, &tail->value, errp)) {
+            goto out_obj;
         }
     }
 
-    if (!err) {
-        visit_check_list(v, &err);
-    }
+    ok = visit_check_list(v, errp);
+out_obj:
     visit_end_list(v, (void **)obj);
-    if (err && visit_is_input(v)) {
+    if (!ok && visit_is_input(v)) {
         qapi_free_%(c_name)s(*obj);
         *obj = NULL;
     }
-out:
-    error_propagate(errp, err);
+    return ok;
 }
 ''',
                  c_name=c_name(name), c_elt_type=element_type.c_name())
 
 
-def gen_visit_enum(name):
+def gen_visit_enum(name: str) -> str:
     return mcgen('''
 
-void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s *obj, Error **errp)
+bool visit_type_%(c_name)s(Visitor *v, const char *name,
+                 %(c_name)s *obj, Error **errp)
 {
     int value = *obj;
-    visit_type_enum(v, name, &value, &%(c_name)s_lookup, errp);
+    bool ok = visit_type_enum(v, name, &value, &%(c_name)s_lookup, errp);
     *obj = value;
+    return ok;
 }
 ''',
                  c_name=c_name(name))
 
 
-def gen_visit_alternate(name, variants):
+def gen_visit_alternate(name: str, variants: QAPISchemaVariants) -> str:
     ret = mcgen('''
 
-void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error **errp)
+bool visit_type_%(c_name)s(Visitor *v, const char *name,
+                 %(c_name)s **obj, Error **errp)
 {
-    Error *err = NULL;
+    bool ok = false;
 
-    visit_start_alternate(v, name, (GenericAlternate **)obj, sizeof(**obj),
-                          &err);
-    if (err) {
-        goto out;
+    if (!visit_start_alternate(v, name, (GenericAlternate **)obj,
+                               sizeof(**obj), errp)) {
+        return false;
     }
     if (!*obj) {
+        /* incomplete */
+        assert(visit_is_dealloc(v));
+        ok = true;
         goto out_obj;
     }
     switch ((*obj)->type) {
@@ -194,20 +245,18 @@ void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error
                 c_name=c_name(name))
 
     for var in variants.variants:
-        ret += gen_if(var.ifcond)
+        ret += var.ifcond.gen_if()
         ret += mcgen('''
     case %(case)s:
 ''',
                      case=var.type.alternate_qtype())
         if isinstance(var.type, QAPISchemaObjectType):
             ret += mcgen('''
-        visit_start_struct(v, name, NULL, 0, &err);
-        if (err) {
+        if (!visit_start_struct(v, name, NULL, 0, errp)) {
             break;
         }
-        visit_type_%(c_type)s_members(v, &(*obj)->u.%(c_name)s, &err);
-        if (!err) {
-            visit_check_struct(v, &err);
+        if (visit_type_%(c_type)s_members(v, &(*obj)->u.%(c_name)s, errp)) {
+            ok = visit_check_struct(v, errp);
         }
         visit_end_struct(v, NULL);
 ''',
@@ -215,30 +264,33 @@ void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error
                          c_name=c_name(var.name))
         else:
             ret += mcgen('''
-        visit_type_%(c_type)s(v, name, &(*obj)->u.%(c_name)s, &err);
+        ok = visit_type_%(c_type)s(v, name, &(*obj)->u.%(c_name)s, errp);
 ''',
                          c_type=var.type.c_name(),
                          c_name=c_name(var.name))
         ret += mcgen('''
         break;
 ''')
-        ret += gen_endif(var.ifcond)
+        ret += var.ifcond.gen_endif()
 
     ret += mcgen('''
     case QTYPE_NONE:
         abort();
     default:
-        error_setg(&err, QERR_INVALID_PARAMETER_TYPE, name ? name : "null",
+        assert(visit_is_input(v));
+        error_setg(errp, QERR_INVALID_PARAMETER_TYPE, name ? name : "null",
                    "%(name)s");
+        /* Avoid passing invalid *obj to qapi_free_%(c_name)s() */
+        g_free(*obj);
+        *obj = NULL;
     }
 out_obj:
     visit_end_alternate(v, (void **)obj);
-    if (err && visit_is_input(v)) {
+    if (!ok && visit_is_input(v)) {
         qapi_free_%(c_name)s(*obj);
         *obj = NULL;
     }
-out:
-    error_propagate(errp, err);
+    return ok;
 }
 ''',
                  name=name, c_name=c_name(name))
@@ -246,33 +298,34 @@ out:
     return ret
 
 
-def gen_visit_object(name, base, members, variants):
+def gen_visit_object(name: str) -> str:
     return mcgen('''
 
-void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error **errp)
+bool visit_type_%(c_name)s(Visitor *v, const char *name,
+                 %(c_name)s **obj, Error **errp)
 {
-    Error *err = NULL;
+    bool ok = false;
 
-    visit_start_struct(v, name, (void **)obj, sizeof(%(c_name)s), &err);
-    if (err) {
-        goto out;
+    if (!visit_start_struct(v, name, (void **)obj, sizeof(%(c_name)s), errp)) {
+        return false;
     }
     if (!*obj) {
+        /* incomplete */
+        assert(visit_is_dealloc(v));
+        ok = true;
         goto out_obj;
     }
-    visit_type_%(c_name)s_members(v, *obj, &err);
-    if (err) {
+    if (!visit_type_%(c_name)s_members(v, *obj, errp)) {
         goto out_obj;
     }
-    visit_check_struct(v, &err);
+    ok = visit_check_struct(v, errp);
 out_obj:
     visit_end_struct(v, (void **)obj);
-    if (err && visit_is_input(v)) {
+    if (!ok && visit_is_input(v)) {
         qapi_free_%(c_name)s(*obj);
         *obj = NULL;
     }
-out:
-    error_propagate(errp, err);
+    return ok;
 }
 ''',
                  c_name=c_name(name))
@@ -280,11 +333,12 @@ out:
 
 class QAPISchemaGenVisitVisitor(QAPISchemaModularCVisitor):
 
-    def __init__(self, prefix):
-        QAPISchemaModularCVisitor.__init__(
-            self, prefix, 'qapi-visit', ' * Schema-defined QAPI visitors',
-            __doc__)
-        self._add_system_module(None, ' * Built-in QAPI visitors')
+    def __init__(self, prefix: str):
+        super().__init__(
+            prefix, 'qapi-visit', ' * Schema-defined QAPI visitors',
+            ' * Built-in QAPI visitors', __doc__)
+
+    def _begin_builtin_module(self) -> None:
         self._genc.preamble_add(mcgen('''
 #include "qemu/osdep.h"
 #include "qapi/error.h"
@@ -294,10 +348,9 @@ class QAPISchemaGenVisitVisitor(QAPISchemaModularCVisitor):
 #include "qapi/visitor.h"
 #include "qapi/qapi-builtin-types.h"
 
-''',
-                                      prefix=prefix))
+'''))
 
-    def _begin_user_module(self, name):
+    def _begin_user_module(self, name: str) -> None:
         types = self._module_basename('qapi-types', name)
         visit = self._module_basename('qapi-visit', name)
         self._genc.preamble_add(mcgen('''
@@ -314,18 +367,34 @@ class QAPISchemaGenVisitVisitor(QAPISchemaModularCVisitor):
 ''',
                                       types=types))
 
-    def visit_enum_type(self, name, info, ifcond, members, prefix):
+    def visit_enum_type(self,
+                        name: str,
+                        info: Optional[QAPISourceInfo],
+                        ifcond: QAPISchemaIfCond,
+                        features: List[QAPISchemaFeature],
+                        members: List[QAPISchemaEnumMember],
+                        prefix: Optional[str]) -> None:
         with ifcontext(ifcond, self._genh, self._genc):
             self._genh.add(gen_visit_decl(name, scalar=True))
             self._genc.add(gen_visit_enum(name))
 
-    def visit_array_type(self, name, info, ifcond, element_type):
+    def visit_array_type(self,
+                         name: str,
+                         info: Optional[QAPISourceInfo],
+                         ifcond: QAPISchemaIfCond,
+                         element_type: QAPISchemaType) -> None:
         with ifcontext(ifcond, self._genh, self._genc):
             self._genh.add(gen_visit_decl(name))
             self._genc.add(gen_visit_list(name, element_type))
 
-    def visit_object_type(self, name, info, ifcond, base, members, variants,
-                          features):
+    def visit_object_type(self,
+                          name: str,
+                          info: Optional[QAPISourceInfo],
+                          ifcond: QAPISchemaIfCond,
+                          features: List[QAPISchemaFeature],
+                          base: Optional[QAPISchemaObjectType],
+                          members: List[QAPISchemaObjectTypeMember],
+                          variants: Optional[QAPISchemaVariants]) -> None:
         # Nothing to do for the special empty builtin
         if name == 'q_empty':
             return
@@ -338,15 +407,23 @@ class QAPISchemaGenVisitVisitor(QAPISchemaModularCVisitor):
             if not name.startswith('q_'):
                 # only explicit types need an allocating visit
                 self._genh.add(gen_visit_decl(name))
-                self._genc.add(gen_visit_object(name, base, members, variants))
+                self._genc.add(gen_visit_object(name))
 
-    def visit_alternate_type(self, name, info, ifcond, variants):
+    def visit_alternate_type(self,
+                             name: str,
+                             info: Optional[QAPISourceInfo],
+                             ifcond: QAPISchemaIfCond,
+                             features: List[QAPISchemaFeature],
+                             variants: QAPISchemaVariants) -> None:
         with ifcontext(ifcond, self._genh, self._genc):
             self._genh.add(gen_visit_decl(name))
             self._genc.add(gen_visit_alternate(name, variants))
 
 
-def gen_visit(schema, output_dir, prefix, opt_builtins):
+def gen_visit(schema: QAPISchema,
+              output_dir: str,
+              prefix: str,
+              opt_builtins: bool) -> None:
     vis = QAPISchemaGenVisitVisitor(prefix)
     schema.visit(vis)
     vis.write(output_dir, opt_builtins)

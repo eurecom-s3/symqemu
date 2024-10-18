@@ -28,21 +28,25 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
-#include "cpu.h"
-#include "hw/boards.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "strongarm.h"
 #include "qemu/error-report.h"
 #include "hw/arm/boot.h"
 #include "chardev/char-fe.h"
 #include "chardev/char-serial.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/rtc.h"
 #include "hw/ssi/ssi.h"
+#include "qapi/error.h"
 #include "qemu/cutils.h"
 #include "qemu/log.h"
-
-//#define DEBUG
+#include "qom/object.h"
+#include "target/arm/cpu-qom.h"
+#include "trace.h"
 
 /*
  TODO
@@ -61,12 +65,6 @@
  - Enhance UART with modem signals
  */
 
-#ifdef DEBUG
-# define DPRINTF(format, ...) printf(format , ## __VA_ARGS__)
-#else
-# define DPRINTF(format, ...) do { } while (0)
-#endif
-
 static struct {
     hwaddr io_base;
     int irq;
@@ -80,10 +78,9 @@ static struct {
 /* Interrupt Controller */
 
 #define TYPE_STRONGARM_PIC "strongarm_pic"
-#define STRONGARM_PIC(obj) \
-    OBJECT_CHECK(StrongARMPICState, (obj), TYPE_STRONGARM_PIC)
+OBJECT_DECLARE_SIMPLE_TYPE(StrongARMPICState, STRONGARM_PIC)
 
-typedef struct StrongARMPICState {
+struct StrongARMPICState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -94,7 +91,7 @@ typedef struct StrongARMPICState {
     uint32_t enabled;
     uint32_t is_fiq;
     uint32_t int_idle;
-} StrongARMPICState;
+};
 
 #define ICIP    0x00
 #define ICMR    0x04
@@ -147,8 +144,9 @@ static uint64_t strongarm_pic_mem_read(void *opaque, hwaddr offset,
     case ICPR:
         return s->pending;
     default:
-        printf("%s: Bad register offset 0x" TARGET_FMT_plx "\n",
-                        __func__, offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad register offset 0x"HWADDR_FMT_plx"\n",
+                      __func__, offset);
         return 0;
     }
 }
@@ -169,8 +167,9 @@ static void strongarm_pic_mem_write(void *opaque, hwaddr offset,
         s->int_idle = (value & 1) ? 0 : ~0;
         break;
     default:
-        printf("%s: Bad register offset 0x" TARGET_FMT_plx "\n",
-                        __func__, offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                     "%s: Bad register offset 0x"HWADDR_FMT_plx"\n",
+                     __func__, offset);
         break;
     }
     strongarm_pic_update(s);
@@ -202,12 +201,12 @@ static int strongarm_pic_post_load(void *opaque, int version_id)
     return 0;
 }
 
-static VMStateDescription vmstate_strongarm_pic_regs = {
+static const VMStateDescription vmstate_strongarm_pic_regs = {
     .name = "strongarm_pic",
     .version_id = 0,
     .minimum_version_id = 0,
     .post_load = strongarm_pic_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(pending, StrongARMPICState),
         VMSTATE_UINT32(enabled, StrongARMPICState),
         VMSTATE_UINT32(is_fiq, StrongARMPICState),
@@ -248,10 +247,9 @@ static const TypeInfo strongarm_pic_info = {
  * f = 32 768 / (RTTR_trim + 1) */
 
 #define TYPE_STRONGARM_RTC "strongarm-rtc"
-#define STRONGARM_RTC(obj) \
-    OBJECT_CHECK(StrongARMRTCState, (obj), TYPE_STRONGARM_RTC)
+OBJECT_DECLARE_SIMPLE_TYPE(StrongARMRTCState, STRONGARM_RTC)
 
-typedef struct StrongARMRTCState {
+struct StrongARMRTCState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -264,7 +262,7 @@ typedef struct StrongARMRTCState {
     QEMUTimer *rtc_hz;
     qemu_irq rtc_irq;
     qemu_irq rtc_hz_irq;
-} StrongARMRTCState;
+};
 
 static inline void strongarm_rtc_int_update(StrongARMRTCState *s)
 {
@@ -330,7 +328,9 @@ static uint64_t strongarm_rtc_read(void *opaque, hwaddr addr,
                 ((qemu_clock_get_ms(rtc_clock) - s->last_hz) << 15) /
                 (1000 * ((s->rttr & 0xffff) + 1));
     default:
-        printf("%s: Bad register 0x" TARGET_FMT_plx "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad rtc register read 0x"HWADDR_FMT_plx"\n",
+                      __func__, addr);
         return 0;
     }
 }
@@ -372,7 +372,9 @@ static void strongarm_rtc_write(void *opaque, hwaddr addr,
         break;
 
     default:
-        printf("%s: Bad register 0x" TARGET_FMT_plx "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad rtc register write 0x"HWADDR_FMT_plx"\n",
+                      __func__, addr);
     }
 }
 
@@ -396,15 +398,19 @@ static void strongarm_rtc_init(Object *obj)
     s->last_rcnr = (uint32_t) mktimegm(&tm);
     s->last_hz = qemu_clock_get_ms(rtc_clock);
 
-    s->rtc_alarm = timer_new_ms(rtc_clock, strongarm_rtc_alarm_tick, s);
-    s->rtc_hz = timer_new_ms(rtc_clock, strongarm_rtc_hz_tick, s);
-
     sysbus_init_irq(dev, &s->rtc_irq);
     sysbus_init_irq(dev, &s->rtc_hz_irq);
 
     memory_region_init_io(&s->iomem, obj, &strongarm_rtc_ops, s,
                           "rtc", 0x10000);
     sysbus_init_mmio(dev, &s->iomem);
+}
+
+static void strongarm_rtc_realize(DeviceState *dev, Error **errp)
+{
+    StrongARMRTCState *s = STRONGARM_RTC(dev);
+    s->rtc_alarm = timer_new_ms(rtc_clock, strongarm_rtc_alarm_tick, s);
+    s->rtc_hz = timer_new_ms(rtc_clock, strongarm_rtc_hz_tick, s);
 }
 
 static int strongarm_rtc_pre_save(void *opaque)
@@ -432,7 +438,7 @@ static const VMStateDescription vmstate_strongarm_rtc_regs = {
     .minimum_version_id = 0,
     .pre_save = strongarm_rtc_pre_save,
     .post_load = strongarm_rtc_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(rttr, StrongARMRTCState),
         VMSTATE_UINT32(rtsr, StrongARMRTCState),
         VMSTATE_UINT32(rtar, StrongARMRTCState),
@@ -448,6 +454,7 @@ static void strongarm_rtc_sysbus_class_init(ObjectClass *klass, void *data)
 
     dc->desc = "StrongARM RTC Controller";
     dc->vmsd = &vmstate_strongarm_rtc_regs;
+    dc->realize = strongarm_rtc_realize;
 }
 
 static const TypeInfo strongarm_rtc_sysbus_info = {
@@ -469,10 +476,8 @@ static const TypeInfo strongarm_rtc_sysbus_info = {
 #define GAFR 0x1c
 
 #define TYPE_STRONGARM_GPIO "strongarm-gpio"
-#define STRONGARM_GPIO(obj) \
-    OBJECT_CHECK(StrongARMGPIOInfo, (obj), TYPE_STRONGARM_GPIO)
+OBJECT_DECLARE_SIMPLE_TYPE(StrongARMGPIOInfo, STRONGARM_GPIO)
 
-typedef struct StrongARMGPIOInfo StrongARMGPIOInfo;
 struct StrongARMGPIOInfo {
     SysBusDevice busdev;
     MemoryRegion iomem;
@@ -550,12 +555,12 @@ static uint64_t strongarm_gpio_read(void *opaque, hwaddr offset,
 
     case GPSR:        /* GPIO Pin-Output Set registers */
         qemu_log_mask(LOG_GUEST_ERROR,
-                      "strongarm GPIO: read from write only register GPSR\n");
+                      "%s: read from write only register GPSR\n", __func__);
         return 0;
 
     case GPCR:        /* GPIO Pin-Output Clear registers */
         qemu_log_mask(LOG_GUEST_ERROR,
-                      "strongarm GPIO: read from write only register GPCR\n");
+                      "%s: read from write only register GPCR\n", __func__);
         return 0;
 
     case GRER:        /* GPIO Rising-Edge Detect Enable registers */
@@ -575,7 +580,9 @@ static uint64_t strongarm_gpio_read(void *opaque, hwaddr offset,
         return s->status;
 
     default:
-        printf("%s: Bad offset 0x" TARGET_FMT_plx "\n", __func__, offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad gpio read offset 0x"HWADDR_FMT_plx"\n",
+                      __func__, offset);
     }
 
     return 0;
@@ -620,7 +627,9 @@ static void strongarm_gpio_write(void *opaque, hwaddr offset,
         break;
 
     default:
-        printf("%s: Bad offset 0x" TARGET_FMT_plx "\n", __func__, offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x"HWADDR_FMT_plx"\n",
+                      __func__, offset);
     }
 }
 
@@ -636,8 +645,8 @@ static DeviceState *strongarm_gpio_init(hwaddr base,
     DeviceState *dev;
     int i;
 
-    dev = qdev_create(NULL, TYPE_STRONGARM_GPIO);
-    qdev_init_nofail(dev);
+    dev = qdev_new(TYPE_STRONGARM_GPIO);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
     for (i = 0; i < 12; i++)
@@ -671,7 +680,7 @@ static const VMStateDescription vmstate_strongarm_gpio_regs = {
     .name = "strongarm-gpio",
     .version_id = 0,
     .minimum_version_id = 0,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(ilevel, StrongARMGPIOInfo),
         VMSTATE_UINT32(olevel, StrongARMGPIOInfo),
         VMSTATE_UINT32(dir, StrongARMGPIOInfo),
@@ -708,10 +717,8 @@ static const TypeInfo strongarm_gpio_info = {
 #define PPFR 0x10
 
 #define TYPE_STRONGARM_PPC "strongarm-ppc"
-#define STRONGARM_PPC(obj) \
-    OBJECT_CHECK(StrongARMPPCInfo, (obj), TYPE_STRONGARM_PPC)
+OBJECT_DECLARE_SIMPLE_TYPE(StrongARMPPCInfo, STRONGARM_PPC)
 
-typedef struct StrongARMPPCInfo StrongARMPPCInfo;
 struct StrongARMPPCInfo {
     SysBusDevice parent_obj;
 
@@ -778,7 +785,9 @@ static uint64_t strongarm_ppc_read(void *opaque, hwaddr offset,
         return s->ppfr | ~0x7f001;
 
     default:
-        printf("%s: Bad offset 0x" TARGET_FMT_plx "\n", __func__, offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad ppc read offset 0x"HWADDR_FMT_plx "\n",
+                      __func__, offset);
     }
 
     return 0;
@@ -813,7 +822,9 @@ static void strongarm_ppc_write(void *opaque, hwaddr offset,
         break;
 
     default:
-        printf("%s: Bad offset 0x" TARGET_FMT_plx "\n", __func__, offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad ppc write offset 0x"HWADDR_FMT_plx"\n",
+                      __func__, offset);
     }
 }
 
@@ -842,7 +853,7 @@ static const VMStateDescription vmstate_strongarm_ppc_regs = {
     .name = "strongarm-ppc",
     .version_id = 0,
     .minimum_version_id = 0,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(ilevel, StrongARMPPCInfo),
         VMSTATE_UINT32(olevel, StrongARMPPCInfo),
         VMSTATE_UINT32(dir, StrongARMPPCInfo),
@@ -909,10 +920,9 @@ static const TypeInfo strongarm_ppc_info = {
 #define RX_FIFO_ROR (1 << 10)
 
 #define TYPE_STRONGARM_UART "strongarm-uart"
-#define STRONGARM_UART(obj) \
-    OBJECT_CHECK(StrongARMUARTState, (obj), TYPE_STRONGARM_UART)
+OBJECT_DECLARE_SIMPLE_TYPE(StrongARMUARTState, STRONGARM_UART)
 
-typedef struct StrongARMUARTState {
+struct StrongARMUARTState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -932,11 +942,11 @@ typedef struct StrongARMUARTState {
     uint8_t rx_start;
     uint8_t rx_len;
 
-    uint64_t char_transmit_time; /* time to transmit a char in ticks*/
+    uint64_t char_transmit_time; /* time to transmit a char in nanoseconds */
     bool wait_break_end;
     QEMUTimer *rx_timeout_timer;
     QEMUTimer *tx_timer;
-} StrongARMUARTState;
+};
 
 static void strongarm_uart_update_status(StrongARMUARTState *s)
 {
@@ -1026,8 +1036,13 @@ static void strongarm_uart_update_parameters(StrongARMUARTState *s)
     s->char_transmit_time =  (NANOSECONDS_PER_SECOND / speed) * frame_size;
     qemu_chr_fe_ioctl(&s->chr, CHR_IOCTL_SERIAL_SET_PARAMS, &ssp);
 
-    DPRINTF(stderr, "%s speed=%d parity=%c data=%d stop=%d\n", s->chr->label,
-            speed, parity, data_bits, stop_bits);
+    trace_strongarm_uart_update_parameters((s->chr.chr ?
+                                           s->chr.chr->label : "NULL") ?:
+                                           "NULL",
+                                           speed,
+                                           parity,
+                                           data_bits,
+                                           stop_bits);
 }
 
 static void strongarm_uart_rx_to(void *opaque)
@@ -1090,7 +1105,7 @@ static void strongarm_uart_receive(void *opaque, const uint8_t *buf, int size)
     strongarm_uart_update_int_status(s);
 }
 
-static void strongarm_uart_event(void *opaque, int event)
+static void strongarm_uart_event(void *opaque, QEMUChrEvent event)
 {
     StrongARMUARTState *s = opaque;
     if (event == CHR_EVENT_BREAK) {
@@ -1161,7 +1176,9 @@ static uint64_t strongarm_uart_read(void *opaque, hwaddr addr,
         return s->utsr1;
 
     default:
-        printf("%s: Bad register 0x" TARGET_FMT_plx "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad uart register read 0x"HWADDR_FMT_plx"\n",
+                      __func__, addr);
         return 0;
     }
 }
@@ -1218,7 +1235,9 @@ static void strongarm_uart_write(void *opaque, hwaddr addr,
         break;
 
     default:
-        printf("%s: Bad register 0x" TARGET_FMT_plx "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad uart register write 0x"HWADDR_FMT_plx"\n",
+                      __func__, addr);
     }
 }
 
@@ -1237,15 +1256,16 @@ static void strongarm_uart_init(Object *obj)
                           "uart", 0x10000);
     sysbus_init_mmio(dev, &s->iomem);
     sysbus_init_irq(dev, &s->irq);
-
-    s->rx_timeout_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, strongarm_uart_rx_to, s);
-    s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, strongarm_uart_tx, s);
 }
 
 static void strongarm_uart_realize(DeviceState *dev, Error **errp)
 {
     StrongARMUARTState *s = STRONGARM_UART(dev);
 
+    s->rx_timeout_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                       strongarm_uart_rx_to,
+                                       s);
+    s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, strongarm_uart_tx, s);
     qemu_chr_fe_set_handlers(&s->chr,
                              strongarm_uart_can_receive,
                              strongarm_uart_receive,
@@ -1296,7 +1316,7 @@ static const VMStateDescription vmstate_strongarm_uart_regs = {
     .version_id = 0,
     .minimum_version_id = 0,
     .post_load = strongarm_uart_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8(utcr0, StrongARMUARTState),
         VMSTATE_UINT16(brd, StrongARMUARTState),
         VMSTATE_UINT8(utcr3, StrongARMUARTState),
@@ -1324,7 +1344,7 @@ static void strongarm_uart_class_init(ObjectClass *klass, void *data)
     dc->desc = "StrongARM UART controller";
     dc->reset = strongarm_uart_reset;
     dc->vmsd = &vmstate_strongarm_uart_regs;
-    dc->props = strongarm_uart_properties;
+    device_class_set_props(dc, strongarm_uart_properties);
     dc->realize = strongarm_uart_realize;
 }
 
@@ -1339,10 +1359,9 @@ static const TypeInfo strongarm_uart_info = {
 /* Synchronous Serial Ports */
 
 #define TYPE_STRONGARM_SSP "strongarm-ssp"
-#define STRONGARM_SSP(obj) \
-    OBJECT_CHECK(StrongARMSSPState, (obj), TYPE_STRONGARM_SSP)
+OBJECT_DECLARE_SIMPLE_TYPE(StrongARMSSPState, STRONGARM_SSP)
 
-typedef struct StrongARMSSPState {
+struct StrongARMSSPState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -1355,7 +1374,7 @@ typedef struct StrongARMSSPState {
     uint16_t rx_fifo[8];
     uint8_t rx_level;
     uint8_t rx_start;
-} StrongARMSSPState;
+};
 
 #define SSCR0 0x60 /* SSP Control register 0 */
 #define SSCR1 0x64 /* SSP Control register 1 */
@@ -1431,7 +1450,7 @@ static uint64_t strongarm_ssp_read(void *opaque, hwaddr addr,
             return 0xffffffff;
         }
         if (s->rx_level < 1) {
-            printf("%s: SSP Rx Underrun\n", __func__);
+            trace_strongarm_ssp_read_underrun();
             return 0xffffffff;
         }
         s->rx_level--;
@@ -1440,7 +1459,9 @@ static uint64_t strongarm_ssp_read(void *opaque, hwaddr addr,
         strongarm_ssp_fifo_update(s);
         return retval;
     default:
-        printf("%s: Bad register 0x" TARGET_FMT_plx "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad ssp register read 0x"HWADDR_FMT_plx"\n",
+                      __func__, addr);
         break;
     }
     return 0;
@@ -1455,8 +1476,8 @@ static void strongarm_ssp_write(void *opaque, hwaddr addr,
     case SSCR0:
         s->sscr[0] = value & 0xffbf;
         if ((s->sscr[0] & SSCR0_SSE) && SSCR0_DSS(value) < 4) {
-            printf("%s: Wrong data size: %i bits\n", __func__,
-                   (int)SSCR0_DSS(value));
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: Wrong data size: %i bits\n",
+                          __func__, (int)SSCR0_DSS(value));
         }
         if (!(value & SSCR0_SSE)) {
             s->sssr = 0;
@@ -1468,7 +1489,9 @@ static void strongarm_ssp_write(void *opaque, hwaddr addr,
     case SSCR1:
         s->sscr[1] = value & 0x2f;
         if (value & SSCR1_LBM) {
-            printf("%s: Attempt to use SSP LBM mode\n", __func__);
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: Attempt to use SSP LBM mode\n",
+                          __func__);
         }
         strongarm_ssp_fifo_update(s);
         break;
@@ -1506,7 +1529,9 @@ static void strongarm_ssp_write(void *opaque, hwaddr addr,
         break;
 
     default:
-        printf("%s: Bad register 0x" TARGET_FMT_plx "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad ssp register write 0x"HWADDR_FMT_plx"\n",
+                      __func__,  addr);
         break;
     }
 }
@@ -1555,7 +1580,7 @@ static const VMStateDescription vmstate_strongarm_ssp_regs = {
     .version_id = 0,
     .minimum_version_id = 0,
     .post_load = strongarm_ssp_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT16_ARRAY(sscr, StrongARMSSPState, 2),
         VMSTATE_UINT16(sssr, StrongARMSSPState),
         VMSTATE_UINT16_ARRAY(rx_fifo, StrongARMSSPState, 8),
@@ -1583,8 +1608,7 @@ static const TypeInfo strongarm_ssp_info = {
 };
 
 /* Main CPU functions */
-StrongARMState *sa1110_init(MemoryRegion *sysmem,
-                            unsigned int sdram_size, const char *cpu_type)
+StrongARMState *sa1110_init(const char *cpu_type)
 {
     StrongARMState *s;
     int i;
@@ -1597,10 +1621,6 @@ StrongARMState *sa1110_init(MemoryRegion *sysmem,
     }
 
     s->cpu = ARM_CPU(cpu_create(cpu_type));
-
-    memory_region_allocate_system_memory(&s->sdram, NULL, "strongarm.sdram",
-                                         sdram_size);
-    memory_region_add_subregion(sysmem, SA_SDCS0, &s->sdram);
 
     s->pic = sysbus_create_varargs("strongarm_pic", 0x90050000,
                     qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ),
@@ -1622,9 +1642,9 @@ StrongARMState *sa1110_init(MemoryRegion *sysmem,
     s->ppc = sysbus_create_varargs(TYPE_STRONGARM_PPC, 0x90060000, NULL);
 
     for (i = 0; sa_serial[i].io_base; i++) {
-        DeviceState *dev = qdev_create(NULL, TYPE_STRONGARM_UART);
+        DeviceState *dev = qdev_new(TYPE_STRONGARM_UART);
         qdev_prop_set_chr(dev, "chardev", serial_hd(i));
-        qdev_init_nofail(dev);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0,
                 sa_serial[i].io_base);
         sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,

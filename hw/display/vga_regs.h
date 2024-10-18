@@ -4,9 +4,9 @@
  * Copyright 1999 Jeff Garzik <jgarzik@pobox.com>
  *
  * Copyright history from vga16fb.c:
- *	Copyright 1999 Ben Pfaff and Petr Vandrovec
- *	Based on VGA info at http://www.osdever.net/FreeVGA/home.htm
- *	Based on VESA framebuffer (c) 1998 Gerd Knorr
+ *  Copyright 1999 Ben Pfaff and Petr Vandrovec
+ *  Based on VGA info at http://www.osdever.net/FreeVGA/home.htm
+ *  Based on VESA framebuffer (c) 1998 Gerd Knorr
  *
  * This file is subject to the terms and conditions of the GNU General
  * Public License.  See the file COPYING in the main directory of this
@@ -100,7 +100,9 @@
 
 /* VGA CRT controller bit masks */
 #define VGA_CR11_LOCK_CR0_CR7   0x80 /* lock writes to CR0 - CR7 */
+#define VGA_CR14_DW             0x40
 #define VGA_CR17_H_V_SIGNALS_ENABLED 0x80
+#define VGA_CR17_WORD_BYTE      0x40
 
 /* VGA attribute controller register indices */
 #define VGA_ATC_PALETTE0        0x00
@@ -154,6 +156,8 @@
 #define VGA_GFX_BIT_MASK        0x08
 
 /* VGA graphics controller bit masks */
+#define VGA_GR05_HOST_ODD_EVEN  0x10
 #define VGA_GR06_GRAPHICS_MODE  0x01
+#define VGA_GR06_CHAIN_ODD_EVEN 0x02
 
 #endif /* HW_VGA_REGS_H */

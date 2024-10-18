@@ -21,21 +21,21 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "qapi/error.h"
 #include "ui/console.h"
-#include "hw/i386/pc.h"
+#include "hw/i386/vmport.h"
 #include "hw/input/i8042.h"
-#include "hw/qdev.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
+#include "cpu.h"
+#include "qom/object.h"
+
+#include "trace.h"
 
 /* debug only vmmouse */
 //#define DEBUG_VMMOUSE
-
-/* VMMouse Commands */
-#define VMMOUSE_GETVERSION	10
-#define VMMOUSE_DATA		39
-#define VMMOUSE_STATUS		40
-#define VMMOUSE_COMMAND		41
 
 #define VMMOUSE_READ_ID			0x45414552
 #define VMMOUSE_DISABLE			0x000000f5
@@ -46,17 +46,21 @@
 
 #define VMMOUSE_VERSION		0x3442554a
 
-#ifdef DEBUG_VMMOUSE
-#define DPRINTF(fmt, ...) printf(fmt, ## __VA_ARGS__)
-#else
-#define DPRINTF(fmt, ...) do { } while (0)
-#endif
+#define VMMOUSE_RELATIVE_PACKET    0x00010000
+
+#define VMMOUSE_LEFT_BUTTON        0x20
+#define VMMOUSE_RIGHT_BUTTON       0x10
+#define VMMOUSE_MIDDLE_BUTTON      0x08
+
+#define VMMOUSE_MIN_X 0
+#define VMMOUSE_MIN_Y 0
+#define VMMOUSE_MAX_X 0xFFFF
+#define VMMOUSE_MAX_Y 0xFFFF
 
 #define TYPE_VMMOUSE "vmmouse"
-#define VMMOUSE(obj) OBJECT_CHECK(VMMouseState, (obj), TYPE_VMMOUSE)
+OBJECT_DECLARE_SIMPLE_TYPE(VMMouseState, VMMOUSE)
 
-typedef struct VMMouseState
-{
+struct VMMouseState {
     ISADevice parent_obj;
 
     uint32_t queue[VMMOUSE_QUEUE_SIZE];
@@ -65,12 +69,33 @@ typedef struct VMMouseState
     uint16_t status;
     uint8_t absolute;
     QEMUPutMouseEntry *entry;
-    void *ps2_mouse;
-} VMMouseState;
+    ISAKBDState *i8042;
+};
+
+static void vmmouse_get_data(uint32_t *data)
+{
+    X86CPU *cpu = X86_CPU(current_cpu);
+    CPUX86State *env = &cpu->env;
+
+    data[0] = env->regs[R_EAX]; data[1] = env->regs[R_EBX];
+    data[2] = env->regs[R_ECX]; data[3] = env->regs[R_EDX];
+    data[4] = env->regs[R_ESI]; data[5] = env->regs[R_EDI];
+}
+
+static void vmmouse_set_data(const uint32_t *data)
+{
+    X86CPU *cpu = X86_CPU(current_cpu);
+    CPUX86State *env = &cpu->env;
+
+    env->regs[R_EAX] = data[0]; env->regs[R_EBX] = data[1];
+    env->regs[R_ECX] = data[2]; env->regs[R_EDX] = data[3];
+    env->regs[R_ESI] = data[4]; env->regs[R_EDI] = data[5];
+}
 
 static uint32_t vmmouse_get_status(VMMouseState *s)
 {
-    DPRINTF("vmmouse_get_status()\n");
+    trace_vmmouse_get_status();
+
     return (s->status << 16) | s->nb_queue;
 }
 
@@ -82,19 +107,25 @@ static void vmmouse_mouse_event(void *opaque, int x, int y, int dz, int buttons_
     if (s->nb_queue > (VMMOUSE_QUEUE_SIZE - 4))
         return;
 
-    DPRINTF("vmmouse_mouse_event(%d, %d, %d, %d)\n",
-            x, y, dz, buttons_state);
+    trace_vmmouse_mouse_event(x, y, dz, buttons_state);
 
     if ((buttons_state & MOUSE_EVENT_LBUTTON))
-        buttons |= 0x20;
+        buttons |= VMMOUSE_LEFT_BUTTON;
     if ((buttons_state & MOUSE_EVENT_RBUTTON))
-        buttons |= 0x10;
+        buttons |= VMMOUSE_RIGHT_BUTTON;
     if ((buttons_state & MOUSE_EVENT_MBUTTON))
-        buttons |= 0x08;
+        buttons |= VMMOUSE_MIDDLE_BUTTON;
 
     if (s->absolute) {
-        x <<= 1;
-        y <<= 1;
+        x = qemu_input_scale_axis(x,
+                                  INPUT_EVENT_ABS_MIN, INPUT_EVENT_ABS_MAX,
+                                  VMMOUSE_MIN_X, VMMOUSE_MAX_X);
+        y = qemu_input_scale_axis(y,
+                                  INPUT_EVENT_ABS_MIN, INPUT_EVENT_ABS_MAX,
+                                  VMMOUSE_MIN_Y, VMMOUSE_MAX_Y);
+    } else{
+        /* add for guest vmmouse driver to judge this is a relative packet. */
+        buttons |= VMMOUSE_RELATIVE_PACKET;
     }
 
     s->queue[s->nb_queue++] = buttons;
@@ -104,7 +135,7 @@ static void vmmouse_mouse_event(void *opaque, int x, int y, int dz, int buttons_
 
     /* need to still generate PS2 events to notify driver to
        read from queue */
-    i8042_isa_mouse_fake_event(s->ps2_mouse);
+    i8042_isa_mouse_fake_event(s->i8042);
 }
 
 static void vmmouse_remove_handler(VMMouseState *s)
@@ -134,30 +165,34 @@ static void vmmouse_update_handler(VMMouseState *s, int absolute)
 
 static void vmmouse_read_id(VMMouseState *s)
 {
-    DPRINTF("vmmouse_read_id()\n");
+    trace_vmmouse_read_id();
 
     if (s->nb_queue == VMMOUSE_QUEUE_SIZE)
         return;
 
     s->queue[s->nb_queue++] = VMMOUSE_VERSION;
     s->status = 0;
+    vmmouse_update_handler(s, s->absolute);
 }
 
 static void vmmouse_request_relative(VMMouseState *s)
 {
-    DPRINTF("vmmouse_request_relative()\n");
+    trace_vmmouse_request_relative();
+
     vmmouse_update_handler(s, 0);
 }
 
 static void vmmouse_request_absolute(VMMouseState *s)
 {
-    DPRINTF("vmmouse_request_absolute()\n");
+    trace_vmmouse_request_absolute();
+
     vmmouse_update_handler(s, 1);
 }
 
 static void vmmouse_disable(VMMouseState *s)
 {
-    DPRINTF("vmmouse_disable()\n");
+    trace_vmmouse_disable();
+
     s->status = 0xffff;
     vmmouse_remove_handler(s);
 }
@@ -166,7 +201,7 @@ static void vmmouse_data(VMMouseState *s, uint32_t *data, uint32_t size)
 {
     int i;
 
-    DPRINTF("vmmouse_data(%d)\n", size);
+    trace_vmmouse_data(size);
 
     if (size == 0 || size > 6 || size > s->nb_queue) {
         printf("vmmouse: driver requested too much data %d\n", size);
@@ -194,10 +229,10 @@ static uint32_t vmmouse_ioport_read(void *opaque, uint32_t addr)
     command = data[2] & 0xFFFF;
 
     switch (command) {
-    case VMMOUSE_STATUS:
+    case VMPORT_CMD_VMMOUSE_STATUS:
         data[0] = vmmouse_get_status(s);
         break;
-    case VMMOUSE_COMMAND:
+    case VMPORT_CMD_VMMOUSE_COMMAND:
         switch (data[1]) {
         case VMMOUSE_DISABLE:
             vmmouse_disable(s);
@@ -216,7 +251,7 @@ static uint32_t vmmouse_ioport_read(void *opaque, uint32_t addr)
             break;
         }
         break;
-    case VMMOUSE_DATA:
+    case VMPORT_CMD_VMMOUSE_DATA:
         vmmouse_data(s, data, data[1]);
         break;
     default:
@@ -242,7 +277,7 @@ static const VMStateDescription vmstate_vmmouse = {
     .version_id = 0,
     .minimum_version_id = 0,
     .post_load = vmmouse_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_INT32_EQUAL(queue_size, VMMouseState, NULL),
         VMSTATE_UINT32_ARRAY(queue, VMMouseState, VMMOUSE_QUEUE_SIZE),
         VMSTATE_UINT16(nb_queue, VMMouseState),
@@ -257,6 +292,7 @@ static void vmmouse_reset(DeviceState *d)
     VMMouseState *s = VMMOUSE(d);
 
     s->queue_size = VMMOUSE_QUEUE_SIZE;
+    s->nb_queue = 0;
 
     vmmouse_disable(s);
 }
@@ -265,15 +301,24 @@ static void vmmouse_realizefn(DeviceState *dev, Error **errp)
 {
     VMMouseState *s = VMMOUSE(dev);
 
-    DPRINTF("vmmouse_init\n");
+    trace_vmmouse_init();
 
-    vmport_register(VMMOUSE_STATUS, vmmouse_ioport_read, s);
-    vmport_register(VMMOUSE_COMMAND, vmmouse_ioport_read, s);
-    vmport_register(VMMOUSE_DATA, vmmouse_ioport_read, s);
+    if (!s->i8042) {
+        error_setg(errp, "'i8042' link is not set");
+        return;
+    }
+    if (!object_resolve_path_type("", TYPE_VMPORT, NULL)) {
+        error_setg(errp, "vmmouse needs a machine with vmport");
+        return;
+    }
+
+    vmport_register(VMPORT_CMD_VMMOUSE_STATUS, vmmouse_ioport_read, s);
+    vmport_register(VMPORT_CMD_VMMOUSE_COMMAND, vmmouse_ioport_read, s);
+    vmport_register(VMPORT_CMD_VMMOUSE_DATA, vmmouse_ioport_read, s);
 }
 
 static Property vmmouse_properties[] = {
-    DEFINE_PROP_PTR("ps2_mouse", VMMouseState, ps2_mouse),
+    DEFINE_PROP_LINK("i8042", VMMouseState, i8042, TYPE_I8042, ISAKBDState *),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -284,9 +329,8 @@ static void vmmouse_class_initfn(ObjectClass *klass, void *data)
     dc->realize = vmmouse_realizefn;
     dc->reset = vmmouse_reset;
     dc->vmsd = &vmstate_vmmouse;
-    dc->props = vmmouse_properties;
-    /* Reason: pointer property "ps2_mouse" */
-    dc->user_creatable = false;
+    device_class_set_props(dc, vmmouse_properties);
+    set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
 }
 
 static const TypeInfo vmmouse_info = {

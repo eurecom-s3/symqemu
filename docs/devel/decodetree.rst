@@ -23,19 +23,42 @@ Fields
 
 Syntax::
 
-  field_def     := '%' identifier ( unnamed_field )+ ( !function=identifier )?
+  field_def     := '%' identifier ( field )* ( !function=identifier )?
+  field         := unnamed_field | named_field
   unnamed_field := number ':' ( 's' ) number
+  named_field   := identifier ':' ( 's' ) number
 
 For *unnamed_field*, the first number is the least-significant bit position
 of the field and the second number is the length of the field.  If the 's' is
-present, the field is considered signed.  If multiple ``unnamed_fields`` are
-present, they are concatenated.  In this way one can define disjoint fields.
+present, the field is considered signed.
+
+A *named_field* refers to some other field in the instruction pattern
+or format. Regardless of the length of the other field where it is
+defined, it will be inserted into this field with the specified
+signedness and bit width.
+
+Field definitions that involve loops (i.e. where a field is defined
+directly or indirectly in terms of itself) are errors.
+
+A format can include fields that refer to named fields that are
+defined in the instruction pattern(s) that use the format.
+Conversely, an instruction pattern can include fields that refer to
+named fields that are defined in the format it uses. However you
+cannot currently do both at once (i.e. pattern P uses format F; F has
+a field A that refers to a named field B that is defined in P, and P
+has a field C that refers to a named field D that is defined in F).
+
+If multiple ``fields`` are present, they are concatenated.
+In this way one can define disjoint fields.
 
 If ``!function`` is specified, the concatenated result is passed through the
 named function, taking and returning an integral value.
 
-FIXME: the fields of the structure into which this result will be stored
-is restricted to ``int``.  Which means that we cannot expand 64-bit items.
+One may use ``!function`` with zero ``fields``.  This case is called
+a *parameter*, and the named function is only passed the ``DisasContext``
+and returns an integral value extracted from there.
+
+A field with no ``fields`` and no ``!function`` is in error.
 
 Field examples:
 
@@ -53,6 +76,9 @@ Field examples:
 | %shimm8 5:s8 13:1         | expand_shimm8(sextract(i, 5, 8) << 1 |      |
 |   !function=expand_shimm8 |               extract(i, 13, 1))            |
 +---------------------------+---------------------------------------------+
+| %sz_imm 10:2 sz:3         | expand_sz_imm(extract(i, 10, 2) << 3 |      |
+|   !function=expand_sz_imm |               extract(a->sz, 0, 3))         |
++---------------------------+---------------------------------------------+
 
 Argument Sets
 =============
@@ -60,9 +86,14 @@ Argument Sets
 Syntax::
 
   args_def    := '&' identifier ( args_elt )+ ( !extern )?
-  args_elt    := identifier
+  args_elt    := identifier (':' identifier)?
 
 Each *args_elt* defines an argument within the argument set.
+If the form of the *args_elt* contains a colon, the first
+identifier is the argument name and the second identifier is
+the argument type.  If the colon is missing, the argument
+type will be ``int``.
+
 Each argument set will be rendered as a C structure "arg_$name"
 with each of the fields being one of the member arguments.
 
@@ -80,6 +111,7 @@ Argument set examples::
 
   &reg3       ra rb rc
   &loadstore  reg base offset
+  &longldst   reg base offset:int64_t
 
 
 Formats
@@ -167,18 +199,25 @@ Pattern Groups
 
 Syntax::
 
-  group    := '{' ( pat_def | group )+ '}'
+  group            := overlap_group | no_overlap_group
+  overlap_group    := '{' ( pat_def | group )+ '}'
+  no_overlap_group := '[' ( pat_def | group )+ ']'
 
-A *group* begins with a lone open-brace, with all subsequent lines
-indented two spaces, and ending with a lone close-brace.  Groups
-may be nested, increasing the required indentation of the lines
-within the nested group to two spaces per nesting level.
+A *group* begins with a lone open-brace or open-bracket, with all
+subsequent lines indented two spaces, and ending with a lone
+close-brace or close-bracket.  Groups may be nested, increasing the
+required indentation of the lines within the nested group to two
+spaces per nesting level.
 
-Unlike ungrouped patterns, grouped patterns are allowed to overlap.
-Conflicts are resolved by selecting the patterns in order.  If all
-of the fixedbits for a pattern match, its translate function will
-be called.  If the translate function returns false, then subsequent
-patterns within the group will be matched.
+Patterns within overlap groups are allowed to overlap.  Conflicts are
+resolved by selecting the patterns in order.  If all of the fixedbits
+for a pattern match, its translate function will be called.  If the
+translate function returns false, then subsequent patterns within the
+group will be matched.
+
+Patterns within no-overlap groups are not allowed to overlap, just
+the same as ungrouped patterns.  Thus no-overlap groups are intended
+to be nested inside overlap groups.
 
 The following example from PA-RISC shows specialization of the *or*
 instruction::
@@ -194,7 +233,7 @@ instruction::
 When the *cf* field is zero, the instruction has no side effects,
 and may be specialized.  When the *rt* field is zero, the output
 is discarded and so the instruction has no effect.  When the *rt2*
-field is zero, the operation is ``reg[rt] | 0`` and so encodes
+field is zero, the operation is ``reg[r1] | 0`` and so encodes
 the canonical register copy operation.
 
 The output from the generator might look like::

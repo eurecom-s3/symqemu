@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -48,5 +48,28 @@
  */
 QIOChannel *qio_channel_new_fd(int fd,
                                Error **errp);
+
+/**
+ * qio_channel_util_set_aio_fd_handler:
+ * @read_fd: the file descriptor for the read handler
+ * @read_ctx: the AioContext for the read handler
+ * @io_read: the read handler
+ * @write_fd: the file descriptor for the write handler
+ * @write_ctx: the AioContext for the write handler
+ * @io_write: the write handler
+ * @opaque: the opaque argument to the read and write handler
+ *
+ * Set the read and write handlers when @read_ctx and @write_ctx are non-NULL,
+ * respectively. To leave a handler in its current state, pass a NULL
+ * AioContext. To clear a handler, pass a non-NULL AioContext and a NULL
+ * handler.
+ */
+void qio_channel_util_set_aio_fd_handler(int read_fd,
+                                         AioContext *read_ctx,
+                                         IOHandler *io_read,
+                                         int write_fd,
+                                         AioContext *write_ctx,
+                                         IOHandler *io_write,
+                                         void *opaque);
 
 #endif /* QIO_CHANNEL_UTIL_H */

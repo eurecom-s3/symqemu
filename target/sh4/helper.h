@@ -3,7 +3,6 @@ DEF_HELPER_1(raise_illegal_instruction, noreturn, env)
 DEF_HELPER_1(raise_slot_illegal_instruction, noreturn, env)
 DEF_HELPER_1(raise_fpu_disable, noreturn, env)
 DEF_HELPER_1(raise_slot_fpu_disable, noreturn, env)
-DEF_HELPER_1(debug, noreturn, env)
 DEF_HELPER_1(sleep, noreturn, env)
 DEF_HELPER_2(trapa, noreturn, env, i32)
 DEF_HELPER_1(exclusive, noreturn, env)
@@ -12,8 +11,8 @@ DEF_HELPER_3(movcal, void, env, i32, i32)
 DEF_HELPER_1(discard_movcal_backup, void, env)
 DEF_HELPER_2(ocbi, void, env, i32)
 
-DEF_HELPER_3(macl, void, env, i32, i32)
-DEF_HELPER_3(macw, void, env, i32, i32)
+DEF_HELPER_3(macl, void, env, s32, s32)
+DEF_HELPER_3(macw, void, env, s32, s32)
 
 DEF_HELPER_2(ld_fpscr, void, env, i32)
 

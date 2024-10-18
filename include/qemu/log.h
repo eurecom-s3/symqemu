@@ -4,29 +4,15 @@
 /* A small part of this API is split into its own header */
 #include "qemu/log-for-trace.h"
 
-/* Private global variable, don't use */
-extern FILE *qemu_logfile;
-
 /* 
  * The new API:
- *
  */
 
-/* Log settings checking macros: */
+/* Returns true if qemu_log() will really write somewhere. */
+bool qemu_log_enabled(void);
 
-/* Returns true if qemu_log() will really write somewhere
- */
-static inline bool qemu_log_enabled(void)
-{
-    return qemu_logfile != NULL;
-}
-
-/* Returns true if qemu_log() will write somewhere else than stderr
- */
-static inline bool qemu_log_separate(void)
-{
-    return qemu_logfile != NULL && qemu_logfile != stderr;
-}
+/* Returns true if qemu_log() will write somewhere other than stderr. */
+bool qemu_log_separate(void);
 
 #define CPU_LOG_TB_OUT_ASM (1 << 0)
 #define CPU_LOG_TB_IN_ASM  (1 << 1)
@@ -45,34 +31,18 @@ static inline bool qemu_log_separate(void)
 /* LOG_TRACE (1 << 15) is defined in log-for-trace.h */
 #define CPU_LOG_TB_OP_IND  (1 << 16)
 #define CPU_LOG_TB_FPU     (1 << 17)
+#define CPU_LOG_PLUGIN     (1 << 18)
+/* LOG_STRACE is used for user-mode strace logging. */
+#define LOG_STRACE         (1 << 19)
+#define LOG_PER_THREAD     (1 << 20)
+#define CPU_LOG_TB_VPU     (1 << 21)
 
-/* Lock output for a series of related logs.  Since this is not needed
- * for a single qemu_log / qemu_log_mask / qemu_log_mask_and_addr, we
- * assume that qemu_loglevel_mask has already been tested, and that
- * qemu_loglevel is never set when qemu_logfile is unset.
- */
+/* Lock/unlock output. */
 
-static inline void qemu_log_lock(void)
-{
-    qemu_flockfile(qemu_logfile);
-}
-
-static inline void qemu_log_unlock(void)
-{
-    qemu_funlockfile(qemu_logfile);
-}
+FILE *qemu_log_trylock(void) G_GNUC_WARN_UNUSED_RESULT;
+void qemu_log_unlock(FILE *fd);
 
 /* Logging functions: */
-
-/* vfprintf-like logging function
- */
-static inline void GCC_FMT_ATTR(1, 0)
-qemu_log_vprintf(const char *fmt, va_list va)
-{
-    if (qemu_logfile) {
-        vfprintf(qemu_logfile, fmt, va);
-    }
-}
 
 /* log only if a bit is set on the current loglevel mask:
  * @mask: bit to check in the mask
@@ -112,9 +82,9 @@ typedef struct QEMULogItem {
 
 extern const QEMULogItem qemu_log_items[];
 
-void qemu_set_log(int log_flags);
-void qemu_log_needs_buffers(void);
-void qemu_set_log_filename(const char *filename, Error **errp);
+bool qemu_set_log(int log_flags, Error **errp);
+bool qemu_set_log_filename(const char *filename, Error **errp);
+bool qemu_set_log_filename_flags(const char *name, int flags, Error **errp);
 void qemu_set_dfilter_ranges(const char *ranges, Error **errp);
 bool qemu_log_in_addr_range(uint64_t addr);
 int qemu_str_to_log_mask(const char *str);
@@ -123,10 +93,5 @@ int qemu_str_to_log_mask(const char *str);
  * to the specified FILE*.
  */
 void qemu_print_log_usage(FILE *f);
-
-/* fflush() the log file */
-void qemu_log_flush(void);
-/* Close the log file */
-void qemu_log_close(void);
 
 #endif

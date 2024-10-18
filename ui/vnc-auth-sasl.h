@@ -30,7 +30,6 @@
 typedef struct VncStateSASL VncStateSASL;
 typedef struct VncDisplaySASL VncDisplaySASL;
 
-#include "qemu/main-loop.h"
 #include "authz/base.h"
 
 struct VncStateSASL {
@@ -64,6 +63,7 @@ struct VncDisplaySASL {
     char *authzid;
 };
 
+bool vnc_sasl_server_init(Error **errp);
 void vnc_sasl_client_cleanup(VncState *vs);
 
 size_t vnc_client_read_sasl(VncState *vs);

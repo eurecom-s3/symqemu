@@ -113,6 +113,8 @@
 #define VIRTIO_PCI_CAP_DEVICE_CFG	4
 /* PCI configuration access */
 #define VIRTIO_PCI_CAP_PCI_CFG		5
+/* Additional shared memory capability */
+#define VIRTIO_PCI_CAP_SHARED_MEMORY_CFG 8
 
 /* This is the PCI capability header: */
 struct virtio_pci_cap {
@@ -121,9 +123,16 @@ struct virtio_pci_cap {
 	uint8_t cap_len;		/* Generic PCI field: capability length */
 	uint8_t cfg_type;		/* Identifies the structure. */
 	uint8_t bar;		/* Where to find it. */
-	uint8_t padding[3];	/* Pad to full dword. */
+	uint8_t id;		/* Multiple capabilities of the same type */
+	uint8_t padding[2];	/* Pad to full dword. */
 	uint32_t offset;		/* Offset within bar. */
 	uint32_t length;		/* Length of the structure, in bytes. */
+};
+
+struct virtio_pci_cap64 {
+	struct virtio_pci_cap cap;
+	uint32_t offset_hi;             /* Most sig 32 bits of offset */
+	uint32_t length_hi;             /* Most sig 32 bits of length */
 };
 
 struct virtio_pci_notify_cap {
@@ -155,6 +164,20 @@ struct virtio_pci_common_cfg {
 	uint32_t queue_avail_hi;		/* read-write */
 	uint32_t queue_used_lo;		/* read-write */
 	uint32_t queue_used_hi;		/* read-write */
+};
+
+/*
+ * Warning: do not use sizeof on this: use offsetofend for
+ * specific fields you need.
+ */
+struct virtio_pci_modern_common_cfg {
+	struct virtio_pci_common_cfg cfg;
+
+	uint16_t queue_notify_data;	/* read-write */
+	uint16_t queue_reset;		/* read-write */
+
+	uint16_t admin_queue_index;	/* read-only */
+	uint16_t admin_queue_num;		/* read-only */
 };
 
 /* Fields in VIRTIO_PCI_CAP_PCI_CFG: */
@@ -193,7 +216,74 @@ struct virtio_pci_cfg_cap {
 #define VIRTIO_PCI_COMMON_Q_AVAILHI	44
 #define VIRTIO_PCI_COMMON_Q_USEDLO	48
 #define VIRTIO_PCI_COMMON_Q_USEDHI	52
+#define VIRTIO_PCI_COMMON_Q_NDATA	56
+#define VIRTIO_PCI_COMMON_Q_RESET	58
+#define VIRTIO_PCI_COMMON_ADM_Q_IDX	60
+#define VIRTIO_PCI_COMMON_ADM_Q_NUM	62
 
 #endif /* VIRTIO_PCI_NO_MODERN */
+
+/* Admin command status. */
+#define VIRTIO_ADMIN_STATUS_OK		0
+
+/* Admin command opcode. */
+#define VIRTIO_ADMIN_CMD_LIST_QUERY	0x0
+#define VIRTIO_ADMIN_CMD_LIST_USE	0x1
+
+/* Admin command group type. */
+#define VIRTIO_ADMIN_GROUP_TYPE_SRIOV	0x1
+
+/* Transitional device admin command. */
+#define VIRTIO_ADMIN_CMD_LEGACY_COMMON_CFG_WRITE	0x2
+#define VIRTIO_ADMIN_CMD_LEGACY_COMMON_CFG_READ		0x3
+#define VIRTIO_ADMIN_CMD_LEGACY_DEV_CFG_WRITE		0x4
+#define VIRTIO_ADMIN_CMD_LEGACY_DEV_CFG_READ		0x5
+#define VIRTIO_ADMIN_CMD_LEGACY_NOTIFY_INFO		0x6
+
+struct QEMU_PACKED virtio_admin_cmd_hdr {
+	uint16_t opcode;
+	/*
+	 * 1 - SR-IOV
+	 * 2-65535 - reserved
+	 */
+	uint16_t group_type;
+	/* Unused, reserved for future extensions. */
+	uint8_t reserved1[12];
+	uint64_t group_member_id;
+};
+
+struct QEMU_PACKED virtio_admin_cmd_status {
+	uint16_t status;
+	uint16_t status_qualifier;
+	/* Unused, reserved for future extensions. */
+	uint8_t reserved2[4];
+};
+
+struct QEMU_PACKED virtio_admin_cmd_legacy_wr_data {
+	uint8_t offset; /* Starting offset of the register(s) to write. */
+	uint8_t reserved[7];
+	uint8_t registers[];
+};
+
+struct QEMU_PACKED virtio_admin_cmd_legacy_rd_data {
+	uint8_t offset; /* Starting offset of the register(s) to read. */
+};
+
+#define VIRTIO_ADMIN_CMD_NOTIFY_INFO_FLAGS_END 0
+#define VIRTIO_ADMIN_CMD_NOTIFY_INFO_FLAGS_OWNER_DEV 0x1
+#define VIRTIO_ADMIN_CMD_NOTIFY_INFO_FLAGS_OWNER_MEM 0x2
+
+#define VIRTIO_ADMIN_CMD_MAX_NOTIFY_INFO 4
+
+struct QEMU_PACKED virtio_admin_cmd_notify_info_data {
+	uint8_t flags; /* 0 = end of list, 1 = owner device, 2 = member device */
+	uint8_t bar; /* BAR of the member or the owner device */
+	uint8_t padding[6];
+	uint64_t offset; /* Offset within bar. */
+};
+
+struct virtio_admin_cmd_notify_info_result {
+	struct virtio_admin_cmd_notify_info_data entries[VIRTIO_ADMIN_CMD_MAX_NOTIFY_INFO];
+};
 
 #endif

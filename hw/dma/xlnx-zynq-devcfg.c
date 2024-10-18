@@ -26,8 +26,9 @@
 
 #include "qemu/osdep.h"
 #include "hw/dma/xlnx-zynq-devcfg.h"
+#include "hw/irq.h"
+#include "migration/vmstate.h"
 #include "qemu/bitops.h"
-#include "sysemu/sysemu.h"
 #include "sysemu/dma.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -160,12 +161,14 @@ static void xlnx_zynq_devcfg_dma_go(XlnxZynqDevcfg *s)
             btt = MIN(btt, dmah->dest_len);
         }
         DB_PRINT("reading %x bytes from %x\n", btt, dmah->src_addr);
-        dma_memory_read(&address_space_memory, dmah->src_addr, buf, btt);
+        dma_memory_read(&address_space_memory, dmah->src_addr, buf, btt,
+                        MEMTXATTRS_UNSPECIFIED);
         dmah->src_len -= btt;
         dmah->src_addr += btt;
         if (loopback && (dmah->src_len || dmah->dest_len)) {
             DB_PRINT("writing %x bytes from %x\n", btt, dmah->dest_addr);
-            dma_memory_write(&address_space_memory, dmah->dest_addr, buf, btt);
+            dma_memory_write(&address_space_memory, dmah->dest_addr, buf, btt,
+                             MEMTXATTRS_UNSPECIFIED);
             dmah->dest_len -= btt;
             dmah->dest_addr += btt;
         }
@@ -330,7 +333,7 @@ static const VMStateDescription vmstate_xlnx_zynq_devcfg_dma_cmd = {
     .name = "xlnx_zynq_devcfg_dma_cmd",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(src_addr, XlnxZynqDevcfgDMACmd),
         VMSTATE_UINT32(dest_addr, XlnxZynqDevcfgDMACmd),
         VMSTATE_UINT32(src_len, XlnxZynqDevcfgDMACmd),
@@ -343,7 +346,7 @@ static const VMStateDescription vmstate_xlnx_zynq_devcfg = {
     .name = "xlnx_zynq_devcfg",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_STRUCT_ARRAY(dma_cmd_fifo, XlnxZynqDevcfg,
                              XLNX_ZYNQ_DEVCFG_DMA_CMD_FIFO_LEN, 0,
                              vmstate_xlnx_zynq_devcfg_dma_cmd,

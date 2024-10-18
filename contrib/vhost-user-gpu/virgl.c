@@ -12,8 +12,11 @@
  * See the COPYING file in the top-level directory.
  */
 
+#include "qemu/osdep.h"
 #include <virglrenderer.h>
 #include "virgl.h"
+
+#include <epoxy/gl.h>
 
 void
 vg_virgl_update_cursor_data(VuGpu *g, uint32_t resource_id,
@@ -105,9 +108,17 @@ virgl_cmd_resource_unref(VuGpu *g,
                          struct virtio_gpu_ctrl_command *cmd)
 {
     struct virtio_gpu_resource_unref unref;
+    struct iovec *res_iovs = NULL;
+    int num_iovs = 0;
 
     VUGPU_FILL_CMD(unref);
 
+    virgl_renderer_resource_detach_iov(unref.resource_id,
+                                       &res_iovs,
+                                       &num_iovs);
+    if (res_iovs != NULL && num_iovs != 0) {
+        vg_cleanup_mapping_iov(g, res_iovs, num_iovs);
+    }
     virgl_renderer_resource_unref(unref.resource_id);
 }
 
@@ -125,6 +136,7 @@ virgl_cmd_get_capset_info(VuGpu *g,
 
     VUGPU_FILL_CMD(info);
 
+    memset(&resp, 0, sizeof(resp));
     if (info.capset_index == 0) {
         resp.capset_id = VIRTIO_GPU_CAPSET_VIRGL;
         virgl_renderer_get_cap_set(resp.capset_id,
@@ -166,6 +178,10 @@ virgl_cmd_get_capset(VuGpu *g,
 
     virgl_renderer_get_cap_set(gc.capset_id, &max_ver,
                                &max_size);
+    if (!max_size) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        return;
+    }
     resp = g_malloc0(sizeof(*resp) + max_size);
 
     resp->hdr.type = VIRTIO_GPU_RESP_OK_CAPSET;
@@ -276,8 +292,11 @@ virgl_resource_attach_backing(VuGpu *g,
         return;
     }
 
-    virgl_renderer_resource_attach_iov(att_rb.resource_id,
+    ret = virgl_renderer_resource_attach_iov(att_rb.resource_id,
                                        res_iovs, att_rb.nr_entries);
+    if (ret != 0) {
+        vg_cleanup_mapping_iov(g, res_iovs, att_rb.nr_entries);
+    }
 }
 
 static void
@@ -296,7 +315,38 @@ virgl_resource_detach_backing(VuGpu *g,
     if (res_iovs == NULL || num_iovs == 0) {
         return;
     }
-    g_free(res_iovs);
+    vg_cleanup_mapping_iov(g, res_iovs, num_iovs);
+}
+
+static int
+virgl_get_resource_info_modifiers(uint32_t resource_id,
+                                  struct virgl_renderer_resource_info *info,
+                                  uint64_t *modifiers)
+{
+    int ret;
+#ifdef VIRGL_RENDERER_RESOURCE_INFO_EXT_VERSION
+    struct virgl_renderer_resource_info_ext info_ext;
+    ret = virgl_renderer_resource_get_info_ext(resource_id, &info_ext);
+    if (ret) {
+        return ret;
+    }
+
+    *info = info_ext.base;
+    *modifiers = info_ext.modifiers;
+#else
+    ret = virgl_renderer_resource_get_info(resource_id, info);
+    if (ret) {
+        return ret;
+    }
+
+    /*
+     * Before virgl_renderer_resource_get_info_ext,
+     * getting the modifiers was not possible.
+     */
+    *modifiers = 0;
+#endif
+
+    return 0;
 }
 
 static void
@@ -319,8 +369,10 @@ virgl_cmd_set_scanout(VuGpu *g,
     memset(&info, 0, sizeof(info));
 
     if (ss.resource_id && ss.r.width && ss.r.height) {
-        ret = virgl_renderer_resource_get_info(ss.resource_id, &info);
-        if (ret == -1) {
+        uint64_t modifiers = 0;
+        ret = virgl_get_resource_info_modifiers(ss.resource_id, &info,
+                                                &modifiers);
+        if (ret) {
             g_critical("%s: illegal resource specified %d\n",
                        __func__, ss.resource_id);
             cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
@@ -335,8 +387,6 @@ virgl_cmd_set_scanout(VuGpu *g,
         }
         assert(fd >= 0);
         VhostUserGpuMsg msg = {
-            .request = VHOST_USER_GPU_DMABUF_SCANOUT,
-            .size = sizeof(VhostUserGpuDMABUFScanout),
             .payload.dmabuf_scanout.scanout_id = ss.scanout_id,
             .payload.dmabuf_scanout.x =  ss.r.x,
             .payload.dmabuf_scanout.y =  ss.r.y,
@@ -348,6 +398,20 @@ virgl_cmd_set_scanout(VuGpu *g,
             .payload.dmabuf_scanout.fd_flags = info.flags,
             .payload.dmabuf_scanout.fd_drm_fourcc = info.drm_fourcc
         };
+
+        if (g->use_modifiers) {
+            /*
+             * The message uses all the fields set in dmabuf_scanout plus
+             * modifiers which is appended after VhostUserGpuDMABUFScanout.
+             */
+            msg.request = VHOST_USER_GPU_DMABUF_SCANOUT2;
+            msg.size = sizeof(VhostUserGpuDMABUFScanout2);
+            msg.payload.dmabuf_scanout2.modifier = modifiers;
+        } else {
+            msg.request = VHOST_USER_GPU_DMABUF_SCANOUT;
+            msg.size = sizeof(VhostUserGpuDMABUFScanout);
+        }
+
         vg_send_msg(g, &msg, fd);
         close(fd);
     } else {
@@ -371,6 +435,7 @@ virgl_cmd_resource_flush(VuGpu *g,
 
     VUGPU_FILL_CMD(rf);
 
+    glFlush();
     if (!rf.resource_id) {
         g_debug("bad resource id for flush..?");
         return;
@@ -475,13 +540,16 @@ void vg_virgl_process_cmd(VuGpu *g, struct virtio_gpu_ctrl_command *cmd)
     case VIRTIO_GPU_CMD_GET_DISPLAY_INFO:
         vg_get_display_info(g, cmd);
         break;
+    case VIRTIO_GPU_CMD_GET_EDID:
+        vg_get_edid(g, cmd);
+        break;
     default:
         g_debug("TODO handle ctrl %x\n", cmd->cmd_hdr.type);
         cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
         break;
     }
 
-    if (cmd->finished) {
+    if (cmd->state != VG_CMD_STATE_NEW) {
         return;
     }
 
@@ -519,7 +587,7 @@ virgl_write_fence(void *opaque, uint32_t fence)
         g_debug("FENCE %" PRIu64, cmd->cmd_hdr.fence_id);
         vg_ctrl_response_nodata(g, cmd, VIRTIO_GPU_RESP_OK_NODATA);
         QTAILQ_REMOVE(&g->fenceq, cmd, next);
-        g_free(cmd);
+        free(cmd);
         g->inflight--;
     }
 }

@@ -1,1 +1,1 @@
-tests/qapi-schema/quoted-structural-chars.json:1:1: Expected "{"
+quoted-structural-chars.json:1: top-level expression must be an object

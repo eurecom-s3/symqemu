@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw auto quick
 ##
 ## qemu-img compare test (qcow2 only ones)
 ##
@@ -20,7 +21,7 @@
 ##
 #
 # creator
-owner=famz@redhat.com
+owner=fam@euphon.net
 
 seq=`basename $0`
 echo "QA output created by $seq"
@@ -31,7 +32,7 @@ _cleanup()
 {
     echo "Cleanup"
     _cleanup_test_img
-    rm "${TEST_IMG2}"
+    _rm_test_img "${TEST_IMG2}"
     rm -f "$TEST_DIR/blkdebug.conf"
 }
 trap "_cleanup; exit \$status" 0 1 2 3 15
@@ -50,6 +51,8 @@ _compare()
 _supported_fmt qcow2
 _supported_proto file
 _supported_os Linux
+# blkdebug can only inject errors on bs->file
+_unsupported_imgopts data_file
 
 # Setup test basic parameters
 TEST_IMG2=$TEST_IMG.2

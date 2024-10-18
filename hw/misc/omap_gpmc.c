@@ -18,8 +18,9 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
+
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
 #include "hw/block/flash.h"
 #include "hw/arm/omap.h"
 #include "exec/memory.h"
@@ -125,7 +126,7 @@ static void omap_gpmc_dma_update(struct omap_gpmc_s *s, int value)
 static uint64_t omap_nand_read(void *opaque, hwaddr addr,
                                unsigned size)
 {
-    struct omap_gpmc_cs_file_s *f = (struct omap_gpmc_cs_file_s *)opaque;
+    struct omap_gpmc_cs_file_s *f = opaque;
     uint64_t v;
     nand_setpins(f->dev, 0, 0, 0, 1, 0);
     switch (omap_gpmc_devsize(f)) {
@@ -204,7 +205,7 @@ static void omap_nand_setio(DeviceState *dev, uint64_t value,
 static void omap_nand_write(void *opaque, hwaddr addr,
                             uint64_t value, unsigned size)
 {
-    struct omap_gpmc_cs_file_s *f = (struct omap_gpmc_cs_file_s *)opaque;
+    struct omap_gpmc_cs_file_s *f = opaque;
     nand_setpins(f->dev, 0, 0, 0, 1, 0);
     omap_nand_setio(f->dev, value, omap_gpmc_devsize(f), size);
 }
@@ -289,7 +290,7 @@ static void fill_prefetch_fifo(struct omap_gpmc_s *s)
 static uint64_t omap_gpmc_prefetch_read(void *opaque, hwaddr addr,
                                         unsigned size)
 {
-    struct omap_gpmc_s *s = (struct omap_gpmc_s *) opaque;
+    struct omap_gpmc_s *s = opaque;
     uint32_t data;
     if (s->prefetch.config1 & 1) {
         /* The TRM doesn't define the behaviour if you read from the
@@ -319,7 +320,7 @@ static uint64_t omap_gpmc_prefetch_read(void *opaque, hwaddr addr,
 static void omap_gpmc_prefetch_write(void *opaque, hwaddr addr,
                                      uint64_t value, unsigned size)
 {
-    struct omap_gpmc_s *s = (struct omap_gpmc_s *) opaque;
+    struct omap_gpmc_s *s = opaque;
     int cs = prefetch_cs(s->prefetch.config1);
     if ((s->prefetch.config1 & 1) == 0) {
         /* The TRM doesn't define the behaviour of writing to the
@@ -508,7 +509,7 @@ static int gpmc_wordaccess_only(hwaddr addr)
 static uint64_t omap_gpmc_read(void *opaque, hwaddr addr,
                                unsigned size)
 {
-    struct omap_gpmc_s *s = (struct omap_gpmc_s *) opaque;
+    struct omap_gpmc_s *s = opaque;
     int cs;
     struct omap_gpmc_cs_file_s *f;
 
@@ -620,7 +621,7 @@ static uint64_t omap_gpmc_read(void *opaque, hwaddr addr,
 static void omap_gpmc_write(void *opaque, hwaddr addr,
                             uint64_t value, unsigned size)
 {
-    struct omap_gpmc_s *s = (struct omap_gpmc_s *) opaque;
+    struct omap_gpmc_s *s = opaque;
     int cs;
     struct omap_gpmc_cs_file_s *f;
 

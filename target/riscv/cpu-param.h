@@ -6,7 +6,7 @@
  */
 
 #ifndef RISCV_CPU_PARAM_H
-#define RISCV_CPU_PARAM_H 1
+#define RISCV_CPU_PARAM_H
 
 #if defined(TARGET_RISCV64)
 # define TARGET_LONG_BITS 64
@@ -18,6 +18,14 @@
 # define TARGET_VIRT_ADDR_SPACE_BITS 32 /* sv32 */
 #endif
 #define TARGET_PAGE_BITS 12 /* 4 KiB Pages */
-#define NB_MMU_MODES 4
+/*
+ * The current MMU Modes are:
+ *  - U mode 0b000
+ *  - S mode 0b001
+ *  - M mode 0b011
+ *  - U mode HLV/HLVX/HSV 0b100
+ *  - S mode HLV/HLVX/HSV 0b101
+ *  - M mode HLV/HLVX/HSV 0b111
+ */
 
 #endif

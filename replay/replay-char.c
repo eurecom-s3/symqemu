@@ -13,7 +13,6 @@
 #include "qemu/error-report.h"
 #include "sysemu/replay.h"
 #include "replay-internal.h"
-#include "sysemu/sysemu.h"
 #include "chardev/char.h"
 
 /* Char drivers that generate qemu_chr_be_write events
@@ -49,9 +48,9 @@ void replay_register_char_driver(Chardev *chr)
     char_drivers[drivers_count++] = chr;
 }
 
-void replay_chr_be_write(Chardev *s, uint8_t *buf, int len)
+void replay_chr_be_write(Chardev *s, const uint8_t *buf, int len)
 {
-    CharEvent *event = g_malloc0(sizeof(CharEvent));
+    CharEvent *event = g_new0(CharEvent, 1);
 
     event->id = find_char_driver(s);
     if (event->id < 0) {
@@ -86,7 +85,7 @@ void replay_event_char_read_save(void *opaque)
 
 void *replay_event_char_read_load(void)
 {
-    CharEvent *event = g_malloc0(sizeof(CharEvent));
+    CharEvent *event = g_new0(CharEvent, 1);
 
     event->id = replay_get_byte();
     replay_get_array_alloc(&event->buf, &event->len);
@@ -114,8 +113,7 @@ void replay_char_write_event_load(int *res, int *offset)
         *offset = replay_get_dword();
         replay_finish_event();
     } else {
-        error_report("Missing character write event in the replay log");
-        exit(1);
+        replay_sync_error("Missing character write event in the replay log");
     }
 }
 
@@ -136,8 +134,7 @@ int replay_char_read_all_load(uint8_t *buf)
         replay_finish_event();
         return res;
     } else {
-        error_report("Missing character read all event in the replay log");
-        exit(1);
+        replay_sync_error("Missing character read all event in the replay log");
     }
 }
 

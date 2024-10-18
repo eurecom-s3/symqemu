@@ -13,14 +13,18 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "qemu/error-report.h"
+#include "qemu/iov.h"
+#include "qemu/main-loop.h"
 #include "hw/virtio/virtio-pmem.h"
+#include "hw/qdev-properties.h"
 #include "hw/virtio/virtio-access.h"
 #include "standard-headers/linux/virtio_ids.h"
 #include "standard-headers/linux/virtio_pmem.h"
+#include "sysemu/hostmem.h"
 #include "block/aio.h"
 #include "block/thread-pool.h"
+#include "trace.h"
 
 typedef struct VirtIODeviceRequest {
     VirtQueueElement elem;
@@ -38,11 +42,12 @@ static int worker_cb(void *opaque)
 
     /* flush raw backing image */
     err = fsync(req_data->fd);
+    trace_virtio_pmem_flush_done(err);
     if (err != 0) {
         err = 1;
     }
 
-    virtio_stw_p(req_data->vdev, &req_data->resp.ret, err);
+    virtio_stl_p(req_data->vdev, &req_data->resp.ret, err);
 
     return 0;
 }
@@ -56,6 +61,7 @@ static void done_cb(void *opaque, int ret)
     /* Callbacks are serialized, so no need to use atomic ops. */
     virtqueue_push(req_data->pmem->rq_vq, &req_data->elem, len);
     virtio_notify((VirtIODevice *)req_data->pmem, req_data->pmem->rq_vq);
+    trace_virtio_pmem_response();
     g_free(req_data);
 }
 
@@ -64,8 +70,8 @@ static void virtio_pmem_flush(VirtIODevice *vdev, VirtQueue *vq)
     VirtIODeviceRequest *req_data;
     VirtIOPMEM *pmem = VIRTIO_PMEM(vdev);
     HostMemoryBackend *backend = MEMORY_BACKEND(pmem->memdev);
-    ThreadPool *pool = aio_get_thread_pool(qemu_get_aio_context());
 
+    trace_virtio_pmem_flush_request();
     req_data = virtqueue_pop(vq, sizeof(VirtIODeviceRequest));
     if (!req_data) {
         virtio_error(vdev, "virtio-pmem missing request data");
@@ -74,13 +80,14 @@ static void virtio_pmem_flush(VirtIODevice *vdev, VirtQueue *vq)
 
     if (req_data->elem.out_num < 1 || req_data->elem.in_num < 1) {
         virtio_error(vdev, "virtio-pmem request not proper");
+        virtqueue_detach_element(vq, (VirtQueueElement *)req_data, 0);
         g_free(req_data);
         return;
     }
     req_data->fd   = memory_region_get_fd(&backend->mr);
     req_data->pmem = pmem;
     req_data->vdev = vdev;
-    thread_pool_submit_aio(pool, worker_cb, req_data, done_cb, req_data);
+    thread_pool_submit_aio(worker_cb, req_data, done_cb, req_data);
 }
 
 static void virtio_pmem_get_config(VirtIODevice *vdev, uint8_t *config)
@@ -109,24 +116,23 @@ static void virtio_pmem_realize(DeviceState *dev, Error **errp)
     }
 
     if (host_memory_backend_is_mapped(pmem->memdev)) {
-        char *path = object_get_canonical_path_component(OBJECT(pmem->memdev));
-        error_setg(errp, "can't use already busy memdev: %s", path);
-        g_free(path);
+        error_setg(errp, "can't use already busy memdev: %s",
+                   object_get_canonical_path_component(OBJECT(pmem->memdev)));
         return;
     }
 
     host_memory_backend_set_mapped(pmem->memdev, true);
-    virtio_init(vdev, TYPE_VIRTIO_PMEM, VIRTIO_ID_PMEM,
-                sizeof(struct virtio_pmem_config));
+    virtio_init(vdev, VIRTIO_ID_PMEM, sizeof(struct virtio_pmem_config));
     pmem->rq_vq = virtio_add_queue(vdev, 128, virtio_pmem_flush);
 }
 
-static void virtio_pmem_unrealize(DeviceState *dev, Error **errp)
+static void virtio_pmem_unrealize(DeviceState *dev)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VirtIOPMEM *pmem = VIRTIO_PMEM(dev);
 
     host_memory_backend_set_mapped(pmem->memdev, false);
+    virtio_delete_queue(pmem->rq_vq);
     virtio_cleanup(vdev);
 }
 
@@ -162,7 +168,7 @@ static void virtio_pmem_class_init(ObjectClass *klass, void *data)
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
     VirtIOPMEMClass *vpc = VIRTIO_PMEM_CLASS(klass);
 
-    dc->props = virtio_pmem_properties;
+    device_class_set_props(dc, virtio_pmem_properties);
 
     vdc->realize = virtio_pmem_realize;
     vdc->unrealize = virtio_pmem_unrealize;
@@ -171,9 +177,10 @@ static void virtio_pmem_class_init(ObjectClass *klass, void *data)
 
     vpc->fill_device_info = virtio_pmem_fill_device_info;
     vpc->get_memory_region = virtio_pmem_get_memory_region;
+    set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
 }
 
-static TypeInfo virtio_pmem_info = {
+static const TypeInfo virtio_pmem_info = {
     .name          = TYPE_VIRTIO_PMEM,
     .parent        = TYPE_VIRTIO_DEVICE,
     .class_size    = sizeof(VirtIOPMEMClass),

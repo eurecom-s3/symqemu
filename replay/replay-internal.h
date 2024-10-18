@@ -12,7 +12,25 @@
  *
  */
 
-/* Any changes to order/number of events will need to bump REPLAY_VERSION */
+/* Asynchronous events IDs */
+
+typedef enum ReplayAsyncEventKind {
+    REPLAY_ASYNC_EVENT_BH,
+    REPLAY_ASYNC_EVENT_BH_ONESHOT,
+    REPLAY_ASYNC_EVENT_INPUT,
+    REPLAY_ASYNC_EVENT_INPUT_SYNC,
+    REPLAY_ASYNC_EVENT_CHAR_READ,
+    REPLAY_ASYNC_EVENT_BLOCK,
+    REPLAY_ASYNC_EVENT_NET,
+    REPLAY_ASYNC_COUNT
+} ReplayAsyncEventKind;
+
+/*
+ * Any changes to order/number of events will need to bump
+ * REPLAY_VERSION to prevent confusion with old logs. Also don't
+ * forget to update replay_event_name() to make your debugging life
+ * easier.
+ */
 enum ReplayEvents {
     /* for instruction event */
     EVENT_INSTRUCTION,
@@ -22,6 +40,7 @@ enum ReplayEvents {
     EVENT_EXCEPTION,
     /* for async events */
     EVENT_ASYNC,
+    EVENT_ASYNC_LAST = EVENT_ASYNC + REPLAY_ASYNC_COUNT - 1,
     /* for shutdown requests, range allows recovery of ShutdownCause */
     EVENT_SHUTDOWN,
     EVENT_SHUTDOWN_LAST = EVENT_SHUTDOWN + SHUTDOWN_CAUSE__MAX,
@@ -34,6 +53,8 @@ enum ReplayEvents {
     EVENT_AUDIO_OUT,
     /* for audio in event */
     EVENT_AUDIO_IN,
+    /* for random number generator */
+    EVENT_RANDOM,
     /* for clock read/writes */
     /* some of greater codes are reserved for clocks */
     EVENT_CLOCK,
@@ -47,50 +68,43 @@ enum ReplayEvents {
     EVENT_COUNT
 };
 
-/* Asynchronous events IDs */
-
-enum ReplayAsyncEventKind {
-    REPLAY_ASYNC_EVENT_BH,
-    REPLAY_ASYNC_EVENT_INPUT,
-    REPLAY_ASYNC_EVENT_INPUT_SYNC,
-    REPLAY_ASYNC_EVENT_CHAR_READ,
-    REPLAY_ASYNC_EVENT_BLOCK,
-    REPLAY_ASYNC_EVENT_NET,
-    REPLAY_ASYNC_COUNT
-};
-
-typedef enum ReplayAsyncEventKind ReplayAsyncEventKind;
-
+/**
+ * typedef ReplayState - global tracking Replay state
+ *
+ * This structure tracks where we are in the current ReplayState
+ * including the logged events from the recorded replay stream. Some
+ * of the data is also stored/restored from VMStateDescription when VM
+ * save/restore events take place.
+ *
+ * @cached_clock: Cached clocks values
+ * @current_icount: number of processed instructions
+ * @instruction_count: number of instructions until next event
+ * @current_event: current event index
+ * @data_kind: current event
+ * @has_unread_data: true if event not yet processed
+ * @file_offset: offset into replay log at replay snapshot
+ * @block_request_id: current serialised block request id
+ * @read_event_id: current async read event id
+ */
 typedef struct ReplayState {
-    /*! Cached clock values. */
     int64_t cached_clock[REPLAY_CLOCK_COUNT];
-    /*! Current step - number of processed instructions and timer events. */
-    uint64_t current_step;
-    /*! Number of instructions to be executed before other events happen. */
-    int instructions_count;
-    /*! Type of the currently executed event. */
+    uint64_t current_icount;
+    int instruction_count;
+    unsigned int current_event;
     unsigned int data_kind;
-    /*! Flag which indicates that event is not processed yet. */
-    unsigned int has_unread_data;
-    /*! Temporary variable for saving current log offset. */
+    bool has_unread_data;
     uint64_t file_offset;
-    /*! Next block operation id.
-        This counter is global, because requests from different
-        block devices should not get overlapping ids. */
     uint64_t block_request_id;
-    /*! Prior value of the host clock */
-    uint64_t host_clock_last;
-    /*! Asynchronous event type read from the log */
-    int32_t read_event_kind;
-    /*! Asynchronous event id read from the log */
     uint64_t read_event_id;
-    /*! Asynchronous event checkpoint id read from the log */
-    int32_t read_event_checkpoint;
 } ReplayState;
 extern ReplayState replay_state;
 
 /* File for replay writing */
 extern FILE *replay_file;
+/* Instruction count of the replay breakpoint */
+extern uint64_t replay_break_icount;
+/* Timer for the replay breakpoint callback */
+extern QEMUTimer *replay_break_timer;
 
 void replay_put_byte(uint8_t byte);
 void replay_put_event(uint8_t event);
@@ -122,8 +136,8 @@ void replay_finish_event(void);
     data_kind variable. */
 void replay_fetch_data_kind(void);
 
-/*! Advance replay_state.current_step to the specified value. */
-void replay_advance_current_step(uint64_t current_step);
+/*! Advance replay_state.current_icount to the specified value. */
+void replay_advance_current_icount(uint64_t current_icount);
 /*! Saves queued events (like instructions and sound). */
 void replay_save_instructions(void);
 
@@ -134,7 +148,7 @@ bool replay_next_event_is(int event);
 /*! Reads next clock value from the file.
     If clock kind read from the file is different from the parameter,
     the value is not used. */
-void replay_read_next_clock(unsigned int kind);
+void replay_read_next_clock(ReplayClockKind kind);
 
 /* Asynchronous events queue */
 
@@ -142,14 +156,12 @@ void replay_read_next_clock(unsigned int kind);
 void replay_init_events(void);
 /*! Clears internal data structures for events handling */
 void replay_finish_events(void);
-/*! Flushes events queue */
-void replay_flush_events(void);
 /*! Returns true if there are any unsaved events in the queue */
 bool replay_has_events(void);
 /*! Saves events from queue into the file */
-void replay_save_events(int checkpoint);
+void replay_save_events(void);
 /*! Read events from the file into the input queue */
-void replay_read_events(int checkpoint);
+void replay_read_events(void);
 /*! Adds specified async event to the queue */
 void replay_add_event(ReplayAsyncEventKind event_kind, void *opaque,
                       void *opaque2, uint64_t id);
@@ -182,6 +194,16 @@ void replay_event_net_run(void *opaque);
 void replay_event_net_save(void *opaque);
 /*! Reads network from the file. */
 void *replay_event_net_load(void);
+
+/* Diagnostics */
+
+/**
+ * replay_sync_error(): report sync error and exit
+ *
+ * When we reach an error condition we want to report it centrally so
+ * we can also dump some useful information into the logs.
+ */
+G_NORETURN void replay_sync_error(const char *error);
 
 /* VMState-related functions */
 

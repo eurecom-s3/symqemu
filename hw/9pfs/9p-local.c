@@ -10,6 +10,11 @@
  * the COPYING file in the top-level directory.
  */
 
+/*
+ * Not so fast! You might want to read the 9p developer docs first:
+ * https://wiki.qemu.org/Documentation/9p
+ */
+
 #include "qemu/osdep.h"
 #include "9p.h"
 #include "9p-local.h"
@@ -27,9 +32,11 @@
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include <libgen.h>
+#ifdef CONFIG_LINUX
 #include <linux/fs.h>
 #ifdef CONFIG_LINUX_MAGIC_H
 #include <linux/magic.h>
+#endif
 #endif
 #include <sys/ioctl.h>
 
@@ -96,14 +103,14 @@ static void renameat_preserve_errno(int odirfd, const char *opath, int ndirfd,
                                     const char *npath)
 {
     int serrno = errno;
-    renameat(odirfd, opath, ndirfd, npath);
+    qemu_renameat(odirfd, opath, ndirfd, npath);
     errno = serrno;
 }
 
 static void unlinkat_preserve_errno(int dirfd, const char *path, int flags)
 {
     int serrno = errno;
-    unlinkat(dirfd, path, flags);
+    qemu_unlinkat(dirfd, path, flags);
     errno = serrno;
 }
 
@@ -162,13 +169,13 @@ static void local_mapped_file_attr(int dirfd, const char *name,
     memset(buf, 0, ATTR_MAX);
     while (fgets(buf, ATTR_MAX, fp)) {
         if (!strncmp(buf, "virtfs.uid", 10)) {
-            stbuf->st_uid = atoi(buf+11);
+            stbuf->st_uid = atoi(buf + 11);
         } else if (!strncmp(buf, "virtfs.gid", 10)) {
-            stbuf->st_gid = atoi(buf+11);
+            stbuf->st_gid = atoi(buf + 11);
         } else if (!strncmp(buf, "virtfs.mode", 11)) {
-            stbuf->st_mode = atoi(buf+12);
+            stbuf->st_mode = atoi(buf + 12);
         } else if (!strncmp(buf, "virtfs.rdev", 11)) {
-            stbuf->st_rdev = atoi(buf+12);
+            stbuf->st_rdev = atoi(buf + 12);
         }
         memset(buf, 0, ATTR_MAX);
     }
@@ -187,7 +194,7 @@ static int local_lstat(FsContext *fs_ctx, V9fsPath *fs_path, struct stat *stbuf)
         goto out;
     }
 
-    err = fstatat(dirfd, name, stbuf, AT_SYMLINK_NOFOLLOW);
+    err = qemu_fstatat(dirfd, name, stbuf, AT_SYMLINK_NOFOLLOW);
     if (err) {
         goto err_out;
     }
@@ -246,7 +253,7 @@ static int local_set_mapped_file_attrat(int dirfd, const char *name,
             }
         }
     } else {
-        ret = mkdirat(dirfd, VIRTFS_META_DIR, 0700);
+        ret = qemu_mkdirat(dirfd, VIRTFS_META_DIR, 0700);
         if (ret < 0 && errno != EEXIST) {
             return -1;
         }
@@ -342,7 +349,7 @@ static int fchmodat_nofollow(int dirfd, const char *name, mode_t mode)
      */
 
      /* First, we clear non-racing symlinks out of the way. */
-    if (fstatat(dirfd, name, &stbuf, AT_SYMLINK_NOFOLLOW)) {
+    if (qemu_fstatat(dirfd, name, &stbuf, AT_SYMLINK_NOFOLLOW)) {
         return -1;
     }
     if (S_ISLNK(stbuf.st_mode)) {
@@ -463,9 +470,7 @@ static ssize_t local_readlink(FsContext *fs_ctx, V9fsPath *fs_path,
         if (fd == -1) {
             return -1;
         }
-        do {
-            tsize = read(fd, (void *)buf, bufsz);
-        } while (tsize == -1 && errno == EINTR);
+        tsize = RETRY_ON_EINTR(read(fd, (void *)buf, bufsz));
         close_preserve_errno(fd);
     } else if ((fs_ctx->export_flags & V9FS_SM_PASSTHROUGH) ||
                (fs_ctx->export_flags & V9FS_SM_NONE)) {
@@ -555,6 +560,15 @@ again:
     if (!entry) {
         return NULL;
     }
+#ifdef CONFIG_DARWIN
+    int off;
+    off = telldir(fs->dir.stream);
+    /* If telldir fails, fail the entire readdir call */
+    if (off < 0) {
+        return NULL;
+    }
+    entry->d_seekoff = off;
+#endif
 
     if (ctx->export_flags & V9FS_SM_MAPPED) {
         entry->d_type = DT_UNKNOWN;
@@ -610,7 +624,7 @@ static ssize_t local_pwritev(FsContext *ctx, V9fsFidOpenState *fs,
         /*
          * Initiate a writeback. This is not a data integrity sync.
          * We want to ensure that we don't leave dirty pages in the cache
-         * after write when writeout=immediate is sepcified.
+         * after write when writeout=immediate is specified.
          */
         sync_file_range(fs->fd, offset, ret,
                         SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE);
@@ -666,7 +680,7 @@ static int local_mknod(FsContext *fs_ctx, V9fsPath *dir_path,
 
     if (fs_ctx->export_flags & V9FS_SM_MAPPED ||
         fs_ctx->export_flags & V9FS_SM_MAPPED_FILE) {
-        err = mknodat(dirfd, name, fs_ctx->fmode | S_IFREG, 0);
+        err = qemu_mknodat(dirfd, name, fs_ctx->fmode | S_IFREG, 0);
         if (err == -1) {
             goto out;
         }
@@ -681,7 +695,7 @@ static int local_mknod(FsContext *fs_ctx, V9fsPath *dir_path,
         }
     } else if (fs_ctx->export_flags & V9FS_SM_PASSTHROUGH ||
                fs_ctx->export_flags & V9FS_SM_NONE) {
-        err = mknodat(dirfd, name, credp->fc_mode, credp->fc_rdev);
+        err = qemu_mknodat(dirfd, name, credp->fc_mode, credp->fc_rdev);
         if (err == -1) {
             goto out;
         }
@@ -718,7 +732,7 @@ static int local_mkdir(FsContext *fs_ctx, V9fsPath *dir_path,
 
     if (fs_ctx->export_flags & V9FS_SM_MAPPED ||
         fs_ctx->export_flags & V9FS_SM_MAPPED_FILE) {
-        err = mkdirat(dirfd, name, fs_ctx->dmode);
+        err = qemu_mkdirat(dirfd, name, fs_ctx->dmode);
         if (err == -1) {
             goto out;
         }
@@ -734,7 +748,7 @@ static int local_mkdir(FsContext *fs_ctx, V9fsPath *dir_path,
         }
     } else if (fs_ctx->export_flags & V9FS_SM_PASSTHROUGH ||
                fs_ctx->export_flags & V9FS_SM_NONE) {
-        err = mkdirat(dirfd, name, credp->fc_mode);
+        err = qemu_mkdirat(dirfd, name, credp->fc_mode);
         if (err == -1) {
             goto out;
         }
@@ -774,16 +788,20 @@ static int local_fstat(FsContext *fs_ctx, int fid_type,
         mode_t tmp_mode;
         dev_t tmp_dev;
 
-        if (fgetxattr(fd, "user.virtfs.uid", &tmp_uid, sizeof(uid_t)) > 0) {
+        if (qemu_fgetxattr(fd, "user.virtfs.uid",
+                           &tmp_uid, sizeof(uid_t)) > 0) {
             stbuf->st_uid = le32_to_cpu(tmp_uid);
         }
-        if (fgetxattr(fd, "user.virtfs.gid", &tmp_gid, sizeof(gid_t)) > 0) {
+        if (qemu_fgetxattr(fd, "user.virtfs.gid",
+                           &tmp_gid, sizeof(gid_t)) > 0) {
             stbuf->st_gid = le32_to_cpu(tmp_gid);
         }
-        if (fgetxattr(fd, "user.virtfs.mode", &tmp_mode, sizeof(mode_t)) > 0) {
+        if (qemu_fgetxattr(fd, "user.virtfs.mode",
+                           &tmp_mode, sizeof(mode_t)) > 0) {
             stbuf->st_mode = le32_to_cpu(tmp_mode);
         }
-        if (fgetxattr(fd, "user.virtfs.rdev", &tmp_dev, sizeof(dev_t)) > 0) {
+        if (qemu_fgetxattr(fd, "user.virtfs.rdev",
+                           &tmp_dev, sizeof(dev_t)) > 0) {
             stbuf->st_rdev = le64_to_cpu(tmp_dev);
         }
     } else if (fs_ctx->export_flags & V9FS_SM_MAPPED_FILE) {
@@ -823,9 +841,9 @@ static int local_open2(FsContext *fs_ctx, V9fsPath *dir_path, const char *name,
         if (fd == -1) {
             goto out;
         }
-        credp->fc_mode = credp->fc_mode|S_IFREG;
+        credp->fc_mode = credp->fc_mode | S_IFREG;
         if (fs_ctx->export_flags & V9FS_SM_MAPPED) {
-            /* Set cleint credentials in xattr */
+            /* Set client credentials in xattr */
             err = local_set_xattrat(dirfd, name, credp);
         } else {
             err = local_set_mapped_file_attrat(dirfd, name, credp);
@@ -888,15 +906,13 @@ static int local_symlink(FsContext *fs_ctx, const char *oldpath,
         }
         /* Write the oldpath (target) to the file. */
         oldpath_size = strlen(oldpath);
-        do {
-            write_size = write(fd, (void *)oldpath, oldpath_size);
-        } while (write_size == -1 && errno == EINTR);
+        write_size = RETRY_ON_EINTR(write(fd, (void *)oldpath, oldpath_size));
         close_preserve_errno(fd);
 
         if (write_size != oldpath_size) {
             goto err_end;
         }
-        /* Set cleint credentials in symlink's xattr */
+        /* Set client credentials in symlink's xattr */
         credp->fc_mode = credp->fc_mode | S_IFLNK;
 
         if (fs_ctx->export_flags & V9FS_SM_MAPPED) {
@@ -947,7 +963,7 @@ static int local_link(FsContext *ctx, V9fsPath *oldpath,
     if (ctx->export_flags & V9FS_SM_MAPPED_FILE &&
         local_is_mapped_file_metadata(ctx, name)) {
         errno = EINVAL;
-        return -1;
+        goto out;
     }
 
     odirfd = local_opendir_nofollow(ctx, odirpath);
@@ -970,7 +986,7 @@ static int local_link(FsContext *ctx, V9fsPath *oldpath,
     if (ctx->export_flags & V9FS_SM_MAPPED_FILE) {
         int omap_dirfd, nmap_dirfd;
 
-        ret = mkdirat(ndirfd, VIRTFS_META_DIR, 0700);
+        ret = qemu_mkdirat(ndirfd, VIRTFS_META_DIR, 0700);
         if (ret < 0 && errno != EEXIST) {
             goto err_undo_link;
         }
@@ -1065,7 +1081,7 @@ static int local_utimensat(FsContext *s, V9fsPath *fs_path,
         goto out;
     }
 
-    ret = utimensat(dirfd, name, buf, AT_SYMLINK_NOFOLLOW);
+    ret = qemu_utimensat(dirfd, name, buf, AT_SYMLINK_NOFOLLOW);
     close_preserve_errno(dirfd);
 out:
     g_free(dirpath);
@@ -1076,7 +1092,7 @@ out:
 static int local_unlinkat_common(FsContext *ctx, int dirfd, const char *name,
                                  int flags)
 {
-    int ret = -1;
+    int ret;
 
     if (ctx->export_flags & V9FS_SM_MAPPED_FILE) {
         int map_dirfd;
@@ -1094,29 +1110,27 @@ static int local_unlinkat_common(FsContext *ctx, int dirfd, const char *name,
 
             fd = openat_dir(dirfd, name);
             if (fd == -1) {
-                goto err_out;
+                return -1;
             }
-            ret = unlinkat(fd, VIRTFS_META_DIR, AT_REMOVEDIR);
+            ret = qemu_unlinkat(fd, VIRTFS_META_DIR, AT_REMOVEDIR);
             close_preserve_errno(fd);
             if (ret < 0 && errno != ENOENT) {
-                goto err_out;
+                return -1;
             }
         }
         map_dirfd = openat_dir(dirfd, VIRTFS_META_DIR);
         if (map_dirfd != -1) {
-            ret = unlinkat(map_dirfd, name, 0);
+            ret = qemu_unlinkat(map_dirfd, name, 0);
             close_preserve_errno(map_dirfd);
             if (ret < 0 && errno != ENOENT) {
-                goto err_out;
+                return -1;
             }
         } else if (errno != ENOENT) {
-            goto err_out;
+            return -1;
         }
     }
 
-    ret = unlinkat(dirfd, name, flags);
-err_out:
-    return ret;
+    return qemu_unlinkat(dirfd, name, flags);
 }
 
 static int local_remove(FsContext *ctx, const char *path)
@@ -1133,7 +1147,7 @@ static int local_remove(FsContext *ctx, const char *path)
         goto out;
     }
 
-    if (fstatat(dirfd, name, &stbuf, AT_SYMLINK_NOFOLLOW) < 0) {
+    if (qemu_fstatat(dirfd, name, &stbuf, AT_SYMLINK_NOFOLLOW) < 0) {
         goto err_out;
     }
 
@@ -1278,7 +1292,7 @@ static int local_renameat(FsContext *ctx, V9fsPath *olddir,
         return -1;
     }
 
-    ret = renameat(odirfd, old_name, ndirfd, new_name);
+    ret = qemu_renameat(odirfd, old_name, ndirfd, new_name);
     if (ret < 0) {
         goto out;
     }
@@ -1286,7 +1300,7 @@ static int local_renameat(FsContext *ctx, V9fsPath *olddir,
     if (ctx->export_flags & V9FS_SM_MAPPED_FILE) {
         int omap_dirfd, nmap_dirfd;
 
-        ret = mkdirat(ndirfd, VIRTFS_META_DIR, 0700);
+        ret = qemu_mkdirat(ndirfd, VIRTFS_META_DIR, 0700);
         if (ret < 0 && errno != EEXIST) {
             goto err_undo_rename;
         }
@@ -1303,7 +1317,7 @@ static int local_renameat(FsContext *ctx, V9fsPath *olddir,
         }
 
         /* rename the .virtfs_metadata files */
-        ret = renameat(omap_dirfd, old_name, nmap_dirfd, new_name);
+        ret = qemu_renameat(omap_dirfd, old_name, nmap_dirfd, new_name);
         close_preserve_errno(nmap_dirfd);
         close_preserve_errno(omap_dirfd);
         if (ret < 0 && errno != ENOENT) {
@@ -1404,7 +1418,7 @@ static int local_ioc_getversion_init(FsContext *ctx, LocalData *data, Error **er
     struct statfs stbuf;
 
     /*
-     * use ioc_getversion only if the ioctl is definied
+     * use ioc_getversion only if the ioctl is defined
      */
     if (fstatfs(data->mountfd, &stbuf) < 0) {
         error_setg_errno(errp, errno,
@@ -1465,11 +1479,15 @@ static void local_cleanup(FsContext *ctx)
 {
     LocalData *data = ctx->private;
 
+    if (!data) {
+        return;
+    }
+
     close(data->mountfd);
     g_free(data);
 }
 
-static void error_append_security_model_hint(Error **errp)
+static void error_append_security_model_hint(Error *const *errp)
 {
     error_append_hint(errp, "Valid options are: security_model="
                       "[passthrough|mapped-xattr|mapped-file|none]\n");
@@ -1477,9 +1495,10 @@ static void error_append_security_model_hint(Error **errp)
 
 static int local_parse_opts(QemuOpts *opts, FsDriverEntry *fse, Error **errp)
 {
+    ERRP_GUARD();
     const char *sec_model = qemu_opt_get(opts, "security_model");
     const char *path = qemu_opt_get(opts, "path");
-    Error *local_err = NULL;
+    const char *multidevs = qemu_opt_get(opts, "multidevs");
 
     if (!sec_model) {
         error_setg(errp, "security_model property not set");
@@ -1502,15 +1521,32 @@ static int local_parse_opts(QemuOpts *opts, FsDriverEntry *fse, Error **errp)
         return -1;
     }
 
+    if (multidevs) {
+        if (!strcmp(multidevs, "remap")) {
+            fse->export_flags &= ~V9FS_FORBID_MULTIDEVS;
+            fse->export_flags |= V9FS_REMAP_INODES;
+        } else if (!strcmp(multidevs, "forbid")) {
+            fse->export_flags &= ~V9FS_REMAP_INODES;
+            fse->export_flags |= V9FS_FORBID_MULTIDEVS;
+        } else if (!strcmp(multidevs, "warn")) {
+            fse->export_flags &= ~V9FS_FORBID_MULTIDEVS;
+            fse->export_flags &= ~V9FS_REMAP_INODES;
+        } else {
+            error_setg(errp, "invalid multidevs property '%s'",
+                       multidevs);
+            error_append_hint(errp, "Valid options are: multidevs="
+                              "[remap|forbid|warn]\n");
+            return -1;
+        }
+    }
+
     if (!path) {
         error_setg(errp, "path property not set");
         return -1;
     }
 
-    fsdev_throttle_parse_opts(opts, &fse->fst, &local_err);
-    if (local_err) {
-        error_propagate_prepend(errp, local_err,
-                                "invalid throttle configuration: ");
+    if (fsdev_throttle_parse_opts(opts, &fse->fst, errp)) {
+        error_prepend(errp, "invalid throttle configuration: ");
         return -1;
     }
 

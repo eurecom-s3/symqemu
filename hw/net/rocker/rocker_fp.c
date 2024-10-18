@@ -51,14 +51,17 @@ bool fp_port_get_link_up(FpPort *port)
     return !qemu_get_queue(port->nic)->link_down;
 }
 
-void fp_port_get_info(FpPort *port, RockerPortList *info)
+RockerPort *fp_port_get_info(FpPort *port)
 {
-    info->value->name = g_strdup(port->name);
-    info->value->enabled = port->enabled;
-    info->value->link_up = fp_port_get_link_up(port);
-    info->value->speed = port->speed;
-    info->value->duplex = port->duplex;
-    info->value->autoneg = port->autoneg;
+    RockerPort *value = g_malloc0(sizeof(*value));
+
+    value->name = g_strdup(port->name);
+    value->enabled = port->enabled;
+    value->link_up = fp_port_get_link_up(port);
+    value->speed = port->speed;
+    value->duplex = port->duplex;
+    value->autoneg = port->autoneg;
+    return value;
 }
 
 void fp_port_get_macaddr(FpPort *port, MACAddr *macaddr)
@@ -131,7 +134,7 @@ static ssize_t fp_port_receive_iov(NetClientState *nc, const struct iovec *iov,
     FpPort *port = qemu_get_nic_opaque(nc);
 
     /* If the port is disabled, we want to drop this pkt
-     * now rather than queing it for later.  We don't want
+     * now rather than queueing it for later.  We don't want
      * any stale pkts getting into the device when the port
      * transitions to enabled.
      */
@@ -238,8 +241,8 @@ FpPort *fp_port_alloc(Rocker *r, char *sw_name,
     port->conf.bootindex = -1;
     port->conf.peers = *peers;
 
-    port->nic = qemu_new_nic(&fp_port_info, &port->conf,
-                             sw_name, NULL, port);
+    port->nic = qemu_new_nic(&fp_port_info, &port->conf, sw_name, NULL,
+                             &DEVICE(r)->mem_reentrancy_guard, port);
     qemu_format_nic_info_str(qemu_get_queue(port->nic),
                              port->conf.macaddr.a);
 

@@ -9,39 +9,35 @@
 #include <curl/curl.h>
 #include "download.h"
 
-int download_url(const char *name, const char *url)
+bool download_url(const char *name, const char *url)
 {
-    int err = 0;
+    bool success = false;
     FILE *file;
     CURL *curl = curl_easy_init();
 
     if (!curl) {
-        return 1;
+        return false;
     }
 
     file = fopen(name, "wb");
     if (!file) {
-        err = 1;
         goto out_curl;
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0);
-
-    if (curl_easy_perform(curl) != CURLE_OK) {
-        err = 1;
-        fclose(file);
+    if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK
+            || curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL) != CURLE_OK
+            || curl_easy_setopt(curl, CURLOPT_WRITEDATA, file) != CURLE_OK
+            || curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1) != CURLE_OK
+            || curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0) != CURLE_OK
+            || curl_easy_perform(curl) != CURLE_OK) {
         unlink(name);
-        goto out_curl;
+        fclose(file);
+    } else {
+        success = !fclose(file);
     }
-
-    err = fclose(file);
 
 out_curl:
     curl_easy_cleanup(curl);
 
-    return err;
+    return success;
 }

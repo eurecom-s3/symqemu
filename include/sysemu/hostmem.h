@@ -13,22 +13,32 @@
 #ifndef SYSEMU_HOSTMEM_H
 #define SYSEMU_HOSTMEM_H
 
-#include "sysemu/sysemu.h" /* for MAX_NODES */
+#include "sysemu/numa.h"
 #include "qapi/qapi-types-machine.h"
 #include "qom/object.h"
 #include "exec/memory.h"
 #include "qemu/bitmap.h"
+#include "qemu/thread-context.h"
 
 #define TYPE_MEMORY_BACKEND "memory-backend"
-#define MEMORY_BACKEND(obj) \
-    OBJECT_CHECK(HostMemoryBackend, (obj), TYPE_MEMORY_BACKEND)
-#define MEMORY_BACKEND_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(HostMemoryBackendClass, (obj), TYPE_MEMORY_BACKEND)
-#define MEMORY_BACKEND_CLASS(klass) \
-    OBJECT_CLASS_CHECK(HostMemoryBackendClass, (klass), TYPE_MEMORY_BACKEND)
+OBJECT_DECLARE_TYPE(HostMemoryBackend, HostMemoryBackendClass,
+                    MEMORY_BACKEND)
 
-typedef struct HostMemoryBackend HostMemoryBackend;
-typedef struct HostMemoryBackendClass HostMemoryBackendClass;
+/* hostmem-ram.c */
+/**
+ * @TYPE_MEMORY_BACKEND_RAM:
+ * name of backend that uses mmap on the anonymous RAM
+ */
+
+#define TYPE_MEMORY_BACKEND_RAM "memory-backend-ram"
+
+/* hostmem-file.c */
+/**
+ * @TYPE_MEMORY_BACKEND_FILE:
+ * name of backend that uses mmap on a file descriptor
+ */
+#define TYPE_MEMORY_BACKEND_FILE "memory-backend-file"
+
 
 /**
  * HostMemoryBackendClass:
@@ -37,7 +47,15 @@ typedef struct HostMemoryBackendClass HostMemoryBackendClass;
 struct HostMemoryBackendClass {
     ObjectClass parent_class;
 
-    void (*alloc)(HostMemoryBackend *backend, Error **errp);
+    /**
+     * alloc: Allocate memory from backend.
+     *
+     * @backend: the #HostMemoryBackend.
+     * @errp: pointer to Error*, to store an error if it happens.
+     *
+     * Return: true on success, else false setting @errp with error.
+     */
+    bool (*alloc)(HostMemoryBackend *backend, Error **errp);
 };
 
 /**
@@ -46,6 +64,7 @@ struct HostMemoryBackendClass {
  * @parent: opaque parent object container
  * @size: amount of memory backend provides
  * @mr: MemoryRegion representing host memory belonging to backend
+ * @prealloc_threads: number of threads to be used for preallocatining RAM
  */
 struct HostMemoryBackend {
     /* private */
@@ -54,7 +73,9 @@ struct HostMemoryBackend {
     /* protected */
     uint64_t size;
     bool merge, dump, use_canonical_path;
-    bool prealloc, force_prealloc, is_mapped, share;
+    bool prealloc, is_mapped, share, reserve;
+    uint32_t prealloc_threads;
+    ThreadContext *prealloc_context;
     DECLARE_BITMAP(host_nodes, MAX_NODES + 1);
     HostMemPolicy policy;
 

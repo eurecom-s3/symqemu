@@ -10,7 +10,7 @@
  * Contributions after 2012-01-13 are licensed under the terms of the
  * GNU GPL, version 2 or (at your option) any later version.
  */
- 
+
 /* 
  * Example usage:
  * 
@@ -35,8 +35,8 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "qemu/error-report.h"
-#include "hw/hw.h"
 #include "hw/arm/pxa.h"
 #include "net/net.h"
 #include "hw/block/flash.h"
@@ -44,21 +44,21 @@
 #include "hw/boards.h"
 #include "exec/address-spaces.h"
 #include "sysemu/qtest.h"
-#include "cpu.h"
 
-static const int sector_len = 128 * 1024;
+#define CONNEX_FLASH_SIZE   (16 * MiB)
+#define CONNEX_RAM_SIZE     (64 * MiB)
+
+#define VERDEX_FLASH_SIZE   (32 * MiB)
+#define VERDEX_RAM_SIZE     (256 * MiB)
+
+#define FLASH_SECTOR_SIZE   (128 * KiB)
 
 static void connex_init(MachineState *machine)
 {
     PXA2xxState *cpu;
     DriveInfo *dinfo;
-    int be;
-    MemoryRegion *address_space_mem = get_system_memory();
 
-    uint32_t connex_rom = 0x01000000;
-    uint32_t connex_ram = 0x04000000;
-
-    cpu = pxa255_init(address_space_mem, connex_ram);
+    cpu = pxa255_init(CONNEX_RAM_SIZE);
 
     dinfo = drive_get(IF_PFLASH, 0, 0);
     if (!dinfo && !qtest_enabled()) {
@@ -67,34 +67,21 @@ static void connex_init(MachineState *machine)
         exit(1);
     }
 
-#ifdef TARGET_WORDS_BIGENDIAN
-    be = 1;
-#else
-    be = 0;
-#endif
-    if (!pflash_cfi01_register(0x00000000, "connext.rom", connex_rom,
-                               dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
-                               sector_len, 2, 0, 0, 0, 0, be)) {
-        error_report("Error registering flash memory");
-        exit(1);
-    }
+    /* Numonyx RC28F128J3F75 */
+    pflash_cfi01_register(0x00000000, "connext.rom", CONNEX_FLASH_SIZE,
+                          dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
+                          FLASH_SECTOR_SIZE, 2, 0, 0, 0, 0, 0);
 
     /* Interrupt line of NIC is connected to GPIO line 36 */
-    smc91c111_init(&nd_table[0], 0x04000300,
-                    qdev_get_gpio_in(cpu->gpio, 36));
+    smc91c111_init(0x04000300, qdev_get_gpio_in(cpu->gpio, 36));
 }
 
 static void verdex_init(MachineState *machine)
 {
     PXA2xxState *cpu;
     DriveInfo *dinfo;
-    int be;
-    MemoryRegion *address_space_mem = get_system_memory();
 
-    uint32_t verdex_rom = 0x02000000;
-    uint32_t verdex_ram = 0x10000000;
-
-    cpu = pxa270_init(address_space_mem, verdex_ram, machine->cpu_type);
+    cpu = pxa270_init(VERDEX_RAM_SIZE, machine->cpu_type);
 
     dinfo = drive_get(IF_PFLASH, 0, 0);
     if (!dinfo && !qtest_enabled()) {
@@ -103,21 +90,13 @@ static void verdex_init(MachineState *machine)
         exit(1);
     }
 
-#ifdef TARGET_WORDS_BIGENDIAN
-    be = 1;
-#else
-    be = 0;
-#endif
-    if (!pflash_cfi01_register(0x00000000, "verdex.rom", verdex_rom,
-                               dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
-                               sector_len, 2, 0, 0, 0, 0, be)) {
-        error_report("Error registering flash memory");
-        exit(1);
-    }
+    /* Micron RC28F256P30TFA */
+    pflash_cfi01_register(0x00000000, "verdex.rom", VERDEX_FLASH_SIZE,
+                          dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
+                          FLASH_SECTOR_SIZE, 2, 0, 0, 0, 0, 0);
 
     /* Interrupt line of NIC is connected to GPIO line 99 */
-    smc91c111_init(&nd_table[0], 0x04000300,
-                    qdev_get_gpio_in(cpu->gpio, 99));
+    smc91c111_init(0x04000300, qdev_get_gpio_in(cpu->gpio, 99));
 }
 
 static void connex_class_init(ObjectClass *oc, void *data)
@@ -127,6 +106,7 @@ static void connex_class_init(ObjectClass *oc, void *data)
     mc->desc = "Gumstix Connex (PXA255)";
     mc->init = connex_init;
     mc->ignore_memory_transaction_failures = true;
+    mc->deprecation_reason = "machine is old and unmaintained";
 }
 
 static const TypeInfo connex_type = {
@@ -139,9 +119,10 @@ static void verdex_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
-    mc->desc = "Gumstix Verdex (PXA270)";
+    mc->desc = "Gumstix Verdex Pro XL6P COMs (PXA270)";
     mc->init = verdex_init;
     mc->ignore_memory_transaction_failures = true;
+    mc->deprecation_reason = "machine is old and unmaintained";
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("pxa270-c0");
 }
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw quick
 #
 # Test case for drive-mirror to NBD
 #
@@ -19,7 +20,7 @@
 #
 
 # creator
-owner=mreitz@redhat.com
+owner=hreitz@redhat.com
 
 seq="$(basename $0)"
 echo "QA output created by $seq"
@@ -30,7 +31,7 @@ _cleanup()
 {
     _cleanup_qemu
     _cleanup_test_img
-    rm -f "$TEST_DIR/source.$IMGFMT"
+    _rm_test_img "$TEST_DIR/source.$IMGFMT"
 }
 
 trap "_cleanup; exit \$status" 0 1 2 3 15
@@ -45,7 +46,7 @@ _supported_proto nbd
 _unsupported_imgopts "subformat=monolithicFlat" "subformat=twoGbMaxExtentFlat"
 
 _make_test_img 64M
-$QEMU_IMG create -f $IMGFMT "$TEST_DIR/source.$IMGFMT" 64M | _filter_img_create
+TEST_IMG_FILE="$TEST_DIR/source.$IMGFMT" IMGPROTO=file _make_test_img 64M
 
 _launch_qemu -drive if=none,id=src,file="$TEST_DIR/source.$IMGFMT",format=raw \
              -nodefaults

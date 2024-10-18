@@ -17,7 +17,6 @@
 #include "elf.h"
 #include "sysemu/dump.h"
 #include "sysemu/kvm.h"
-#include "exec/helper-proto.h"
 
 #ifdef TARGET_PPC64
 #define ELFCLASS ELFCLASS64
@@ -162,7 +161,7 @@ static void ppc_write_elf_vmxregset(NoteFuncArg *arg, PowerPCCPU *cpu)
         bool needs_byteswap;
         ppc_avr_t *avr = cpu_avr_ptr(&cpu->env, i);
 
-#ifdef HOST_WORDS_BIGENDIAN
+#if HOST_BIG_ENDIAN
         needs_byteswap = s->dump_info.d_endian == ELFDATA2LSB;
 #else
         needs_byteswap = s->dump_info.d_endian == ELFDATA2MSB;
@@ -176,7 +175,7 @@ static void ppc_write_elf_vmxregset(NoteFuncArg *arg, PowerPCCPU *cpu)
             vmxregset->avr[i].u64[1] = avr->u64[1];
         }
     }
-    vmxregset->vscr.u32[3] = cpu_to_dump32(s, helper_mfvscr(&cpu->env));
+    vmxregset->vscr.u32[3] = cpu_to_dump32(s, ppc_get_vscr(&cpu->env));
 }
 
 static void ppc_write_elf_vsxregset(NoteFuncArg *arg, PowerPCCPU *cpu)
@@ -228,22 +227,20 @@ int cpu_get_dump_info(ArchDumpInfo *info,
                       const struct GuestPhysBlockList *guest_phys_blocks)
 {
     PowerPCCPU *cpu;
-    PowerPCCPUClass *pcc;
 
     if (first_cpu == NULL) {
         return -1;
     }
 
     cpu = POWERPC_CPU(first_cpu);
-    pcc = POWERPC_CPU_GET_CLASS(cpu);
 
     info->d_machine = PPC_ELF_MACHINE;
     info->d_class = ELFCLASS;
 
-    if ((*pcc->interrupts_big_endian)(cpu)) {
-        info->d_endian = ELFDATA2MSB;
-    } else {
+    if (ppc_interrupts_little_endian(cpu, !!(cpu->env.msr_mask & MSR_HVB))) {
         info->d_endian = ELFDATA2LSB;
+    } else {
+        info->d_endian = ELFDATA2MSB;
     }
     /* 64KB is the max page size for pseries kernel */
     if (strncmp(object_get_typename(qdev_get_machine()),
@@ -273,23 +270,23 @@ ssize_t cpu_get_note_size(int class, int machine, int nr_cpus)
 static int ppc_write_all_elf_notes(const char *note_name,
                                    WriteCoreDumpFunction f,
                                    PowerPCCPU *cpu, int id,
-                                   void *opaque)
+                                   DumpState *s)
 {
-    NoteFuncArg arg = { .state = opaque };
+    NoteFuncArg arg = { .state = s };
     int ret = -1;
     int note_size;
     const NoteFuncDesc *nf;
 
     for (nf = note_func; nf->note_contents_func; nf++) {
-        arg.note.hdr.n_namesz = cpu_to_dump32(opaque, sizeof(arg.note.name));
-        arg.note.hdr.n_descsz = cpu_to_dump32(opaque, nf->contents_size);
+        arg.note.hdr.n_namesz = cpu_to_dump32(s, sizeof(arg.note.name));
+        arg.note.hdr.n_descsz = cpu_to_dump32(s, nf->contents_size);
         strncpy(arg.note.name, note_name, sizeof(arg.note.name));
 
         (*nf->note_contents_func)(&arg, cpu);
 
         note_size =
             sizeof(arg.note) - sizeof(arg.note.contents) + nf->contents_size;
-        ret = f(&arg.note, note_size, opaque);
+        ret = f(&arg.note, note_size, s);
         if (ret < 0) {
             return -1;
         }
@@ -298,15 +295,15 @@ static int ppc_write_all_elf_notes(const char *note_name,
 }
 
 int ppc64_cpu_write_elf64_note(WriteCoreDumpFunction f, CPUState *cs,
-                               int cpuid, void *opaque)
+                               int cpuid, DumpState *s)
 {
     PowerPCCPU *cpu = POWERPC_CPU(cs);
-    return ppc_write_all_elf_notes("CORE", f, cpu, cpuid, opaque);
+    return ppc_write_all_elf_notes("CORE", f, cpu, cpuid, s);
 }
 
 int ppc32_cpu_write_elf32_note(WriteCoreDumpFunction f, CPUState *cs,
-                               int cpuid, void *opaque)
+                               int cpuid, DumpState *s)
 {
     PowerPCCPU *cpu = POWERPC_CPU(cs);
-    return ppc_write_all_elf_notes("CORE", f, cpu, cpuid, opaque);
+    return ppc_write_all_elf_notes("CORE", f, cpu, cpuid, s);
 }

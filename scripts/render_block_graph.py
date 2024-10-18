@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Render Qemu Block Graph
 #
@@ -25,14 +25,14 @@ import json
 from graphviz import Digraph
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'python'))
-from qemu.machine import MonitorResponseError
+from qemu.qmp import QMPError
+from qemu.qmp.legacy import QEMUMonitorProtocol
 
 
 def perm(arr):
     s = 'w' if 'write' in arr else '_'
     s += 'r' if 'consistent-read' in arr else '_'
     s += 'u' if 'write-unchanged' in arr else '_'
-    s += 'g' if 'graph-mod' in arr else '_'
     s += 's' if 'resize' in arr else '_'
     return s
 
@@ -43,13 +43,13 @@ def render_block_graph(qmp, filename, format='png'):
     representation in @format into "@filename.@format"
     '''
 
-    bds_nodes = qmp.command('query-named-block-nodes')
+    bds_nodes = qmp.cmd('query-named-block-nodes')
     bds_nodes = {n['node-name']: n for n in bds_nodes}
 
-    job_nodes = qmp.command('query-block-jobs')
+    job_nodes = qmp.cmd('query-block-jobs')
     job_nodes = {n['device']: n for n in job_nodes}
 
-    block_graph = qmp.command('x-debug-query-block-graph')
+    block_graph = qmp.cmd('x-debug-query-block-graph')
 
     graph = Digraph(comment='Block Nodes Graph')
     graph.format = format
@@ -94,7 +94,7 @@ class LibvirtGuest():
     def __init__(self, name):
         self.name = name
 
-    def command(self, cmd):
+    def cmd(self, cmd):
         # only supports qmp commands without parameters
         m = {'execute': cmd}
         ar = ['virsh', 'qemu-monitor-command', self.name, json.dumps(m)]
@@ -102,7 +102,7 @@ class LibvirtGuest():
         reply = json.loads(subprocess.check_output(ar))
 
         if 'error' in reply:
-            raise MonitorResponseError(reply)
+            raise QMPError(reply)
 
         return reply['return']
 

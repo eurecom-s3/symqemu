@@ -19,11 +19,11 @@
  */
 
 #include "qemu/osdep.h"
+
+#include "hw/core/cpu.h"
 #include "hw/cpu/cluster.h"
-#include "qom/cpu.h"
+#include "hw/qdev-properties.h"
 #include "qapi/error.h"
-#include "qemu/module.h"
-#include "qemu/cutils.h"
 
 static Property cpu_cluster_properties[] = {
     DEFINE_PROP_UINT32("cluster-id", CPUClusterState, cluster_id, 0),
@@ -77,7 +77,7 @@ static void cpu_cluster_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->props = cpu_cluster_properties;
+    device_class_set_props(dc, cpu_cluster_properties);
     dc->realize = cpu_cluster_realize;
 
     /* This is not directly for users, CPU children must be attached by code */

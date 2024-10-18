@@ -19,11 +19,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
+#include "hw/qdev-properties.h"
 #include "qemu/event_notifier.h"
 #include "qemu/module.h"
 #include "sysemu/kvm.h"
+#include "qom/object.h"
 
 typedef struct PCITestDevHdr {
     uint8_t test;
@@ -78,7 +79,7 @@ enum {
 #define IOTEST_ACCESS_TYPE uint8_t
 #define IOTEST_ACCESS_WIDTH (sizeof(uint8_t))
 
-typedef struct PCITestDevState {
+struct PCITestDevState {
     /*< private >*/
     PCIDevice parent_obj;
     /*< public >*/
@@ -90,12 +91,11 @@ typedef struct PCITestDevState {
 
     uint64_t membar_size;
     MemoryRegion membar;
-} PCITestDevState;
+};
 
 #define TYPE_PCI_TEST_DEV "pci-testdev"
 
-#define PCI_TEST_DEV(obj) \
-    OBJECT_CHECK(PCITestDevState, (obj), TYPE_PCI_TEST_DEV)
+OBJECT_DECLARE_SIMPLE_TYPE(PCITestDevState, PCI_TEST_DEV)
 
 #define IOTEST_IS_MEM(i) (strcmp(IOTEST_TYPE(i), "portio"))
 #define IOTEST_REGION(d, i) (IOTEST_IS_MEM(i) ?  &(d)->mmio : &(d)->portio)
@@ -245,7 +245,6 @@ static void pci_testdev_realize(PCIDevice *pci_dev, Error **errp)
     uint8_t *pci_conf;
     char *name;
     int r, i;
-    bool fastmmio = kvm_ioeventfd_any_length_enabled();
 
     pci_conf = pci_dev->config;
 
@@ -279,7 +278,7 @@ static void pci_testdev_realize(PCIDevice *pci_dev, Error **errp)
         g_free(name);
         test->hdr->offset = cpu_to_le32(IOTEST_SIZE(i) + i * IOTEST_ACCESS_WIDTH);
         test->match_data = strcmp(IOTEST_TEST(i), "wildcard-eventfd");
-        if (fastmmio && IOTEST_IS_MEM(i) && !test->match_data) {
+        if (IOTEST_IS_MEM(i) && !test->match_data) {
             test->size = 0;
         } else {
             test->size = IOTEST_ACCESS_WIDTH;
@@ -339,7 +338,7 @@ static void pci_testdev_class_init(ObjectClass *klass, void *data)
     dc->desc = "PCI Test Device";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     dc->reset = qdev_pci_testdev_reset;
-    dc->props = pci_testdev_properties;
+    device_class_set_props(dc, pci_testdev_properties);
 }
 
 static const TypeInfo pci_testdev_info = {

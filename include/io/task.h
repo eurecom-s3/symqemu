@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,8 +20,6 @@
 
 #ifndef QIO_TASK_H
 #define QIO_TASK_H
-
-#include "qom/object.h"
 
 typedef struct QIOTask QIOTask;
 
@@ -119,7 +117,7 @@ typedef void (*QIOTaskWorker)(QIOTask *task,
  *   gboolean myobject_operation_timer(gpointer opaque)
  *   {
  *      QIOTask *task = QIO_TASK(opaque);
- *      Error *err;*
+ *      Error *err = NULL;
  *
  *      ...check something important...
  *       if (err) {
@@ -147,11 +145,11 @@ typedef void (*QIOTaskWorker)(QIOTask *task,
  * The QIOTask module can also be used to perform operations
  * in a background thread context, while still reporting the
  * results in the main event thread. This allows code which
- * cannot easily be rewritten to be asychronous (such as DNS
+ * cannot easily be rewritten to be asynchronous (such as DNS
  * lookups) to be easily run non-blocking. Reporting the
  * results in the main thread context means that the caller
  * typically does not need to be concerned about thread
- * safety wrt the QEMU global mutex.
+ * safety wrt the BQL.
  *
  * For example, the socket_listen() method will block the caller
  * while DNS lookups take place if given a name, instead of IP

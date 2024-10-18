@@ -25,6 +25,7 @@
 #include "hw/pci/msi.h"
 #include "hw/pci/pcie.h"
 #include "hw/pci/pcie_port.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
 
 #define PCI_DEVICE_ID_IOH_EPORT         0x3420  /* D0:F0 express mode */
@@ -87,7 +88,7 @@ static const VMStateDescription vmstate_ioh3420 = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = pcie_cap_slot_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_PCI_DEVICE(parent_obj.parent_obj.parent_obj, PCIESlot),
         VMSTATE_STRUCT(parent_obj.parent_obj.parent_obj.exp.aer_log,
                        PCIESlot, 0, vmstate_pcie_aer_log, PCIEAERLog),

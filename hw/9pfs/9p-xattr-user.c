@@ -11,6 +11,11 @@
  *
  */
 
+/*
+ * Not so fast! You might want to read the 9p developer docs first:
+ * https://wiki.qemu.org/Documentation/9p
+ */
+
 #include "qemu/osdep.h"
 #include "9p.h"
 #include "fsdev/file-op-9p.h"
@@ -22,7 +27,7 @@ static ssize_t mp_user_getxattr(FsContext *ctx, const char *path,
 {
     if (strncmp(name, "user.virtfs.", 12) == 0) {
         /*
-         * Don't allow fetch of user.virtfs namesapce
+         * Don't allow fetch of user.virtfs namespace
          * in case of mapped security
          */
         errno = ENOATTR;
@@ -44,7 +49,7 @@ static ssize_t mp_user_listxattr(FsContext *ctx, const char *path,
             name_size -= 12;
         } else {
             /*
-             * Don't allow fetch of user.virtfs namesapce
+             * Don't allow fetch of user.virtfs namespace
              * in case of mapped security
              */
             return 0;
@@ -69,7 +74,7 @@ static int mp_user_setxattr(FsContext *ctx, const char *path, const char *name,
 {
     if (strncmp(name, "user.virtfs.", 12) == 0) {
         /*
-         * Don't allow fetch of user.virtfs namesapce
+         * Don't allow fetch of user.virtfs namespace
          * in case of mapped security
          */
         errno = EACCES;
@@ -83,7 +88,7 @@ static int mp_user_removexattr(FsContext *ctx,
 {
     if (strncmp(name, "user.virtfs.", 12) == 0) {
         /*
-         * Don't allow fetch of user.virtfs namesapce
+         * Don't allow fetch of user.virtfs namespace
          * in case of mapped security
          */
         errno = EACCES;

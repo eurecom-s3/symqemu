@@ -5,13 +5,15 @@
  *
  * This code is licensed under the GPL
  */
+
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
+#include "qemu/log.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
+#include "qemu/datadir.h"
 #include "cpu.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
 #include "hw/m68k/mcf.h"
 #include "hw/m68k/mcf_fec.h"
 #include "qemu/timer.h"
@@ -23,7 +25,6 @@
 #include "hw/loader.h"
 #include "hw/sysbus.h"
 #include "elf.h"
-#include "exec/address-spaces.h"
 
 #define SYS_FREQ 166666666
 
@@ -38,6 +39,8 @@
 #define PCSR_DOZE       0x0040
 #define PCSR_PRE_SHIFT  8
 #define PCSR_PRE_MASK   0x0f00
+
+#define RCR_SOFTRST     0x80
 
 typedef struct {
     MemoryRegion iomem;
@@ -76,6 +79,7 @@ static void m5208_timer_write(void *opaque, hwaddr offset,
             return;
         }
 
+        ptimer_transaction_begin(s->timer);
         if (s->pcsr & PCSR_EN)
             ptimer_stop(s->timer);
 
@@ -91,8 +95,10 @@ static void m5208_timer_write(void *opaque, hwaddr offset,
 
         if (s->pcsr & PCSR_EN)
             ptimer_run(s->timer, 0);
+        ptimer_transaction_commit(s->timer);
         break;
     case 2:
+        ptimer_transaction_begin(s->timer);
         s->pmr = value;
         s->pcsr &= ~PCSR_PIF;
         if ((s->pcsr & PCSR_RLD) == 0) {
@@ -101,12 +107,14 @@ static void m5208_timer_write(void *opaque, hwaddr offset,
         } else {
             ptimer_set_limit(s->timer, value, s->pcsr & PCSR_OVW);
         }
+        ptimer_transaction_commit(s->timer);
         break;
     case 4:
         break;
     default:
-        hw_error("m5208_timer_write: Bad offset 0x%x\n", (int)offset);
-        break;
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                      __func__, offset);
+        return;
     }
     m5208_timer_update(s);
 }
@@ -130,7 +138,8 @@ static uint64_t m5208_timer_read(void *opaque, hwaddr addr,
     case 4:
         return ptimer_get_count(s->timer);
     default:
-        hw_error("m5208_timer_read: Bad offset 0x%x\n", (int)addr);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                      __func__, addr);
         return 0;
     }
 }
@@ -149,8 +158,9 @@ static uint64_t m5208_sys_read(void *opaque, hwaddr addr,
         {
             int n;
             for (n = 0; n < 32; n++) {
-                if (ram_size < (2u << n))
+                if (current_machine->ram_size < (2u << n)) {
                     break;
+                }
             }
             return (n - 1)  | 0x40000000;
         }
@@ -158,7 +168,8 @@ static uint64_t m5208_sys_read(void *opaque, hwaddr addr,
         return 0;
 
     default:
-        hw_error("m5208_sys_read: Bad offset 0x%x\n", (int)addr);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                      __func__, addr);
         return 0;
     }
 }
@@ -166,7 +177,8 @@ static uint64_t m5208_sys_read(void *opaque, hwaddr addr,
 static void m5208_sys_write(void *opaque, hwaddr addr,
                             uint64_t value, unsigned size)
 {
-    hw_error("m5208_sys_write: Bad offset 0x%x\n", (int)addr);
+    qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                  __func__, addr);
 }
 
 static const MemoryRegionOps m5208_sys_ops = {
@@ -175,21 +187,57 @@ static const MemoryRegionOps m5208_sys_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void mcf5208_sys_init(MemoryRegion *address_space, qemu_irq *pic)
+static uint64_t m5208_rcm_read(void *opaque, hwaddr addr,
+                               unsigned size)
+{
+    return 0;
+}
+
+static void m5208_rcm_write(void *opaque, hwaddr addr,
+                            uint64_t value, unsigned size)
+{
+    M68kCPU *cpu = opaque;
+    CPUState *cs = CPU(cpu);
+    switch (addr) {
+    case 0x0: /* RCR */
+        if (value & RCR_SOFTRST) {
+            cpu_reset(cs);
+            cpu->env.aregs[7] = ldl_phys(cs->as, 0);
+            cpu->env.pc = ldl_phys(cs->as, 4);
+        }
+        break;
+    default:
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                      __func__, addr);
+        break;
+    }
+}
+
+static const MemoryRegionOps m5208_rcm_ops = {
+    .read = m5208_rcm_read,
+    .write = m5208_rcm_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
+
+static void mcf5208_sys_init(MemoryRegion *address_space, qemu_irq *pic,
+                             M68kCPU *cpu)
 {
     MemoryRegion *iomem = g_new(MemoryRegion, 1);
+    MemoryRegion *iomem_rcm = g_new(MemoryRegion, 1);
     m5208_timer_state *s;
-    QEMUBH *bh;
     int i;
 
+    /* RCM */
+    memory_region_init_io(iomem_rcm, NULL, &m5208_rcm_ops, cpu,
+                          "m5208-rcm", 0x00000080);
+    memory_region_add_subregion(address_space, 0xfc0a0000, iomem_rcm);
     /* SDRAMC.  */
     memory_region_init_io(iomem, NULL, &m5208_sys_ops, NULL, "m5208-sys", 0x00004000);
     memory_region_add_subregion(address_space, 0xfc0a8000, iomem);
     /* Timers.  */
     for (i = 0; i < 2; i++) {
         s = g_new0(m5208_timer_state, 1);
-        bh = qemu_bh_new(m5208_timer_trigger, s);
-        s->timer = ptimer_init(bh, PTIMER_POLICY_DEFAULT);
+        s->timer = ptimer_init(m5208_timer_trigger, s, PTIMER_POLICY_LEGACY);
         memory_region_init_io(&s->iomem, NULL, &m5208_timer_ops, s,
                               "m5208-timer", 0x00004000);
         memory_region_add_subregion(address_space, 0xfc080000 + 0x4000 * i,
@@ -198,19 +246,19 @@ static void mcf5208_sys_init(MemoryRegion *address_space, qemu_irq *pic)
     }
 }
 
-static void mcf_fec_init(MemoryRegion *sysmem, NICInfo *nd, hwaddr base,
-                         qemu_irq *irqs)
+static void mcf_fec_init(MemoryRegion *sysmem, hwaddr base, qemu_irq *irqs)
 {
     DeviceState *dev;
     SysBusDevice *s;
     int i;
 
-    qemu_check_nic_model(nd, TYPE_MCF_FEC_NET);
-    dev = qdev_create(NULL, TYPE_MCF_FEC_NET);
-    qdev_set_nic_properties(dev, nd);
-    qdev_init_nofail(dev);
+    dev = qemu_create_nic_device(TYPE_MCF_FEC_NET, true, NULL);
+    if (!dev) {
+        return;
+    }
 
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     for (i = 0; i < FEC_NUM_IRQ; i++) {
         sysbus_connect_irq(s, i, irqs[i]);
     }
@@ -230,7 +278,6 @@ static void mcf5208evb_init(MachineState *machine)
     qemu_irq *pic;
     MemoryRegion *address_space_mem = get_system_memory();
     MemoryRegion *rom = g_new(MemoryRegion, 1);
-    MemoryRegion *ram = g_new(MemoryRegion, 1);
     MemoryRegion *sram = g_new(MemoryRegion, 1);
 
     cpu = M68K_CPU(cpu_create(machine->cpu_type));
@@ -245,8 +292,7 @@ static void mcf5208evb_init(MachineState *machine)
     memory_region_add_subregion(address_space_mem, 0x00000000, rom);
 
     /* DRAM at 0x40000000 */
-    memory_region_allocate_system_memory(ram, NULL, "mcf5208.ram", ram_size);
-    memory_region_add_subregion(address_space_mem, 0x40000000, ram);
+    memory_region_add_subregion(address_space_mem, 0x40000000, machine->ram);
 
     /* Internal SRAM.  */
     memory_region_init_ram(sram, NULL, "mcf5208.sram", 16 * KiB, &error_fatal);
@@ -255,20 +301,15 @@ static void mcf5208evb_init(MachineState *machine)
     /* Internal peripherals.  */
     pic = mcf_intc_init(address_space_mem, 0xfc048000, cpu);
 
-    mcf_uart_mm_init(0xfc060000, pic[26], serial_hd(0));
-    mcf_uart_mm_init(0xfc064000, pic[27], serial_hd(1));
-    mcf_uart_mm_init(0xfc068000, pic[28], serial_hd(2));
+    mcf_uart_create_mmap(0xfc060000, pic[26], serial_hd(0));
+    mcf_uart_create_mmap(0xfc064000, pic[27], serial_hd(1));
+    mcf_uart_create_mmap(0xfc068000, pic[28], serial_hd(2));
 
-    mcf5208_sys_init(address_space_mem, pic);
+    mcf5208_sys_init(address_space_mem, pic, cpu);
 
-    if (nb_nics > 1) {
-        error_report("Too many NICs");
-        exit(1);
-    }
-    if (nd_table[0].used) {
-        mcf_fec_init(address_space_mem, &nd_table[0],
-                     0xfc030000, pic + 36);
-    }
+    mcf_fec_init(address_space_mem, 0xfc030000, pic + 36);
+
+    g_free(pic);
 
     /*  0xfc000000 SCM.  */
     /*  0xfc004000 XBS.  */
@@ -293,17 +334,17 @@ static void mcf5208evb_init(MachineState *machine)
     /* 0xfc0a8000 SDRAM controller.  */
 
     /* Load firmware */
-    if (bios_name) {
+    if (machine->firmware) {
         char *fn;
         uint8_t *ptr;
 
-        fn = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+        fn = qemu_find_file(QEMU_FILE_TYPE_BIOS, machine->firmware);
         if (!fn) {
-            error_report("Could not find ROM image '%s'", bios_name);
+            error_report("Could not find ROM image '%s'", machine->firmware);
             exit(1);
         }
         if (load_image_targphys(fn, 0x0, ROM_SIZE) < 8) {
-            error_report("Could not load ROM image '%s'", bios_name);
+            error_report("Could not load ROM image '%s'", machine->firmware);
             exit(1);
         }
         g_free(fn);
@@ -315,7 +356,7 @@ static void mcf5208evb_init(MachineState *machine)
 
     /* Load kernel.  */
     if (!kernel_filename) {
-        if (qtest_enabled() || bios_name) {
+        if (qtest_enabled() || machine->firmware) {
             return;
         }
         error_report("Kernel image must be specified");
@@ -323,7 +364,7 @@ static void mcf5208evb_init(MachineState *machine)
     }
 
     kernel_size = load_elf(kernel_filename, NULL, NULL, NULL, &elf_entry,
-                           NULL, NULL, 1, EM_68K, 0, 0);
+                           NULL, NULL, NULL, 1, EM_68K, 0, 0);
     entry = elf_entry;
     if (kernel_size < 0) {
         kernel_size = load_uimage(kernel_filename, &entry, NULL, NULL,
@@ -346,8 +387,9 @@ static void mcf5208evb_machine_init(MachineClass *mc)
 {
     mc->desc = "MCF5208EVB";
     mc->init = mcf5208evb_init;
-    mc->is_default = 1;
+    mc->is_default = true;
     mc->default_cpu_type = M68K_CPU_TYPE_NAME("m5208");
+    mc->default_ram_id = "mcf5208.ram";
 }
 
 DEFINE_MACHINE("mcf5208evb", mcf5208evb_machine_init)

@@ -15,9 +15,11 @@
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "hw/pci/pci.h"
+#include "hw/qdev-properties.h"
 #include "hw/virtio/virtio.h"
 #include "hw/virtio/virtio-bus.h"
 #include "hw/virtio/virtio-gpu-pci.h"
+#include "qom/object.h"
 
 static Property virtio_gpu_pci_base_properties[] = {
     DEFINE_VIRTIO_GPU_PCI_PROPERTIES(VirtIOPCIProxy),
@@ -30,21 +32,29 @@ static void virtio_gpu_pci_base_realize(VirtIOPCIProxy *vpci_dev, Error **errp)
     VirtIOGPUBase *g = vgpu->vgpu;
     DeviceState *vdev = DEVICE(g);
     int i;
-    Error *local_error = NULL;
 
-    qdev_set_parent_bus(vdev, BUS(&vpci_dev->bus));
+    if (virtio_gpu_hostmem_enabled(g->conf)) {
+        vpci_dev->msix_bar_idx = 1;
+        vpci_dev->modern_mem_bar_idx = 2;
+        memory_region_init(&g->hostmem, OBJECT(g), "virtio-gpu-hostmem",
+                           g->conf.hostmem);
+        pci_register_bar(&vpci_dev->pci_dev, 4,
+                         PCI_BASE_ADDRESS_SPACE_MEMORY |
+                         PCI_BASE_ADDRESS_MEM_PREFETCH |
+                         PCI_BASE_ADDRESS_MEM_TYPE_64,
+                         &g->hostmem);
+        virtio_pci_add_shm_cap(vpci_dev, 4, 0, g->conf.hostmem,
+                               VIRTIO_GPU_SHM_ID_HOST_VISIBLE);
+    }
+
     virtio_pci_force_virtio_1(vpci_dev);
-    object_property_set_bool(OBJECT(vdev), true, "realized", &local_error);
-
-    if (local_error) {
-        error_propagate(errp, local_error);
+    if (!qdev_realize(vdev, BUS(&vpci_dev->bus), errp)) {
         return;
     }
 
     for (i = 0; i < g->conf.max_outputs; i++) {
-        object_property_set_link(OBJECT(g->scanout[i].con),
-                                 OBJECT(vpci_dev),
-                                 "device", errp);
+        object_property_set_link(OBJECT(g->scanout[i].con), "device",
+                                 OBJECT(vpci_dev), &error_abort);
     }
 }
 
@@ -55,7 +65,7 @@ static void virtio_gpu_pci_base_class_init(ObjectClass *klass, void *data)
     PCIDeviceClass *pcidev_k = PCI_DEVICE_CLASS(klass);
 
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
-    dc->props = virtio_gpu_pci_base_properties;
+    device_class_set_props(dc, virtio_gpu_pci_base_properties);
     dc->hotpluggable = false;
     k->realize = virtio_gpu_pci_base_realize;
     pcidev_k->class_id = PCI_CLASS_DISPLAY_OTHER;
@@ -68,15 +78,18 @@ static const TypeInfo virtio_gpu_pci_base_info = {
     .class_init = virtio_gpu_pci_base_class_init,
     .abstract = true
 };
+module_obj(TYPE_VIRTIO_GPU_PCI_BASE);
+module_kconfig(VIRTIO_PCI);
 
 #define TYPE_VIRTIO_GPU_PCI "virtio-gpu-pci"
-#define VIRTIO_GPU_PCI(obj)                                 \
-    OBJECT_CHECK(VirtIOGPUPCI, (obj), TYPE_VIRTIO_GPU_PCI)
+typedef struct VirtIOGPUPCI VirtIOGPUPCI;
+DECLARE_INSTANCE_CHECKER(VirtIOGPUPCI, VIRTIO_GPU_PCI,
+                         TYPE_VIRTIO_GPU_PCI)
 
-typedef struct VirtIOGPUPCI {
+struct VirtIOGPUPCI {
     VirtIOGPUPCIBase parent_obj;
     VirtIOGPU vdev;
-} VirtIOGPUPCI;
+};
 
 static void virtio_gpu_initfn(Object *obj)
 {
@@ -93,6 +106,7 @@ static const VirtioPCIDeviceTypeInfo virtio_gpu_pci_info = {
     .instance_size = sizeof(VirtIOGPUPCI),
     .instance_init = virtio_gpu_initfn,
 };
+module_obj(TYPE_VIRTIO_GPU_PCI);
 
 static void virtio_gpu_pci_register_types(void)
 {

@@ -14,6 +14,8 @@
 #include "virtio.h"
 #include "scsi.h"
 #include "virtio-scsi.h"
+#include "s390-time.h"
+#include "helper.h"
 
 static ScsiDevice default_scsi_device;
 static VirtioScsiCmdReq req;
@@ -148,7 +150,7 @@ static bool scsi_report_luns(VDev *vdev, void *data, uint32_t data_size)
 }
 
 static bool scsi_read_10(VDev *vdev,
-                         ulong sector, int sectors, void *data,
+                         unsigned long sector, int sectors, void *data,
                          unsigned int data_size)
 {
     ScsiCdbRead10 cdb = {
@@ -192,7 +194,12 @@ static bool scsi_read_capacity(VDev *vdev,
 
 /* virtio-scsi routines */
 
-static void virtio_scsi_locate_device(VDev *vdev)
+/*
+ * Tries to locate a SCSI device and adds the information for the found
+ * device to the vdev->scsi_device structure.
+ * Returns 0 if SCSI device could be located, or a error code < 0 otherwise
+ */
+static int virtio_scsi_locate_device(VDev *vdev)
 {
     const uint16_t channel = 0; /* again, it's what QEMU does */
     uint16_t target;
@@ -218,7 +225,7 @@ static void virtio_scsi_locate_device(VDev *vdev)
         IPL_check(sdev->channel == 0, "non-zero channel requested");
         IPL_check(sdev->target <= vdev->config.scsi.max_target, "target# high");
         IPL_check(sdev->lun <= vdev->config.scsi.max_lun, "LUN# high");
-        return;
+        return 0;
     }
 
     for (target = 0; target <= vdev->config.scsi.max_target; target++) {
@@ -245,22 +252,24 @@ static void virtio_scsi_locate_device(VDev *vdev)
              */
             sdev->lun = r->lun[0].v16[0]; /* it's returned this way */
             debug_print_int("Have to use LUN", sdev->lun);
-            return; /* we have to use this device */
+            return 0; /* we have to use this device */
         }
         for (i = 0; i < luns; i++) {
             if (r->lun[i].v64) {
                 /* Look for non-zero LUN - we have where to choose from */
                 sdev->lun = r->lun[i].v16[0];
                 debug_print_int("Will use LUN", sdev->lun);
-                return; /* we have found a device */
+                return 0; /* we have found a device */
             }
         }
     }
-    panic("\n! Cannot locate virtio-scsi device !\n");
+
+    sclp_print("Warning: Could not locate a usable virtio-scsi device\n");
+    return -ENODEV;
 }
 
 int virtio_scsi_read_many(VDev *vdev,
-                          ulong sector, void *load_addr, int sec_num)
+                          unsigned long sector, void *load_addr, int sec_num)
 {
     int sector_count;
     int f = vdev->blk_factor;
@@ -320,17 +329,20 @@ static void scsi_parse_capacity_report(void *data,
     }
 }
 
-void virtio_scsi_setup(VDev *vdev)
+static int virtio_scsi_setup(VDev *vdev)
 {
     int retry_test_unit_ready = 3;
     uint8_t data[256];
     uint32_t data_size = sizeof(data);
     ScsiInquiryEvpdPages *evpd = &scsi_inquiry_evpd_pages_response;
     ScsiInquiryEvpdBl *evpd_bl = &scsi_inquiry_evpd_bl_response;
-    int i;
+    int i, ret;
 
     vdev->scsi_device = &default_scsi_device;
-    virtio_scsi_locate_device(vdev);
+    ret = virtio_scsi_locate_device(vdev);
+    if (ret < 0) {
+        return ret;
+    }
 
     /* We have to "ping" the device before it becomes readable */
     while (!scsi_test_unit_ready(vdev)) {
@@ -415,4 +427,23 @@ void virtio_scsi_setup(VDev *vdev)
     }
     scsi_parse_capacity_report(data, &vdev->scsi_last_block,
                                (uint32_t *) &vdev->scsi_block_size);
+
+    return 0;
+}
+
+int virtio_scsi_setup_device(SubChannelId schid)
+{
+    VDev *vdev = virtio_get_device();
+
+    vdev->schid = schid;
+    virtio_setup_ccw(vdev);
+
+    IPL_assert(vdev->config.scsi.sense_size == VIRTIO_SCSI_SENSE_SIZE,
+               "Config: sense size mismatch");
+    IPL_assert(vdev->config.scsi.cdb_size == VIRTIO_SCSI_CDB_SIZE,
+               "Config: CDB size mismatch");
+
+    sclp_print("Using virtio-scsi.\n");
+
+    return virtio_scsi_setup(vdev);
 }

@@ -24,24 +24,22 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "cpu.h"
 #include <sys/ioctl.h>
-#include "exec/address-spaces.h"
-#include "hw/hw.h"
 #include "hw/ppc/openpic.h"
 #include "hw/ppc/openpic_kvm.h"
 #include "hw/pci/msi.h"
+#include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
 #include "sysemu/kvm.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qom/object.h"
 
 #define GCR_RESET        0x80000000
 
-#define KVM_OPENPIC(obj) \
-    OBJECT_CHECK(KVMOpenPICState, (obj), TYPE_KVM_OPENPIC)
+OBJECT_DECLARE_SIMPLE_TYPE(KVMOpenPICState, KVM_OPENPIC)
 
-typedef struct KVMOpenPICState {
+struct KVMOpenPICState {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
@@ -51,7 +49,7 @@ typedef struct KVMOpenPICState {
     uint32_t fd;
     uint32_t model;
     hwaddr mapped;
-} KVMOpenPICState;
+};
 
 static void kvm_openpic_set_irq(void *opaque, int n_IRQ, int level)
 {
@@ -236,6 +234,7 @@ static void kvm_openpic_realize(DeviceState *dev, Error **errp)
 
     opp->mem_listener.region_add = kvm_openpic_region_add;
     opp->mem_listener.region_del = kvm_openpic_region_del;
+    opp->mem_listener.name = "openpic-kvm";
     memory_listener_register(&opp->mem_listener, &address_space_memory);
 
     /* indicate pic capabilities */
@@ -274,7 +273,7 @@ static void kvm_openpic_class_init(ObjectClass *oc, void *data)
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = kvm_openpic_realize;
-    dc->props = kvm_openpic_properties;
+    device_class_set_props(dc, kvm_openpic_properties);
     dc->reset = kvm_openpic_reset;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }

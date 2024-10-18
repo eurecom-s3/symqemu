@@ -50,7 +50,7 @@ struct partition {
         uint32_t nr_sects;          /* nr of sectors in partition */
 } QEMU_PACKED;
 
-/* try to guess the disk logical geometry from the MSDOS partition table.
+/* try to guess the disk logical geometry from the MS-DOS partition table.
    Return 0 if OK, -1 if could not guess */
 static int guess_disk_lchs(BlockBackend *blk,
                            int *pcylinders, int *pheads, int *psectors)
@@ -63,15 +63,10 @@ static int guess_disk_lchs(BlockBackend *blk,
 
     blk_get_geometry(blk, &nb_sectors);
 
-    /**
-     * The function will be invoked during startup not only in sync I/O mode,
-     * but also in async I/O mode. So the I/O throttling function has to
-     * be disabled temporarily here, not permanently.
-     */
-    if (blk_pread_unthrottled(blk, 0, buf, BDRV_SECTOR_SIZE) < 0) {
+    if (blk_pread(blk, 0, BDRV_SECTOR_SIZE, buf, 0) < 0) {
         return -1;
     }
-    /* test msdos magic */
+    /* test MS-DOS magic */
     if (buf[510] != 0x55 || buf[511] != 0xaa) {
         return -1;
     }
@@ -155,7 +150,12 @@ void hd_geometry_guess(BlockBackend *blk,
         translation = BIOS_ATA_TRANSLATION_NONE;
     }
     if (ptrans) {
-        *ptrans = translation;
+        if (*ptrans == BIOS_ATA_TRANSLATION_AUTO) {
+            *ptrans = translation;
+        } else {
+            /* Defer to the translation specified by the user.  */
+            translation = *ptrans;
+        }
     }
     trace_hd_geometry_guess(blk, *pcyls, *pheads, *psecs, translation);
 }

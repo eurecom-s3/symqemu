@@ -1,7 +1,5 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "hw/hw.h"
-#include "hw/boards.h"
 #include "migration/cpu.h"
 
 static int get_fpcr(QEMUFile *f, void *opaque, size_t size,
@@ -13,7 +11,7 @@ static int get_fpcr(QEMUFile *f, void *opaque, size_t size,
 }
 
 static int put_fpcr(QEMUFile *f, void *opaque, size_t size,
-                    const VMStateField *field, QJSON *vmdesc)
+                    const VMStateField *field, JSONWriter *vmdesc)
 {
     CPUAlphaState *env = opaque;
     qemu_put_be64(f, cpu_alpha_load_fpcr(env));
@@ -26,7 +24,7 @@ static const VMStateInfo vmstate_fpcr = {
     .put = put_fpcr,
 };
 
-static VMStateField vmstate_env_fields[] = {
+static const VMStateField vmstate_env_fields[] = {
     VMSTATE_UINTTL_ARRAY(ir, CPUAlphaState, 31),
     VMSTATE_UINTTL_ARRAY(fir, CPUAlphaState, 31),
     /* Save the architecture value of the fpcr, not the internally
@@ -75,7 +73,7 @@ static const VMStateDescription vmstate_env = {
     .fields = vmstate_env_fields,
 };
 
-static VMStateField vmstate_cpu_fields[] = {
+static const VMStateField vmstate_cpu_fields[] = {
     VMSTATE_CPU(),
     VMSTATE_STRUCT(env, AlphaCPU, 1, vmstate_env, CPUAlphaState),
     VMSTATE_END_OF_LIST()

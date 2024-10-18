@@ -19,16 +19,13 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "hw/hw.h"
-#include "hw/boards.h"
 #include "migration/cpu.h"
 
 static const VMStateDescription vmstate_tlb_entry = {
     .name = "tlb_entry",
     .version_id = 1,
     .minimum_version_id = 1,
-    .minimum_version_id_old = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINTTL(mr, OpenRISCTLBEntry),
         VMSTATE_UINTTL(tr, OpenRISCTLBEntry),
         VMSTATE_END_OF_LIST()
@@ -39,7 +36,7 @@ static const VMStateDescription vmstate_cpu_tlb = {
     .name = "cpu_tlb",
     .version_id = 2,
     .minimum_version_id = 2,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_STRUCT_ARRAY(itlb, CPUOpenRISCTLBContext, TLB_SIZE, 0,
                              vmstate_tlb_entry, OpenRISCTLBEntry),
         VMSTATE_STRUCT_ARRAY(dtlb, CPUOpenRISCTLBContext, TLB_SIZE, 0,
@@ -57,7 +54,7 @@ static int get_sr(QEMUFile *f, void *opaque, size_t size,
 }
 
 static int put_sr(QEMUFile *f, void *opaque, size_t size,
-                  const VMStateField *field, QJSON *vmdesc)
+                  const VMStateField *field, JSONWriter *vmdesc)
 {
     CPUOpenRISCState *env = opaque;
     qemu_put_be32(f, cpu_get_sr(env));
@@ -74,7 +71,7 @@ static const VMStateDescription vmstate_env = {
     .name = "env",
     .version_id = 6,
     .minimum_version_id = 6,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINTTL_2DARRAY(shadow_gpr, CPUOpenRISCState, 16, 32),
         VMSTATE_UINTTL(pc, CPUOpenRISCState),
         VMSTATE_UINTTL(ppc, CPUOpenRISCState),
@@ -123,11 +120,22 @@ static const VMStateDescription vmstate_env = {
     }
 };
 
+static int cpu_post_load(void *opaque, int version_id)
+{
+    OpenRISCCPU *cpu = opaque;
+    CPUOpenRISCState *env = &cpu->env;
+
+    /* Update env->fp_status to match env->fpcsr.  */
+    cpu_set_fpcsr(env, env->fpcsr);
+    return 0;
+}
+
 const VMStateDescription vmstate_openrisc_cpu = {
     .name = "cpu",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .post_load = cpu_post_load,
+    .fields = (const VMStateField[]) {
         VMSTATE_CPU(),
         VMSTATE_STRUCT(env, OpenRISCCPU, 1, vmstate_env, CPUOpenRISCState),
         VMSTATE_END_OF_LIST()

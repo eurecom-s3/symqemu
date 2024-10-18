@@ -25,19 +25,23 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "hw/hw.h"
-#include "hw/ide.h"
+#include "hw/ide/pci.h"
 #include "hw/pci/pci.h"
-#include "hw/irq.h"
-#include "hw/xen/xen_common.h"
-#include "hw/xen/xen-legacy-backend.h"
+#include "migration/vmstate.h"
+#include "net/net.h"
 #include "trace.h"
-#include "exec/address-spaces.h"
+#include "sysemu/xen.h"
 #include "sysemu/block-backend.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
+#include "qom/object.h"
 
-#include <xenguest.h>
+#ifdef CONFIG_XEN
+#include "hw/xen/xen_native.h"
+#endif
+
+/* The rule is that xen_native.h must come first */
+#include "hw/xen/xen.h"
 
 //#define DEBUG_PLATFORM
 
@@ -51,7 +55,7 @@
 
 #define PFFLAG_ROM_LOCK 1 /* Sets whether ROM memory area is RW or RO */
 
-typedef struct PCIXenPlatformState {
+struct PCIXenPlatformState {
     /*< private >*/
     PCIDevice parent_obj;
     /*< public >*/
@@ -60,17 +64,15 @@ typedef struct PCIXenPlatformState {
     MemoryRegion bar;
     MemoryRegion mmio_bar;
     uint8_t flags; /* used only for version_id == 2 */
-    int drivers_blacklisted;
     uint16_t driver_product_version;
 
     /* Log from guest drivers */
     char log_buffer[4096];
     int log_buffer_off;
-} PCIXenPlatformState;
+};
 
 #define TYPE_XEN_PLATFORM "xen-platform"
-#define XEN_PLATFORM(obj) \
-    OBJECT_CHECK(PCIXenPlatformState, (obj), TYPE_XEN_PLATFORM)
+OBJECT_DECLARE_SIMPLE_TYPE(PCIXenPlatformState, XEN_PLATFORM)
 
 #define XEN_PLATFORM_IOPORT 0x10
 
@@ -112,12 +114,25 @@ static void log_writeb(PCIXenPlatformState *s, char val)
 #define _UNPLUG_NVME_DISKS 3
 #define UNPLUG_NVME_DISKS (1u << _UNPLUG_NVME_DISKS)
 
+static bool pci_device_is_passthrough(PCIDevice *d)
+{
+    if (!strcmp(d->name, "xen-pci-passthrough")) {
+        return true;
+    }
+
+    if (xen_mode == XEN_EMULATE && !strcmp(d->name, "vfio-pci")) {
+        return true;
+    }
+
+    return false;
+}
+
 static void unplug_nic(PCIBus *b, PCIDevice *d, void *o)
 {
     /* We have to ignore passthrough devices */
     if (pci_get_word(d->config + PCI_CLASS_DEVICE) ==
             PCI_CLASS_NETWORK_ETHERNET
-            && strcmp(d->name, "xen-pci-passthrough") != 0) {
+            && !pci_device_is_passthrough(d)) {
         object_unparent(OBJECT(d));
     }
 }
@@ -125,9 +140,14 @@ static void unplug_nic(PCIBus *b, PCIDevice *d, void *o)
 /* Remove the peer of the NIC device. Normally, this would be a tap device. */
 static void del_nic_peer(NICState *nic, void *opaque)
 {
-    NetClientState *nc;
+    NetClientState *nc = qemu_get_queue(nic);
+    ObjectClass *klass = module_object_class_by_name(nc->model);
 
-    nc = qemu_get_queue(nic);
+    /* Only delete peers of PCI NICs that we're about to delete */
+    if (!klass || !object_class_dynamic_cast(klass, TYPE_PCI_DEVICE)) {
+        return;
+    }
+
     if (nc->peer)
         qemu_del_net_client(nc->peer);
 }
@@ -138,6 +158,73 @@ static void pci_unplug_nics(PCIBus *bus)
     pci_for_each_device(bus, 0, unplug_nic, NULL);
 }
 
+/*
+ * The Xen HVM unplug protocol [1] specifies a mechanism to allow guests to
+ * request unplug of 'aux' disks (which is stated to mean all IDE disks,
+ * except the primary master).
+ *
+ * NOTE: The semantics of what happens if unplug of all disks and 'aux' disks
+ *       is simultaneously requested is not clear. The implementation assumes
+ *       that an 'all' request overrides an 'aux' request.
+ *
+ * [1] https://xenbits.xen.org/gitweb/?p=xen.git;a=blob;f=docs/misc/hvm-emulated-unplug.pandoc
+ */
+struct ide_unplug_state {
+    bool aux;
+    int nr_unplugged;
+};
+
+static int ide_dev_unplug(DeviceState *dev, void *_st)
+{
+    struct ide_unplug_state *st = _st;
+    IDEDevice *idedev;
+    IDEBus *idebus;
+    BlockBackend *blk;
+    int unit;
+
+    idedev = IDE_DEVICE(object_dynamic_cast(OBJECT(dev), "ide-hd"));
+    if (!idedev) {
+        return 0;
+    }
+
+    idebus = IDE_BUS(qdev_get_parent_bus(dev));
+
+    unit = (idedev == idebus->slave);
+    assert(unit || idedev == idebus->master);
+
+    if (st->aux && !unit && !strcmp(BUS(idebus)->name, "ide.0")) {
+        return 0;
+    }
+
+    blk = idebus->ifs[unit].blk;
+    if (blk) {
+        blk_drain(blk);
+        blk_flush(blk);
+
+        blk_detach_dev(blk, DEVICE(idedev));
+        idebus->ifs[unit].blk = NULL;
+        idedev->conf.blk = NULL;
+        monitor_remove_blk(blk);
+        blk_unref(blk);
+    }
+
+    object_unparent(OBJECT(dev));
+    st->nr_unplugged++;
+
+    return 0;
+}
+
+static void pci_xen_ide_unplug(PCIDevice *d, bool aux)
+{
+    struct ide_unplug_state st = { aux, 0 };
+    DeviceState *dev = DEVICE(d);
+
+    qdev_walk_children(dev, NULL, NULL, ide_dev_unplug, NULL, &st);
+    if (st.nr_unplugged) {
+        pci_device_reset(d);
+    }
+}
+
 static void unplug_disks(PCIBus *b, PCIDevice *d, void *opaque)
 {
     uint32_t flags = *(uint32_t *)opaque;
@@ -145,13 +232,13 @@ static void unplug_disks(PCIBus *b, PCIDevice *d, void *opaque)
         !(flags & UNPLUG_IDE_SCSI_DISKS);
 
     /* We have to ignore passthrough devices */
-    if (!strcmp(d->name, "xen-pci-passthrough")) {
+    if (pci_device_is_passthrough(d))
         return;
-    }
 
     switch (pci_get_word(d->config + PCI_CLASS_DEVICE)) {
     case PCI_CLASS_STORAGE_IDE:
-        pci_piix3_xen_ide_unplug(DEVICE(d), aux);
+    case PCI_CLASS_STORAGE_SATA:
+        pci_xen_ide_unplug(d, aux);
         break;
 
     case PCI_CLASS_STORAGE_SCSI:
@@ -226,18 +313,26 @@ static void platform_fixed_ioport_writeb(void *opaque, uint32_t addr, uint32_t v
     PCIXenPlatformState *s = opaque;
 
     switch (addr) {
-    case 0: /* Platform flags */ {
-        hvmmem_type_t mem_type = (val & PFFLAG_ROM_LOCK) ?
-            HVMMEM_ram_ro : HVMMEM_ram_rw;
-        if (xen_set_mem_type(xen_domid, mem_type, 0xc0, 0x40)) {
-            DPRINTF("unable to change ro/rw state of ROM memory area!\n");
-        } else {
+    case 0: /* Platform flags */
+        if (xen_mode == XEN_EMULATE) {
+            /* XX: Use i440gx/q35 PAM setup to do this? */
             s->flags = val & PFFLAG_ROM_LOCK;
-            DPRINTF("changed ro/rw state of ROM memory area. now is %s state.\n",
-                    (mem_type == HVMMEM_ram_ro ? "ro":"rw"));
+#ifdef CONFIG_XEN
+        } else {
+            hvmmem_type_t mem_type = (val & PFFLAG_ROM_LOCK) ?
+                HVMMEM_ram_ro : HVMMEM_ram_rw;
+
+            if (xen_set_mem_type(xen_domid, mem_type, 0xc0, 0x40)) {
+                DPRINTF("unable to change ro/rw state of ROM memory area!\n");
+            } else {
+                s->flags = val & PFFLAG_ROM_LOCK;
+                DPRINTF("changed ro/rw state of ROM memory area. now is %s state.\n",
+                        (mem_type == HVMMEM_ram_ro ? "ro" : "rw"));
+            }
+#endif
         }
         break;
-    }
+
     case 2:
         log_writeb(s, val);
         break;
@@ -246,18 +341,10 @@ static void platform_fixed_ioport_writeb(void *opaque, uint32_t addr, uint32_t v
 
 static uint32_t platform_fixed_ioport_readw(void *opaque, uint32_t addr)
 {
-    PCIXenPlatformState *s = opaque;
-
     switch (addr) {
     case 0:
-        if (s->drivers_blacklisted) {
-            /* The drivers will recognise this magic number and refuse
-             * to do anything. */
-            return 0xd249;
-        } else {
-            /* Magic value so that you can identify the interface. */
-            return 0x49d2;
-        }
+        /* Magic value so that you can identify the interface. */
+        return 0x49d2;
     default:
         return 0xffff;
     }
@@ -411,7 +498,7 @@ static uint64_t platform_mmio_read(void *opaque, hwaddr addr,
                                    unsigned size)
 {
     DPRINTF("Warning: attempted read from physical address "
-            "0x" TARGET_FMT_plx " in xen platform mmio space\n", addr);
+            "0x" HWADDR_FMT_plx " in xen platform mmio space\n", addr);
 
     return 0;
 }
@@ -420,7 +507,7 @@ static void platform_mmio_write(void *opaque, hwaddr addr,
                                 uint64_t val, unsigned size)
 {
     DPRINTF("Warning: attempted write of 0x%"PRIx64" to physical "
-            "address 0x" TARGET_FMT_plx " in xen platform mmio space\n",
+            "address 0x" HWADDR_FMT_plx " in xen platform mmio space\n",
             val, addr);
 }
 
@@ -450,7 +537,7 @@ static const VMStateDescription vmstate_xen_platform = {
     .version_id = 4,
     .minimum_version_id = 4,
     .post_load = xen_platform_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_PCI_DEVICE(parent_obj, PCIXenPlatformState),
         VMSTATE_UINT8(flags, PCIXenPlatformState),
         VMSTATE_END_OF_LIST()
@@ -463,8 +550,8 @@ static void xen_platform_realize(PCIDevice *dev, Error **errp)
     uint8_t *pci_conf;
 
     /* Device will crash on reset if xen is not initialized */
-    if (!xen_enabled()) {
-        error_setg(errp, "xen-platform device requires the Xen accelerator");
+    if (xen_mode == XEN_DISABLED) {
+        error_setg(errp, "xen-platform device requires a Xen guest");
         return;
     }
 

@@ -6,7 +6,7 @@
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
 # License as published by the Free Software Foundation; either
-# version 2 of the License, or (at your option) any later version.
+# version 2.1 of the License, or (at your option) any later version.
 #
 # This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -120,5 +120,42 @@ COMPARISONS = [
                  compression_xbzrle=True, compression_xbzrle_cache=10),
         Scenario("compr-xbzrle-cache-50",
                  compression_xbzrle=True, compression_xbzrle_cache=50),
+    ]),
+
+
+    # Looking at effect of multifd with
+    # varying numbers of channels
+    Comparison("compr-multifd", scenarios = [
+        Scenario("compr-multifd-channels-4",
+                 multifd=True, multifd_channels=2),
+        Scenario("compr-multifd-channels-8",
+                 multifd=True, multifd_channels=8),
+        Scenario("compr-multifd-channels-32",
+                 multifd=True, multifd_channels=32),
+        Scenario("compr-multifd-channels-64",
+                 multifd=True, multifd_channels=64),
+    ]),
+
+    # Looking at effect of dirty-limit with
+    # varying x_vcpu_dirty_limit_period
+    Comparison("compr-dirty-limit-period", scenarios = [
+        Scenario("compr-dirty-limit-period-500",
+                 dirty_limit=True, x_vcpu_dirty_limit_period=500),
+        Scenario("compr-dirty-limit-period-800",
+                 dirty_limit=True, x_vcpu_dirty_limit_period=800),
+        Scenario("compr-dirty-limit-period-1000",
+                 dirty_limit=True, x_vcpu_dirty_limit_period=1000),
+    ]),
+
+
+    # Looking at effect of dirty-limit with
+    # varying vcpu_dirty_limit
+    Comparison("compr-dirty-limit", scenarios = [
+        Scenario("compr-dirty-limit-10MB",
+                 dirty_limit=True, vcpu_dirty_limit=10),
+        Scenario("compr-dirty-limit-20MB",
+                 dirty_limit=True, vcpu_dirty_limit=20),
+        Scenario("compr-dirty-limit-50MB",
+                 dirty_limit=True, vcpu_dirty_limit=50),
     ]),
 ]

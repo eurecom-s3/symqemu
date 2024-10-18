@@ -34,6 +34,7 @@ config ESP_PCI
     default y if PCI_DEVICES
     depends on PCI
     select ESP
+    select NMC93XX_EEPROM
 
 config SPAPR_VSCSI
     bool
@@ -47,8 +48,19 @@ config VIRTIO_SCSI
     depends on VIRTIO
     select SCSI
 
+config VHOST_SCSI_COMMON
+    bool
+    depends on VIRTIO
+
+config VHOST_SCSI
+    bool
+    default y
+    select VHOST_SCSI_COMMON
+    depends on VIRTIO && VHOST_KERNEL
+
 config VHOST_USER_SCSI
     bool
     # Only PCI devices are provided for now
     default y if VIRTIO_PCI
+    select VHOST_SCSI_COMMON
     depends on VIRTIO && VHOST_USER && LINUX

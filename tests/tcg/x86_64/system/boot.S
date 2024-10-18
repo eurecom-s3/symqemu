@@ -1,16 +1,16 @@
 /*
  * x86_64 boot and support code
  *
- * Copyright 2019 Linaro
+ * Copyright 2019, 2024 Linaro
  *
- * This work is licensed under the terms of the GNU GPL, version 3 or later.
+ * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
  *
  * Unlike the i386 version we instead use Xen's PVHVM booting header
  * which should drop us automatically into 32 bit mode ready to go. I've
  * nabbed bits of the Linux kernel setup to achieve this.
  *
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
         .section .head
@@ -41,10 +41,7 @@
 #define XEN_ELFNOTE_PHYS32_ENTRY  18
 
 #define __ASM_FORM(x)	x
-#define __ASM_FORM_RAW(x)     x
-#define __ASM_FORM_COMMA(x) x,
-#define __ASM_SEL(a,b)           __ASM_FORM(b)
-#define __ASM_SEL_RAW(a,b)      __ASM_FORM_RAW(b)
+#define __ASM_SEL(a,b)  __ASM_FORM(b)
 #define _ASM_PTR	__ASM_SEL(.long, .quad)
 
 	ELFNOTE(Xen, XEN_ELFNOTE_VIRT_BASE,      _ASM_PTR 0x100000)
@@ -59,7 +56,7 @@
 	*
 	* - `ebx`: contains the physical memory address where the loader has placed
 	*          the boot start info structure.
-	* - `cr0`: bit 0 (PE) must be set. All the other writeable bits are cleared.
+	* - `cr0`: bit 0 (PE) must be set. All the other writable bits are cleared.
 	* - `cr4`: all bits are cleared.
 	* - `cs `: must be a 32-bit read/execute code segment with a base of ‘0’
 	*          and a limit of ‘0xFFFFFFFF’. The selector value is unspecified.
@@ -124,10 +121,10 @@ _start:
 	// Setup stack ASAP
 	movq $stack_end,%rsp
 
-        /* don't worry about stack frame, assume everthing is garbage when we return */
+        /* don't worry about stack frame, assume everything is garbage when we return */
 	call main
 
-        /* output any non-zero result in eax to isa-debug-exit device */
+_exit:	/* output any non-zero result in eax to isa-debug-exit device */
         test %al, %al
         jz 1f
         out %ax, $0xf4
@@ -198,7 +195,7 @@ idt_1F: .int 0, 0
 	 *
 	 * This describes various memory areas (segments) through
 	 * segment descriptors. In 32 bit mode each segment each
-	 * segement is associated with segment registers which are
+	 * segment is associated with segment registers which are
 	 * implicitly (or explicitly) referenced depending on the
 	 * instruction. However in 64 bit mode selectors are flat and
 	 * segmented addressing isn't used.

@@ -19,7 +19,13 @@
 #include "exec/helper-proto.h"
 #include "exec/cpu_ldst.h"
 #include "qemu/qemu-print.h"
-#include "tcg.h"
+#include "tcg/tcg.h"
+#include "exec/translation-block.h"
+#include "accel/tcg/tcg-runtime-sym-common.h"
+
+#define HELPER_H  "accel/tcg/tcg-runtime-sym.h"
+#include "exec/helper-info.c.inc"
+#undef  HELPER_H
 
 /* Include the symbolic backend, using void* as expression type. */
 
@@ -86,18 +92,6 @@
         BINARY_HELPER_ENSURE_EXPRESSIONS;                                      \
         return _sym_build_##symcc_name(arg1_expr, arg2_expr);                  \
     }
-
-
-/* Architecture-independent way to get the program counter */
-static target_ulong get_pc(CPUArchState *env)
-{
-    target_ulong pc, cs_base;
-    uint32_t flags;
-
-    cpu_get_tb_cpu_state(env, &pc, &cs_base, &flags);
-
-    return pc;
-}
 
 
 /* The binary helpers */
@@ -319,22 +313,22 @@ static void *sym_load_guest_internal(CPUArchState *env,
 }
 
 void *HELPER(sym_load_guest_i32)(CPUArchState *env,
-                                 target_ulong addr, void *addr_expr,
-                                 uint64_t length, target_ulong mmu_idx)
+                                 uint64_t addr, void *addr_expr,
+                                 uint64_t length, uint64_t mmu_idx)
 {
     return sym_load_guest_internal(env, addr, addr_expr, length, 4, mmu_idx);
 }
 
 void *HELPER(sym_load_guest_i64)(CPUArchState *env,
-                                 target_ulong addr, void *addr_expr,
-                                 uint64_t length, target_ulong mmu_idx)
+                                 uint64_t addr, void *addr_expr,
+                                 uint64_t length, uint64_t mmu_idx)
 {
     return sym_load_guest_internal(env, addr, addr_expr, length, 8, mmu_idx);
 }
 
 static void sym_store_guest_internal(CPUArchState *env,
                                      uint64_t value, void *value_expr,
-                                     target_ulong addr, void *addr_expr,
+                                     uint64_t addr, void *addr_expr,
                                      uint64_t length, target_ulong mmu_idx)
 {
     /* Try an alternative address */
@@ -350,8 +344,8 @@ static void sym_store_guest_internal(CPUArchState *env,
 
 void HELPER(sym_store_guest_i32)(CPUArchState *env,
                                  uint32_t value, void *value_expr,
-                                 target_ulong addr, void *addr_expr,
-                                 uint64_t length, target_ulong mmu_idx)
+                                 uint64_t addr, void *addr_expr,
+                                 uint64_t length, uint64_t mmu_idx)
 {
     return sym_store_guest_internal(
         env, value, value_expr, addr, addr_expr, length, mmu_idx);
@@ -359,8 +353,8 @@ void HELPER(sym_store_guest_i32)(CPUArchState *env,
 
 void HELPER(sym_store_guest_i64)(CPUArchState *env,
                                  uint64_t value, void *value_expr,
-                                 target_ulong addr, void *addr_expr,
-                                 uint64_t length, target_ulong mmu_idx)
+                                 uint64_t addr, void *addr_expr,
+                                 uint64_t length, uint64_t mmu_idx)
 {
     return sym_store_guest_internal(
         env, value, value_expr, addr, addr_expr, length, mmu_idx);
@@ -388,15 +382,12 @@ void *HELPER(sym_load_host_i64)(void *addr, uint64_t offset, uint64_t length)
     return sym_load_host_internal(addr, offset, length, 8);
 }
 
-void HELPER(sym_store_host_i32)(uint32_t value, void *value_expr,
-                                void *addr,
-                                uint64_t offset, uint64_t length)
+void *HELPER(sym_load_host_vec)(void *addr, uint64_t offset, uint64_t length)
 {
-    _sym_write_memory((uint8_t*)addr + offset, length, value_expr, true);
+    return sym_load_host_internal(addr, offset, length, length);
 }
 
-void HELPER(sym_store_host_i64)(uint64_t value, void *value_expr,
-                                void *addr,
+void HELPER(sym_store_host)(void *value_expr, void *addr,
                                 uint64_t offset, uint64_t length)
 {
     _sym_write_memory((uint8_t*)addr + offset, length, value_expr, true);
@@ -571,72 +562,106 @@ void *HELPER(sym_deposit_i64)(uint64_t arg1, void *arg1_expr,
 static void *sym_setcond_internal(CPUArchState *env,
                                   uint64_t arg1, void *arg1_expr,
                                   uint64_t arg2, void *arg2_expr,
-                                  int32_t cond, uint64_t result,
+                                  int32_t comparison_operator, uint64_t is_taken,
                                   uint8_t result_bits)
 {
     BINARY_HELPER_ENSURE_EXPRESSIONS;
 
-    void *(*handler)(void *, void*);
-    switch (cond) {
-    case TCG_COND_EQ:
-        handler = _sym_build_equal;
-        break;
-    case TCG_COND_NE:
-        handler = _sym_build_not_equal;
-        break;
-    case TCG_COND_LT:
-        handler = _sym_build_signed_less_than;
-        break;
-    case TCG_COND_GE:
-        handler = _sym_build_signed_greater_equal;
-        break;
-    case TCG_COND_LE:
-        handler = _sym_build_signed_less_equal;
-        break;
-    case TCG_COND_GT:
-        handler = _sym_build_signed_greater_than;
-        break;
-    case TCG_COND_LTU:
-        handler = _sym_build_unsigned_less_than;
-        break;
-    case TCG_COND_GEU:
-        handler = _sym_build_unsigned_greater_equal;
-        break;
-    case TCG_COND_LEU:
-        handler = _sym_build_unsigned_less_equal;
-        break;
-    case TCG_COND_GTU:
-        handler = _sym_build_unsigned_greater_than;
-        break;
-    default:
-        g_assert_not_reached();
-    }
-
-    void *condition = handler(arg1_expr, arg2_expr);
-    _sym_push_path_constraint(condition, result, get_pc(env));
+    void *condition_symbol = build_and_push_path_constraint(env, arg1_expr, arg2_expr, comparison_operator, is_taken);
 
     assert(result_bits > 1);
-    return _sym_build_zext(_sym_build_bool_to_bit(condition),
+    return _sym_build_zext(_sym_build_bool_to_bit(condition_symbol),
                            result_bits - 1);
 }
 
 void *HELPER(sym_setcond_i32)(CPUArchState *env,
                               uint32_t arg1, void *arg1_expr,
                               uint32_t arg2, void *arg2_expr,
-                              int32_t cond, uint32_t result)
+                              int32_t comparison_operator, uint32_t is_taken)
 {
     return sym_setcond_internal(
-        env, arg1, arg1_expr, arg2, arg2_expr, cond, result, 32);
+            env, arg1, arg1_expr, arg2, arg2_expr, comparison_operator, is_taken, 32);
 }
 
 void *HELPER(sym_setcond_i64)(CPUArchState *env,
                               uint64_t arg1, void *arg1_expr,
                               uint64_t arg2, void *arg2_expr,
-                              int32_t cond, uint64_t result)
+                              int32_t comparison_operator, uint64_t is_taken)
 {
     return sym_setcond_internal(
-        env, arg1, arg1_expr, arg2, arg2_expr, cond, result, 64);
+            env, arg1, arg1_expr, arg2, arg2_expr, comparison_operator, is_taken, 64);
 }
+
+static void *sym_movcond_internal(CPUArchState *env,
+                              uint64_t c1, void *c1_expr,
+                              uint64_t c2, void *c2_expr,
+                              uint64_t v1, void *v1_expr,
+                              uint64_t v2, void *v2_expr,
+                              int32_t comparison_operator,
+                              uint64_t is_taken, uint8_t result_bits)
+{
+    if (c1_expr == NULL && c2_expr == NULL && v1_expr == NULL && v2_expr == NULL) {
+        return NULL;
+    }
+
+    if (c1_expr == NULL) {
+        c1_expr = _sym_build_integer(c1, _sym_bits_helper(c2_expr));
+    }
+
+    if (c2_expr == NULL) {
+        c2_expr = _sym_build_integer(c2, _sym_bits_helper(c1_expr));
+    }
+
+    if (v1_expr == NULL) {
+        v1_expr = _sym_build_integer(v1, _sym_bits_helper(c1_expr));
+    }
+
+    if (v2_expr == NULL) {
+        v2_expr = _sym_build_integer(v2, _sym_bits_helper(c1_expr));
+    }
+
+    assert(_sym_bits_helper(c1_expr) == result_bits);
+    assert(_sym_bits_helper(c2_expr) == result_bits);
+    assert(_sym_bits_helper(v1_expr) == result_bits);
+    assert(_sym_bits_helper(v2_expr) == result_bits);
+
+    void *condition_symbol = build_and_push_path_constraint(env, c1_expr, c2_expr, comparison_operator, is_taken);
+
+    void *condition_ext = _sym_build_sext(_sym_build_bool_to_bit(condition_symbol),
+                                          result_bits - 1);
+
+    assert(_sym_bits_helper(condition_ext) == result_bits);
+
+    void *v1_masked = _sym_build_and(v1_expr, condition_ext);
+    void *v2_masked = _sym_build_and(v2_expr, condition_ext);
+
+    return _sym_build_xor(v1_masked, v2_masked);
+}
+
+void *HELPER(sym_movcond_i32)(CPUArchState *env,
+                              uint32_t c1, void *c1_expr,
+                              uint32_t c2, void *c2_expr,
+                              uint32_t v1, void *v1_expr,
+                              uint32_t v2, void *v2_expr,
+                              int32_t comparison_operator,
+                              uint32_t is_taken)
+{
+    return sym_movcond_internal(
+            env, c1, c1_expr, c2, c2_expr,v1, v1_expr, v2, v2_expr, comparison_operator, is_taken, 32);
+}
+
+void *HELPER(sym_movcond_i64)(CPUArchState *env,
+                              uint64_t c1, void *c1_expr,
+                              uint64_t c2, void *c2_expr,
+                              uint64_t v1, void *v1_expr,
+                              uint64_t v2, void *v2_expr,
+                              int32_t comparison_operator,
+                              uint64_t is_taken)
+{
+    return sym_movcond_internal(
+            env, c1, c1_expr, c2, c2_expr,v1, v1_expr, v2, v2_expr, comparison_operator, is_taken, 64);
+}
+
 
 void HELPER(sym_notify_call)(uint64_t return_address)
 {
@@ -657,3 +682,4 @@ void HELPER(sym_collect_garbage)(void)
 {
     _sym_collect_garbage();
 }
+

@@ -6,7 +6,7 @@
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
 # License as published by the Free Software Foundation; either
-# version 2 of the License, or (at your option) any later version.
+# version 2.1 of the License, or (at your option) any later version.
 #
 # This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -29,7 +29,10 @@ class Scenario(object):
                  post_copy=False, post_copy_iters=5,
                  auto_converge=False, auto_converge_step=10,
                  compression_mt=False, compression_mt_threads=1,
-                 compression_xbzrle=False, compression_xbzrle_cache=10):
+                 compression_xbzrle=False, compression_xbzrle_cache=10,
+                 multifd=False, multifd_channels=2,
+                 dirty_limit=False, x_vcpu_dirty_limit_period=500,
+                 vcpu_dirty_limit=1):
 
         self._name = name
 
@@ -56,6 +59,13 @@ class Scenario(object):
         self._compression_xbzrle = compression_xbzrle
         self._compression_xbzrle_cache = compression_xbzrle_cache # percentage of guest RAM
 
+        self._multifd = multifd
+        self._multifd_channels = multifd_channels
+
+        self._dirty_limit = dirty_limit
+        self._x_vcpu_dirty_limit_period = x_vcpu_dirty_limit_period
+        self._vcpu_dirty_limit = vcpu_dirty_limit
+
     def serialize(self):
         return {
             "name": self._name,
@@ -73,6 +83,11 @@ class Scenario(object):
             "compression_mt_threads": self._compression_mt_threads,
             "compression_xbzrle": self._compression_xbzrle,
             "compression_xbzrle_cache": self._compression_xbzrle_cache,
+            "multifd": self._multifd,
+            "multifd_channels": self._multifd_channels,
+            "dirty_limit": self._dirty_limit,
+            "x_vcpu_dirty_limit_period": self._x_vcpu_dirty_limit_period,
+            "vcpu_dirty_limit": self._vcpu_dirty_limit,
         }
 
     @classmethod
@@ -92,4 +107,6 @@ class Scenario(object):
             data["compression_mt"],
             data["compression_mt_threads"],
             data["compression_xbzrle"],
-            data["compression_xbzrle_cache"])
+            data["compression_xbzrle_cache"],
+            data["multifd"],
+            data["multifd_channels"])

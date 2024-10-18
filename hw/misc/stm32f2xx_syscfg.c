@@ -94,12 +94,12 @@ static void stm32f2xx_syscfg_write(void *opaque, hwaddr addr,
     switch (addr) {
     case SYSCFG_MEMRMP:
         qemu_log_mask(LOG_UNIMP,
-                      "%s: Changeing the memory mapping isn't supported " \
+                      "%s: Changing the memory mapping isn't supported " \
                       "in QEMU\n", __func__);
         return;
     case SYSCFG_PMC:
         qemu_log_mask(LOG_UNIMP,
-                      "%s: Changeing the memory mapping isn't supported " \
+                      "%s: Changing the memory mapping isn't supported " \
                       "in QEMU\n", __func__);
         return;
     case SYSCFG_EXTICR1:
@@ -132,8 +132,6 @@ static const MemoryRegionOps stm32f2xx_syscfg_ops = {
 static void stm32f2xx_syscfg_init(Object *obj)
 {
     STM32F2XXSyscfgState *s = STM32F2XX_SYSCFG(obj);
-
-    sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
 
     memory_region_init_io(&s->mmio, obj, &stm32f2xx_syscfg_ops, s,
                           TYPE_STM32F2XX_SYSCFG, 0x400);

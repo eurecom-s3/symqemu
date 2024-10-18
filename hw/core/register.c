@@ -17,7 +17,6 @@
 
 #include "qemu/osdep.h"
 #include "hw/register.h"
-#include "hw/qdev.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 
@@ -81,7 +80,7 @@ void register_write(RegisterInfo *reg, uint64_t val, uint64_t we,
 
     if (!ac || !ac->name) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: write to undefined device state "
-                      "(written value: %#" PRIx64 ")\n", prefix, val);
+                      "(written value: 0x%" PRIx64 ")\n", prefix, val);
         return;
     }
 
@@ -90,14 +89,14 @@ void register_write(RegisterInfo *reg, uint64_t val, uint64_t we,
     test = (old_val ^ val) & ac->rsvd;
     if (test) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: change of value in reserved bit"
-                      "fields: %#" PRIx64 ")\n", prefix, test);
+                      "fields: 0x%" PRIx64 ")\n", prefix, test);
     }
 
     test = val & ac->unimp;
     if (test) {
         qemu_log_mask(LOG_UNIMP,
-                      "%s:%s writing %#" PRIx64 " to unimplemented bits:" \
-                      " %#" PRIx64 "\n",
+                      "%s:%s writing 0x%" PRIx64 " to unimplemented bits:" \
+                      " 0x%" PRIx64 "\n",
                       prefix, reg->access->name, val, ac->unimp);
     }
 
@@ -113,7 +112,7 @@ void register_write(RegisterInfo *reg, uint64_t val, uint64_t we,
     }
 
     if (debug) {
-        qemu_log("%s:%s: write of value %#" PRIx64 "\n", prefix, ac->name,
+        qemu_log("%s:%s: write of value 0x%" PRIx64 "\n", prefix, ac->name,
                  new_val);
     }
 
@@ -151,7 +150,7 @@ uint64_t register_read(RegisterInfo *reg, uint64_t re, const char* prefix,
     }
 
     if (debug) {
-        qemu_log("%s:%s: read of value %#" PRIx64 "\n", prefix,
+        qemu_log("%s:%s: read of value 0x%" PRIx64 "\n", prefix,
                  ac->name, ret);
     }
 
@@ -177,17 +176,6 @@ void register_reset(RegisterInfo *reg)
     }
 }
 
-void register_init(RegisterInfo *reg)
-{
-    assert(reg);
-
-    if (!reg->data || !reg->access) {
-        return;
-    }
-
-    object_initialize((void *)reg, sizeof(*reg), TYPE_REGISTER);
-}
-
 void register_write_memory(void *opaque, hwaddr addr,
                            uint64_t value, unsigned size)
 {
@@ -205,7 +193,7 @@ void register_write_memory(void *opaque, hwaddr addr,
 
     if (!reg) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: write to unimplemented register " \
-                      "at address: %#" PRIx64 "\n", reg_array->prefix, addr);
+                      "at address: 0x%" PRIx64 "\n", reg_array->prefix, addr);
         return;
     }
 
@@ -234,7 +222,7 @@ uint64_t register_read_memory(void *opaque, hwaddr addr,
 
     if (!reg) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s:  read to unimplemented register " \
-                      "at address: %#" PRIx64 "\n", reg_array->prefix, addr);
+                      "at address: 0x%" PRIx64 "\n", reg_array->prefix, addr);
         return 0;
     }
 
@@ -247,16 +235,18 @@ uint64_t register_read_memory(void *opaque, hwaddr addr,
     return extract64(read_val, 0, size * 8);
 }
 
-RegisterInfoArray *register_init_block32(DeviceState *owner,
-                                         const RegisterAccessInfo *rae,
-                                         int num, RegisterInfo *ri,
-                                         uint32_t *data,
-                                         const MemoryRegionOps *ops,
-                                         bool debug_enabled,
-                                         uint64_t memory_size)
+static RegisterInfoArray *register_init_block(DeviceState *owner,
+                                              const RegisterAccessInfo *rae,
+                                              int num, RegisterInfo *ri,
+                                              void *data,
+                                              const MemoryRegionOps *ops,
+                                              bool debug_enabled,
+                                              uint64_t memory_size,
+                                              size_t data_size_bits)
 {
     const char *device_prefix = object_get_typename(OBJECT(owner));
     RegisterInfoArray *r_array = g_new0(RegisterInfoArray, 1);
+    int data_size = data_size_bits >> 3;
     int i;
 
     r_array->r = g_new0(RegisterInfo *, num);
@@ -265,16 +255,17 @@ RegisterInfoArray *register_init_block32(DeviceState *owner,
     r_array->prefix = device_prefix;
 
     for (i = 0; i < num; i++) {
-        int index = rae[i].addr / 4;
+        int index = rae[i].addr / data_size;
         RegisterInfo *r = &ri[index];
 
-        *r = (RegisterInfo) {
-            .data = &data[index],
-            .data_size = sizeof(uint32_t),
-            .access = &rae[i],
-            .opaque = owner,
-        };
-        register_init(r);
+        /* Init the register, this will zero it. */
+        object_initialize((void *)r, sizeof(*r), TYPE_REGISTER);
+
+        /* Set the properties of the register */
+        r->data = data + data_size * index;
+        r->data_size = data_size;
+        r->access = &rae[i];
+        r->opaque = owner;
 
         r_array->r[i] = r;
     }
@@ -283,6 +274,42 @@ RegisterInfoArray *register_init_block32(DeviceState *owner,
                           device_prefix, memory_size);
 
     return r_array;
+}
+
+RegisterInfoArray *register_init_block8(DeviceState *owner,
+                                        const RegisterAccessInfo *rae,
+                                        int num, RegisterInfo *ri,
+                                        uint8_t *data,
+                                        const MemoryRegionOps *ops,
+                                        bool debug_enabled,
+                                        uint64_t memory_size)
+{
+    return register_init_block(owner, rae, num, ri, (void *)
+                               data, ops, debug_enabled, memory_size, 8);
+}
+
+RegisterInfoArray *register_init_block32(DeviceState *owner,
+                                         const RegisterAccessInfo *rae,
+                                         int num, RegisterInfo *ri,
+                                         uint32_t *data,
+                                         const MemoryRegionOps *ops,
+                                         bool debug_enabled,
+                                         uint64_t memory_size)
+{
+    return register_init_block(owner, rae, num, ri, (void *)
+                               data, ops, debug_enabled, memory_size, 32);
+}
+
+RegisterInfoArray *register_init_block64(DeviceState *owner,
+                                         const RegisterAccessInfo *rae,
+                                         int num, RegisterInfo *ri,
+                                         uint64_t *data,
+                                         const MemoryRegionOps *ops,
+                                         bool debug_enabled,
+                                         uint64_t memory_size)
+{
+    return register_init_block(owner, rae, num, ri, (void *)
+                               data, ops, debug_enabled, memory_size, 64);
 }
 
 void register_finalize_block(RegisterInfoArray *r_array)
@@ -304,6 +331,7 @@ static const TypeInfo register_info = {
     .name  = TYPE_REGISTER,
     .parent = TYPE_DEVICE,
     .class_init = register_class_init,
+    .instance_size = sizeof(RegisterInfo),
 };
 
 static void register_register_types(void)

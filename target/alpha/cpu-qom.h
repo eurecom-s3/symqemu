@@ -1,5 +1,5 @@
 /*
- * QEMU Alpha CPU
+ * QEMU Alpha CPU QOM header (target agnostic)
  *
  * Copyright (c) 2012 SUSE LINUX Products GmbH
  *
@@ -20,33 +20,13 @@
 #ifndef QEMU_ALPHA_CPU_QOM_H
 #define QEMU_ALPHA_CPU_QOM_H
 
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
 
 #define TYPE_ALPHA_CPU "alpha-cpu"
 
-#define ALPHA_CPU_CLASS(klass) \
-    OBJECT_CLASS_CHECK(AlphaCPUClass, (klass), TYPE_ALPHA_CPU)
-#define ALPHA_CPU(obj) \
-    OBJECT_CHECK(AlphaCPU, (obj), TYPE_ALPHA_CPU)
-#define ALPHA_CPU_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(AlphaCPUClass, (obj), TYPE_ALPHA_CPU)
+OBJECT_DECLARE_CPU_TYPE(AlphaCPU, AlphaCPUClass, ALPHA_CPU)
 
-/**
- * AlphaCPUClass:
- * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
- *
- * An Alpha CPU model.
- */
-typedef struct AlphaCPUClass {
-    /*< private >*/
-    CPUClass parent_class;
-    /*< public >*/
-
-    DeviceRealize parent_realize;
-    void (*parent_reset)(CPUState *cpu);
-} AlphaCPUClass;
-
-typedef struct AlphaCPU AlphaCPU;
+#define ALPHA_CPU_TYPE_SUFFIX "-" TYPE_ALPHA_CPU
+#define ALPHA_CPU_TYPE_NAME(model) model ALPHA_CPU_TYPE_SUFFIX
 
 #endif

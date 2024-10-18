@@ -27,7 +27,7 @@
 
 #include "hw/sysbus.h"
 #include "chardev/char-fe.h"
-#include "hw/hw.h"
+#include "qom/object.h"
 
 #define USART_SR   0x00
 #define USART_DR   0x04
@@ -48,16 +48,17 @@
 #define USART_SR_TC   (1 << 6)
 #define USART_SR_RXNE (1 << 5)
 
-#define USART_CR1_UE  (1 << 13)
-#define USART_CR1_RXNEIE  (1 << 5)
-#define USART_CR1_TE  (1 << 3)
-#define USART_CR1_RE  (1 << 2)
+#define USART_CR1_UE     (1 << 13)
+#define USART_CR1_TXEIE  (1 << 7)
+#define USART_CR1_TCEIE  (1 << 6)
+#define USART_CR1_RXNEIE (1 << 5)
+#define USART_CR1_TE     (1 << 3)
+#define USART_CR1_RE     (1 << 2)
 
 #define TYPE_STM32F2XX_USART "stm32f2xx-usart"
-#define STM32F2XX_USART(obj) \
-    OBJECT_CHECK(STM32F2XXUsartState, (obj), TYPE_STM32F2XX_USART)
+OBJECT_DECLARE_SIMPLE_TYPE(STM32F2XXUsartState, STM32F2XX_USART)
 
-typedef struct {
+struct STM32F2XXUsartState {
     /* <private> */
     SysBusDevice parent_obj;
 
@@ -74,5 +75,5 @@ typedef struct {
 
     CharBackend chr;
     qemu_irq irq;
-} STM32F2XXUsartState;
+};
 #endif /* HW_STM32F2XX_USART_H */

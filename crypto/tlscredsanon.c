@@ -29,14 +29,15 @@
 
 #ifdef CONFIG_GNUTLS
 
+#include <gnutls/gnutls.h>
+
 
 static int
 qcrypto_tls_creds_anon_load(QCryptoTLSCredsAnon *creds,
                             Error **errp)
 {
-    char *dhparams = NULL;
+    g_autofree char *dhparams = NULL;
     int ret;
-    int rv = -1;
 
     trace_qcrypto_tls_creds_anon_load(creds,
             creds->parent_obj.dir ? creds->parent_obj.dir : "<nodir>");
@@ -45,20 +46,20 @@ qcrypto_tls_creds_anon_load(QCryptoTLSCredsAnon *creds,
         if (qcrypto_tls_creds_get_path(&creds->parent_obj,
                                        QCRYPTO_TLS_CREDS_DH_PARAMS,
                                        false, &dhparams, errp) < 0) {
-            goto cleanup;
+            return -1;
         }
 
         ret = gnutls_anon_allocate_server_credentials(&creds->data.server);
         if (ret < 0) {
             error_setg(errp, "Cannot allocate credentials: %s",
                        gnutls_strerror(ret));
-            goto cleanup;
+            return -1;
         }
 
         if (qcrypto_tls_creds_get_dh_params_file(&creds->parent_obj, dhparams,
                                                  &creds->parent_obj.dh_params,
                                                  errp) < 0) {
-            goto cleanup;
+            return -1;
         }
 
         gnutls_anon_set_server_dh_params(creds->data.server,
@@ -68,14 +69,11 @@ qcrypto_tls_creds_anon_load(QCryptoTLSCredsAnon *creds,
         if (ret < 0) {
             error_setg(errp, "Cannot allocate credentials: %s",
                        gnutls_strerror(ret));
-            goto cleanup;
+            return -1;
         }
     }
 
-    rv = 0;
- cleanup:
-    g_free(dhparams);
-    return rv;
+    return 0;
 }
 
 
@@ -121,17 +119,11 @@ qcrypto_tls_creds_anon_unload(QCryptoTLSCredsAnon *creds G_GNUC_UNUSED)
 
 
 static void
-qcrypto_tls_creds_anon_prop_set_loaded(Object *obj,
-                                       bool value,
-                                       Error **errp)
+qcrypto_tls_creds_anon_complete(UserCreatable *uc, Error **errp)
 {
-    QCryptoTLSCredsAnon *creds = QCRYPTO_TLS_CREDS_ANON(obj);
+    QCryptoTLSCredsAnon *creds = QCRYPTO_TLS_CREDS_ANON(uc);
 
-    if (value) {
-        qcrypto_tls_creds_anon_load(creds, errp);
-    } else {
-        qcrypto_tls_creds_anon_unload(creds);
-    }
+    qcrypto_tls_creds_anon_load(creds, errp);
 }
 
 
@@ -167,13 +159,6 @@ qcrypto_tls_creds_anon_prop_get_loaded(Object *obj G_GNUC_UNUSED,
 
 
 static void
-qcrypto_tls_creds_anon_complete(UserCreatable *uc, Error **errp)
-{
-    object_property_set_bool(OBJECT(uc), true, "loaded", errp);
-}
-
-
-static void
 qcrypto_tls_creds_anon_finalize(Object *obj)
 {
     QCryptoTLSCredsAnon *creds = QCRYPTO_TLS_CREDS_ANON(obj);
@@ -191,7 +176,6 @@ qcrypto_tls_creds_anon_class_init(ObjectClass *oc, void *data)
 
     object_class_property_add_bool(oc, "loaded",
                                    qcrypto_tls_creds_anon_prop_get_loaded,
-                                   qcrypto_tls_creds_anon_prop_set_loaded,
                                    NULL);
 }
 

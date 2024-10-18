@@ -25,12 +25,13 @@
 #ifndef SDHCI_H
 #define SDHCI_H
 
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
 #include "hw/sysbus.h"
 #include "hw/sd/sd.h"
+#include "qom/object.h"
 
 /* SD/MMC host controller state */
-typedef struct SDHCIState {
+struct SDHCIState {
     /*< private >*/
     union {
         PCIDevice pcidev;
@@ -74,6 +75,7 @@ typedef struct SDHCIState {
     uint16_t acmd12errsts; /* Auto CMD12 error status register */
     uint16_t hostctl2;     /* Host Control 2 */
     uint64_t admasysaddr;  /* ADMA System Address Register */
+    uint16_t vendor_spec;  /* Vendor specific register */
 
     /* Read-only registers */
     uint64_t capareg;      /* Capabilities Register */
@@ -94,9 +96,15 @@ typedef struct SDHCIState {
     /* Configurable properties */
     bool pending_insert_quirk; /* Quirk for Raspberry Pi card insert int */
     uint32_t quirks;
+    uint8_t endianness;
     uint8_t sd_spec_version;
     uint8_t uhs_mode;
-} SDHCIState;
+    uint8_t vendor;        /* For vendor specific functionality */
+};
+typedef struct SDHCIState SDHCIState;
+
+#define SDHCI_VENDOR_NONE       0
+#define SDHCI_VENDOR_IMX        1
 
 /*
  * Controller does not provide transfer-complete interrupt when not
@@ -108,12 +116,15 @@ typedef struct SDHCIState {
 #define SDHCI_QUIRK_NO_BUSY_IRQ    BIT(14)
 
 #define TYPE_PCI_SDHCI "sdhci-pci"
-#define PCI_SDHCI(obj) OBJECT_CHECK(SDHCIState, (obj), TYPE_PCI_SDHCI)
+DECLARE_INSTANCE_CHECKER(SDHCIState, PCI_SDHCI,
+                         TYPE_PCI_SDHCI)
 
 #define TYPE_SYSBUS_SDHCI "generic-sdhci"
-#define SYSBUS_SDHCI(obj)                               \
-     OBJECT_CHECK(SDHCIState, (obj), TYPE_SYSBUS_SDHCI)
+DECLARE_INSTANCE_CHECKER(SDHCIState, SYSBUS_SDHCI,
+                         TYPE_SYSBUS_SDHCI)
 
 #define TYPE_IMX_USDHC "imx-usdhc"
+
+#define TYPE_S3C_SDHCI "s3c-sdhci"
 
 #endif /* SDHCI_H */

@@ -5,7 +5,7 @@
  *
  * Author: Yu Liu,     <yu.liu@freescale.com>
  *
- * This file is derived from hw/ppc4xx_pci.c,
+ * This file is derived from ppc4xx_pci.c,
  * the copyright for that material belongs to the original owners.
  *
  * This is free software; you can redistribute it and/or modify
@@ -15,13 +15,16 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
 #include "hw/ppc/e500-ccsr.h"
-#include "hw/pci/pci.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
+#include "hw/pci/pci_device.h"
 #include "hw/pci/pci_host.h"
 #include "qemu/bswap.h"
 #include "qemu/module.h"
 #include "hw/pci-host/ppce500.h"
+#include "qom/object.h"
 
 #ifdef DEBUG_PCI
 #define pci_debug(fmt, ...) fprintf(stderr, fmt, ## __VA_ARGS__)
@@ -89,8 +92,7 @@ struct pci_inbound {
 
 #define TYPE_PPC_E500_PCI_HOST_BRIDGE "e500-pcihost"
 
-#define PPC_E500_PCI_HOST_BRIDGE(obj) \
-    OBJECT_CHECK(PPCE500PCIState, (obj), TYPE_PPC_E500_PCI_HOST_BRIDGE)
+OBJECT_DECLARE_SIMPLE_TYPE(PPCE500PCIState, PPC_E500_PCI_HOST_BRIDGE)
 
 struct PPCE500PCIState {
     PCIHostState parent_obj;
@@ -112,8 +114,7 @@ struct PPCE500PCIState {
 };
 
 #define TYPE_PPC_E500_PCI_BRIDGE "e500-host-bridge"
-#define PPC_E500_PCI_BRIDGE(obj) \
-    OBJECT_CHECK(PPCE500PCIBridgeState, (obj), TYPE_PPC_E500_PCI_BRIDGE)
+OBJECT_DECLARE_SIMPLE_TYPE(PPCE500PCIBridgeState, PPC_E500_PCI_BRIDGE)
 
 struct PPCE500PCIBridgeState {
     /*< private >*/
@@ -123,8 +124,6 @@ struct PPCE500PCIBridgeState {
     MemoryRegion bar0;
 };
 
-typedef struct PPCE500PCIBridgeState PPCE500PCIBridgeState;
-typedef struct PPCE500PCIState PPCE500PCIState;
 
 static uint64_t pci_reg_read4(void *opaque, hwaddr addr,
                               unsigned size)
@@ -190,7 +189,7 @@ static uint64_t pci_reg_read4(void *opaque, hwaddr addr,
         break;
     }
 
-    pci_debug("%s: win:%lx(addr:" TARGET_FMT_plx ") -> value:%x\n", __func__,
+    pci_debug("%s: win:%lx(addr:" HWADDR_FMT_plx ") -> value:%x\n", __func__,
               win, addr, value);
     return value;
 }
@@ -269,7 +268,7 @@ static void pci_reg_write4(void *opaque, hwaddr addr,
 
     win = addr & 0xfe0;
 
-    pci_debug("%s: value:%x -> win:%lx(addr:" TARGET_FMT_plx ")\n",
+    pci_debug("%s: value:%x -> win:%lx(addr:" HWADDR_FMT_plx ")\n",
               __func__, (unsigned)value, win, addr);
 
     switch (win) {
@@ -343,7 +342,7 @@ static const MemoryRegionOps e500_pci_reg_ops = {
 
 static int mpc85xx_pci_map_irq(PCIDevice *pci_dev, int pin)
 {
-    int devno = pci_dev->devfn >> 3;
+    int devno = PCI_SLOT(pci_dev->devfn);
     int ret;
 
     ret = ppce500_pci_map_irq_slot(devno, pin);
@@ -380,7 +379,7 @@ static const VMStateDescription vmstate_pci_outbound = {
     .name = "pci_outbound",
     .version_id = 0,
     .minimum_version_id = 0,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(potar, struct pci_outbound),
         VMSTATE_UINT32(potear, struct pci_outbound),
         VMSTATE_UINT32(powbar, struct pci_outbound),
@@ -393,7 +392,7 @@ static const VMStateDescription vmstate_pci_inbound = {
     .name = "pci_inbound",
     .version_id = 0,
     .minimum_version_id = 0,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(pitar, struct pci_inbound),
         VMSTATE_UINT32(piwbar, struct pci_inbound),
         VMSTATE_UINT32(piwbear, struct pci_inbound),
@@ -406,7 +405,7 @@ static const VMStateDescription vmstate_ppce500_pci = {
     .name = "ppce500_pci",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_STRUCT_ARRAY(pob, PPCE500PCIState, PPCE500_PCI_NR_POBS, 1,
                              vmstate_pci_outbound, struct pci_outbound),
         VMSTATE_STRUCT_ARRAY(pib, PPCE500PCIState, PPCE500_PCI_NR_PIBS, 1,
@@ -416,7 +415,6 @@ static const VMStateDescription vmstate_ppce500_pci = {
     }
 };
 
-#include "exec/address-spaces.h"
 
 static void e500_pcihost_bridge_realize(PCIDevice *d, Error **errp)
 {
@@ -436,6 +434,10 @@ static AddressSpace *e500_pcihost_set_iommu(PCIBus *bus, void *opaque,
 
     return &s->bm_as;
 }
+
+static const PCIIOMMUOps ppce500_iommu_ops = {
+    .get_address_space = e500_pcihost_set_iommu,
+};
 
 static void e500_pcihost_realize(DeviceState *dev, Error **errp)
 {
@@ -471,7 +473,7 @@ static void e500_pcihost_realize(DeviceState *dev, Error **errp)
     memory_region_init(&s->bm, OBJECT(s), "bm-e500", UINT64_MAX);
     memory_region_add_subregion(&s->bm, 0x0, &s->busmem);
     address_space_init(&s->bm_as, &s->bm, "pci-bm");
-    pci_setup_iommu(b, e500_pcihost_set_iommu, s);
+    pci_setup_iommu(b, &ppce500_iommu_ops, s);
 
     pci_create_simple(b, 0, "e500-host-bridge");
 
@@ -507,7 +509,7 @@ static void e500_host_bridge_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo e500_host_bridge_info = {
-    .name          = "e500-host-bridge",
+    .name          = TYPE_PPC_E500_PCI_BRIDGE,
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PPCE500PCIBridgeState),
     .class_init    = e500_host_bridge_class_init,
@@ -529,7 +531,7 @@ static void e500_pcihost_class_init(ObjectClass *klass, void *data)
 
     dc->realize = e500_pcihost_realize;
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
-    dc->props = pcihost_properties;
+    device_class_set_props(dc, pcihost_properties);
     dc->vmsd = &vmstate_ppce500_pci;
 }
 

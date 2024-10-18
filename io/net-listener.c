@@ -62,6 +62,7 @@ static gboolean qio_net_listener_channel_func(QIOChannel *ioc,
 
 int qio_net_listener_open_sync(QIONetListener *listener,
                                SocketAddress *addr,
+                               int num,
                                Error **errp)
 {
     QIODNSResolver *resolver = qio_dns_resolver_get_instance();
@@ -82,7 +83,7 @@ int qio_net_listener_open_sync(QIONetListener *listener,
     for (i = 0; i < nresaddrs; i++) {
         QIOChannelSocket *sioc = qio_channel_socket_new();
 
-        if (qio_channel_socket_listen_sync(sioc, resaddrs[i],
+        if (qio_channel_socket_listen_sync(sioc, resaddrs[i], num,
                                            err ? NULL : &err) == 0) {
             success = true;
 
@@ -108,9 +109,7 @@ void qio_net_listener_add(QIONetListener *listener,
                           QIOChannelSocket *sioc)
 {
     if (listener->name) {
-        char *name = g_strdup_printf("%s-listen", listener->name);
-        qio_channel_set_name(QIO_CHANNEL(sioc), name);
-        g_free(name);
+        qio_channel_set_name(QIO_CHANNEL(sioc), listener->name);
     }
 
     listener->sioc = g_renew(QIOChannelSocket *, listener->sioc,
@@ -291,6 +290,9 @@ static void qio_net_listener_finalize(Object *obj)
     QIONetListener *listener = QIO_NET_LISTENER(obj);
     size_t i;
 
+    if (listener->io_notify) {
+        listener->io_notify(listener->io_data);
+    }
     qio_net_listener_disconnect(listener);
 
     for (i = 0; i < listener->nsioc; i++) {
@@ -306,7 +308,6 @@ static const TypeInfo qio_net_listener_info = {
     .name = TYPE_QIO_NET_LISTENER,
     .instance_size = sizeof(QIONetListener),
     .instance_finalize = qio_net_listener_finalize,
-    .class_size = sizeof(QIONetListenerClass),
 };
 
 

@@ -18,11 +18,12 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
+
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "hw/hw.h"
+#include "hw/irq.h"
 #include "hw/arm/omap.h"
-#include "hw/sd/sd.h"
+#include "hw/sd/sdcard_legacy.h"
 
 struct omap_mmc_s {
     qemu_irq irq;
@@ -231,10 +232,10 @@ static void omap_mmc_transfer(struct omap_mmc_s *host)
             if (host->fifo_len > host->af_level)
                 break;
 
-            value = sd_read_data(host->card);
+            value = sd_read_byte(host->card);
             host->fifo[(host->fifo_start + host->fifo_len) & 31] = value;
             if (-- host->blen_counter) {
-                value = sd_read_data(host->card);
+                value = sd_read_byte(host->card);
                 host->fifo[(host->fifo_start + host->fifo_len) & 31] |=
                         value << 8;
                 host->blen_counter --;
@@ -246,10 +247,10 @@ static void omap_mmc_transfer(struct omap_mmc_s *host)
                 break;
 
             value = host->fifo[host->fifo_start] & 0xff;
-            sd_write_data(host->card, value);
+            sd_write_byte(host->card, value);
             if (-- host->blen_counter) {
                 value = host->fifo[host->fifo_start] >> 8;
-                sd_write_data(host->card, value);
+                sd_write_byte(host->card, value);
                 host->blen_counter --;
             }
 
@@ -317,14 +318,13 @@ void omap_mmc_reset(struct omap_mmc_s *host)
      * into any bus, and we must reset it manually. When omap_mmc is
      * QOMified this must move into the QOM reset function.
      */
-    device_reset(DEVICE(host->card));
+    device_cold_reset(DEVICE(host->card));
 }
 
-static uint64_t omap_mmc_read(void *opaque, hwaddr offset,
-                              unsigned size)
+static uint64_t omap_mmc_read(void *opaque, hwaddr offset, unsigned size)
 {
     uint16_t i;
-    struct omap_mmc_s *s = (struct omap_mmc_s *) opaque;
+    struct omap_mmc_s *s = opaque;
 
     if (size != 2) {
         return omap_badwidth_read16(opaque, offset);
@@ -417,7 +417,7 @@ static void omap_mmc_write(void *opaque, hwaddr offset,
                            uint64_t value, unsigned size)
 {
     int i;
-    struct omap_mmc_s *s = (struct omap_mmc_s *) opaque;
+    struct omap_mmc_s *s = opaque;
 
     if (size != 2) {
         omap_badwidth_write16(opaque, offset, value);
@@ -575,7 +575,7 @@ static const MemoryRegionOps omap_mmc_ops = {
 
 static void omap_mmc_cover_cb(void *opaque, int line, int level)
 {
-    struct omap_mmc_s *host = (struct omap_mmc_s *) opaque;
+    struct omap_mmc_s *host = opaque;
 
     if (!host->cdet_state && level) {
         host->status |= 0x0002;

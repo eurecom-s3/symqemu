@@ -21,29 +21,16 @@
 #define HW_I386_X86_IOMMU_H
 
 #include "hw/sysbus.h"
-#include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
+#include "qom/object.h"
 
 #define  TYPE_X86_IOMMU_DEVICE  ("x86-iommu")
-#define  X86_IOMMU_DEVICE(obj) \
-    OBJECT_CHECK(X86IOMMUState, (obj), TYPE_X86_IOMMU_DEVICE)
-#define  X86_IOMMU_CLASS(klass) \
-    OBJECT_CLASS_CHECK(X86IOMMUClass, (klass), TYPE_X86_IOMMU_DEVICE)
-#define  X86_IOMMU_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(X86IOMMUClass, obj, TYPE_X86_IOMMU_DEVICE)
+OBJECT_DECLARE_TYPE(X86IOMMUState, X86IOMMUClass, X86_IOMMU_DEVICE)
 
 #define X86_IOMMU_SID_INVALID             (0xffff)
 
-typedef struct X86IOMMUState X86IOMMUState;
-typedef struct X86IOMMUClass X86IOMMUClass;
 typedef struct X86IOMMUIrq X86IOMMUIrq;
 typedef struct X86IOMMU_MSIMessage X86IOMMU_MSIMessage;
-
-typedef enum IommuType {
-    TYPE_INTEL,
-    TYPE_AMD,
-    TYPE_NONE
-} IommuType;
 
 struct X86IOMMUClass {
     SysBusDeviceClass parent;
@@ -77,7 +64,6 @@ struct X86IOMMUState {
     OnOffAuto intr_supported;   /* Whether vIOMMU supports IR */
     bool dt_supported;          /* Whether vIOMMU supports DT */
     bool pt_supported;          /* Whether vIOMMU supports pass-through */
-    IommuType type;             /* IOMMU type - AMD/Intel     */
     QLIST_HEAD(, IEC_Notifier) iec_notifiers; /* IEC notify list */
 };
 
@@ -100,41 +86,43 @@ struct X86IOMMUIrq {
 struct X86IOMMU_MSIMessage {
     union {
         struct {
-#ifdef HOST_WORDS_BIGENDIAN
-            uint32_t __addr_head:12; /* 0xfee */
-            uint32_t dest:8;
-            uint32_t __reserved:8;
-            uint32_t redir_hint:1;
-            uint32_t dest_mode:1;
-            uint32_t __not_used:2;
+#if HOST_BIG_ENDIAN
+            uint64_t __addr_hi:32;
+            uint64_t __addr_head:12; /* 0xfee */
+            uint64_t dest:8;
+            uint64_t __reserved:8;
+            uint64_t redir_hint:1;
+            uint64_t dest_mode:1;
+            uint64_t __not_used:2;
 #else
-            uint32_t __not_used:2;
-            uint32_t dest_mode:1;
-            uint32_t redir_hint:1;
-            uint32_t __reserved:8;
-            uint32_t dest:8;
-            uint32_t __addr_head:12; /* 0xfee */
+            uint64_t __not_used:2;
+            uint64_t dest_mode:1;
+            uint64_t redir_hint:1;
+            uint64_t __reserved:8;
+            uint64_t dest:8;
+            uint64_t __addr_head:12; /* 0xfee */
+            uint64_t __addr_hi:32;
 #endif
-            uint32_t __addr_hi;
         } QEMU_PACKED;
         uint64_t msi_addr;
     };
     union {
         struct {
-#ifdef HOST_WORDS_BIGENDIAN
-            uint16_t trigger_mode:1;
-            uint16_t level:1;
-            uint16_t __resved:3;
-            uint16_t delivery_mode:3;
-            uint16_t vector:8;
+#if HOST_BIG_ENDIAN
+            uint32_t __resved1:16;
+            uint32_t trigger_mode:1;
+            uint32_t level:1;
+            uint32_t __resved:3;
+            uint32_t delivery_mode:3;
+            uint32_t vector:8;
 #else
-            uint16_t vector:8;
-            uint16_t delivery_mode:3;
-            uint16_t __resved:3;
-            uint16_t level:1;
-            uint16_t trigger_mode:1;
+            uint32_t vector:8;
+            uint32_t delivery_mode:3;
+            uint32_t __resved:3;
+            uint32_t level:1;
+            uint32_t trigger_mode:1;
+            uint32_t __resved1:16;
 #endif
-            uint16_t __resved1;
         } QEMU_PACKED;
         uint32_t msi_data;
     };
@@ -145,11 +133,6 @@ struct X86IOMMU_MSIMessage {
  * @return: pointer to default IOMMU device
  */
 X86IOMMUState *x86_iommu_get_default(void);
-
-/*
- * x86_iommu_get_type - get IOMMU type
- */
-IommuType x86_iommu_get_type(void);
 
 /**
  * x86_iommu_iec_register_notifier - register IEC (Interrupt Entry

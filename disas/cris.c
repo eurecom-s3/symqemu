@@ -1294,24 +1294,17 @@ static int cris_constraint
 /* Parse disassembler options and store state in info.  FIXME: For the
    time being, we abuse static variables.  */
 
-static bfd_boolean
-cris_parse_disassembler_options (disassemble_info *info,
+static void
+cris_parse_disassembler_options (struct cris_disasm_data *disdata,
+				 char *disassembler_options,
 				 enum cris_disass_family distype)
 {
-  struct cris_disasm_data *disdata;
-
-  info->private_data = calloc (1, sizeof (struct cris_disasm_data));
-  disdata = (struct cris_disasm_data *) info->private_data;
-  if (disdata == NULL)
-    return false;
-
   /* Default true.  */
   disdata->trace_case
-    = (info->disassembler_options == NULL
-       || (strcmp (info->disassembler_options, "nocase") != 0));
+    = (disassembler_options == NULL
+       || (strcmp (disassembler_options, "nocase") != 0));
 
   disdata->distype = distype;
-  return true;
 }
 
 static const struct cris_spec_reg *
@@ -1738,10 +1731,10 @@ format_hex (unsigned long number,
    unsigned (== 0).  */
 
 static char *
-format_dec (long number, char *outbuffer, int signedp)
+format_dec (long number, char *outbuffer, size_t outsize, int signedp)
 {
   last_immediate = number;
-  sprintf (outbuffer, signedp ? "%ld" : "%lu", number);
+  snprintf (outbuffer, outsize, signedp ? "%ld" : "%lu", number);
 
   return outbuffer + strlen (outbuffer);
 }
@@ -1882,6 +1875,12 @@ print_flags (struct cris_disasm_data *disdata, unsigned int insn, char *cp)
 
   return cp;
 }
+
+#define FORMAT_DEC(number, tp, signedp)                      \
+    format_dec (number, tp, ({                                \
+            assert(tp >= temp && tp <= temp + sizeof(temp)); \
+            temp + sizeof(temp) - tp;                        \
+        }), signedp)
 
 /* Print out an insn with its operands, and update the info->insn_type
    fields.  The prefix_opcodep and the rest hold a prefix insn that is
@@ -2112,7 +2111,7 @@ print_with_operands (const struct cris_opcode *opcodep,
 	    if ((*cs == 'z' && (insn & 0x20))
 		|| (opcodep->match == BDAP_QUICK_OPCODE
 		    && (nbytes <= 2 || buffer[1 + nbytes] == 0)))
-	      tp = format_dec (number, tp, signedp);
+	      tp = FORMAT_DEC (number, tp, signedp);
 	    else
 	      {
 		unsigned int highbyte = (number >> 24) & 0xff;
@@ -2248,7 +2247,7 @@ print_with_operands (const struct cris_opcode *opcodep,
 				       with_reg_prefix);
 		      if (number >= 0)
 			*tp++ = '+';
-		      tp = format_dec (number, tp, 1);
+		      tp = FORMAT_DEC (number, tp, 1);
 
 		      info->flags |= CRIS_DIS_FLAG_MEM_TARGET_IS_REG;
 		      info->target = (prefix_insn >> 12) & 15;
@@ -2347,7 +2346,7 @@ print_with_operands (const struct cris_opcode *opcodep,
 			  {
 			    if (number >= 0)
 			      *tp++ = '+';
-			    tp = format_dec (number, tp, 1);
+			    tp = FORMAT_DEC (number, tp, 1);
 			  }
 		      }
 		    else
@@ -2404,7 +2403,7 @@ print_with_operands (const struct cris_opcode *opcodep,
 	break;
 
       case 'I':
-	tp = format_dec (insn & 63, tp, 0);
+	tp = FORMAT_DEC (insn & 63, tp, 0);
 	break;
 
       case 'b':
@@ -2433,11 +2432,11 @@ print_with_operands (const struct cris_opcode *opcodep,
       break;
 
     case 'c':
-      tp = format_dec (insn & 31, tp, 0);
+      tp = FORMAT_DEC (insn & 31, tp, 0);
       break;
 
     case 'C':
-      tp = format_dec (insn & 15, tp, 0);
+      tp = FORMAT_DEC (insn & 15, tp, 0);
       break;
 
     case 'o':
@@ -2470,7 +2469,7 @@ print_with_operands (const struct cris_opcode *opcodep,
 	if (number > 127)
 	  number = number - 256;
 
-	tp = format_dec (number, tp, 1);
+	tp = FORMAT_DEC (number, tp, 1);
 	*tp++ = ',';
 	tp = format_reg (disdata, (insn >> 12) & 15, tp, with_reg_prefix);
       }
@@ -2481,7 +2480,7 @@ print_with_operands (const struct cris_opcode *opcodep,
       break;
 
     case 'i':
-      tp = format_dec ((insn & 32) ? (insn & 31) | ~31L : insn & 31, tp, 1);
+      tp = FORMAT_DEC ((insn & 32) ? (insn & 31) | ~31L : insn & 31, tp, 1);
       break;
 
     case 'P':
@@ -2736,9 +2735,10 @@ static int
 print_insn_cris_with_register_prefix (bfd_vma vma,
 				      disassemble_info *info)
 {
-  if (info->private_data == NULL
-      && !cris_parse_disassembler_options (info, cris_dis_v0_v10))
-    return -1;
+  struct cris_disasm_data disdata;
+  info->private_data = &disdata;
+  cris_parse_disassembler_options (&disdata, info->disassembler_options,
+				   cris_dis_v0_v10);
   return print_insn_cris_generic (vma, info, true);
 }
 /* Disassemble, prefixing register names with `$'.  CRIS v32.  */
@@ -2747,9 +2747,10 @@ static int
 print_insn_crisv32_with_register_prefix (bfd_vma vma,
 					 disassemble_info *info)
 {
-  if (info->private_data == NULL
-      && !cris_parse_disassembler_options (info, cris_dis_v32))
-    return -1;
+  struct cris_disasm_data disdata;
+  info->private_data = &disdata;
+  cris_parse_disassembler_options (&disdata, info->disassembler_options,
+				   cris_dis_v32);
   return print_insn_cris_generic (vma, info, true);
 }
 
@@ -2761,9 +2762,10 @@ static int
 print_insn_crisv10_v32_with_register_prefix (bfd_vma vma,
 					     disassemble_info *info)
 {
-  if (info->private_data == NULL
-      && !cris_parse_disassembler_options (info, cris_dis_common_v10_v32))
-    return -1;
+  struct cris_disasm_data disdata;
+  info->private_data = &disdata;
+  cris_parse_disassembler_options (&disdata, info->disassembler_options,
+				   cris_dis_common_v10_v32);
   return print_insn_cris_generic (vma, info, true);
 }
 
@@ -2773,9 +2775,10 @@ static int
 print_insn_cris_without_register_prefix (bfd_vma vma,
 					 disassemble_info *info)
 {
-  if (info->private_data == NULL
-      && !cris_parse_disassembler_options (info, cris_dis_v0_v10))
-    return -1;
+  struct cris_disasm_data disdata;
+  info->private_data = &disdata;
+  cris_parse_disassembler_options (&disdata, info->disassembler_options,
+				   cris_dis_v0_v10);
   return print_insn_cris_generic (vma, info, false);
 }
 
@@ -2785,9 +2788,10 @@ static int
 print_insn_crisv32_without_register_prefix (bfd_vma vma,
 					    disassemble_info *info)
 {
-  if (info->private_data == NULL
-      && !cris_parse_disassembler_options (info, cris_dis_v32))
-    return -1;
+  struct cris_disasm_data disdata;
+  info->private_data = &disdata;
+  cris_parse_disassembler_options (&disdata, info->disassembler_options,
+				   cris_dis_v32);
   return print_insn_cris_generic (vma, info, false);
 }
 
@@ -2798,9 +2802,10 @@ static int
 print_insn_crisv10_v32_without_register_prefix (bfd_vma vma,
 						disassemble_info *info)
 {
-  if (info->private_data == NULL
-      && !cris_parse_disassembler_options (info, cris_dis_common_v10_v32))
-    return -1;
+  struct cris_disasm_data disdata;
+  info->private_data = &disdata;
+  cris_parse_disassembler_options (&disdata, info->disassembler_options,
+				   cris_dis_common_v10_v32);
   return print_insn_cris_generic (vma, info, false);
 }
 #endif

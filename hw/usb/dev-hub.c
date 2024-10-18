@@ -26,10 +26,13 @@
 #include "qapi/error.h"
 #include "qemu/timer.h"
 #include "trace.h"
+#include "hw/qdev-properties.h"
 #include "hw/usb.h"
+#include "migration/vmstate.h"
 #include "desc.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
+#include "qom/object.h"
 
 #define MAX_PORTS 8
 
@@ -39,56 +42,56 @@ typedef struct USBHubPort {
     uint16_t wPortChange;
 } USBHubPort;
 
-typedef struct USBHubState {
+struct USBHubState {
     USBDevice dev;
     USBEndpoint *intr;
     uint32_t num_ports;
     bool port_power;
     QEMUTimer *port_timer;
     USBHubPort ports[MAX_PORTS];
-} USBHubState;
+};
 
 #define TYPE_USB_HUB "usb-hub"
-#define USB_HUB(obj) OBJECT_CHECK(USBHubState, (obj), TYPE_USB_HUB)
+OBJECT_DECLARE_SIMPLE_TYPE(USBHubState, USB_HUB)
 
-#define ClearHubFeature		(0x2000 | USB_REQ_CLEAR_FEATURE)
-#define ClearPortFeature	(0x2300 | USB_REQ_CLEAR_FEATURE)
-#define GetHubDescriptor	(0xa000 | USB_REQ_GET_DESCRIPTOR)
-#define GetHubStatus		(0xa000 | USB_REQ_GET_STATUS)
-#define GetPortStatus		(0xa300 | USB_REQ_GET_STATUS)
-#define SetHubFeature		(0x2000 | USB_REQ_SET_FEATURE)
-#define SetPortFeature		(0x2300 | USB_REQ_SET_FEATURE)
+#define ClearHubFeature         (0x2000 | USB_REQ_CLEAR_FEATURE)
+#define ClearPortFeature        (0x2300 | USB_REQ_CLEAR_FEATURE)
+#define GetHubDescriptor        (0xa000 | USB_REQ_GET_DESCRIPTOR)
+#define GetHubStatus            (0xa000 | USB_REQ_GET_STATUS)
+#define GetPortStatus           (0xa300 | USB_REQ_GET_STATUS)
+#define SetHubFeature           (0x2000 | USB_REQ_SET_FEATURE)
+#define SetPortFeature          (0x2300 | USB_REQ_SET_FEATURE)
 
-#define PORT_STAT_CONNECTION	0x0001
-#define PORT_STAT_ENABLE	0x0002
-#define PORT_STAT_SUSPEND	0x0004
-#define PORT_STAT_OVERCURRENT	0x0008
-#define PORT_STAT_RESET		0x0010
-#define PORT_STAT_POWER		0x0100
-#define PORT_STAT_LOW_SPEED	0x0200
+#define PORT_STAT_CONNECTION    0x0001
+#define PORT_STAT_ENABLE        0x0002
+#define PORT_STAT_SUSPEND       0x0004
+#define PORT_STAT_OVERCURRENT   0x0008
+#define PORT_STAT_RESET         0x0010
+#define PORT_STAT_POWER         0x0100
+#define PORT_STAT_LOW_SPEED     0x0200
 #define PORT_STAT_HIGH_SPEED    0x0400
 #define PORT_STAT_TEST          0x0800
 #define PORT_STAT_INDICATOR     0x1000
 
-#define PORT_STAT_C_CONNECTION	0x0001
-#define PORT_STAT_C_ENABLE	0x0002
-#define PORT_STAT_C_SUSPEND	0x0004
-#define PORT_STAT_C_OVERCURRENT	0x0008
-#define PORT_STAT_C_RESET	0x0010
+#define PORT_STAT_C_CONNECTION  0x0001
+#define PORT_STAT_C_ENABLE      0x0002
+#define PORT_STAT_C_SUSPEND     0x0004
+#define PORT_STAT_C_OVERCURRENT 0x0008
+#define PORT_STAT_C_RESET       0x0010
 
-#define PORT_CONNECTION	        0
-#define PORT_ENABLE		1
-#define PORT_SUSPEND		2
-#define PORT_OVERCURRENT	3
-#define PORT_RESET		4
-#define PORT_POWER		8
-#define PORT_LOWSPEED		9
-#define PORT_HIGHSPEED		10
-#define PORT_C_CONNECTION	16
-#define PORT_C_ENABLE		17
-#define PORT_C_SUSPEND		18
-#define PORT_C_OVERCURRENT	19
-#define PORT_C_RESET		20
+#define PORT_CONNECTION         0
+#define PORT_ENABLE             1
+#define PORT_SUSPEND            2
+#define PORT_OVERCURRENT        3
+#define PORT_RESET              4
+#define PORT_POWER              8
+#define PORT_LOWSPEED           9
+#define PORT_HIGHSPEED          10
+#define PORT_C_CONNECTION       16
+#define PORT_C_ENABLE           17
+#define PORT_C_SUSPEND          18
+#define PORT_C_OVERCURRENT      19
+#define PORT_C_RESET            20
 #define PORT_TEST               21
 #define PORT_INDICATOR          22
 
@@ -152,13 +155,13 @@ static const USBDesc desc_hub = {
 
 static const uint8_t qemu_hub_hub_descriptor[] =
 {
-        0x00,			/*  u8  bLength; patched in later */
-        0x29,			/*  u8  bDescriptorType; Hub-descriptor */
-        0x00,			/*  u8  bNbrPorts; (patched later) */
-        0x0a,			/* u16  wHubCharacteristics; */
-        0x00,			/*   (per-port OC, no power switching) */
-        0x01,			/*  u8  bPwrOn2pwrGood; 2ms */
-        0x00			/*  u8  bHubContrCurrent; 0 mA */
+        0x00,                   /*  u8  bLength; patched in later */
+        0x29,                   /*  u8  bDescriptorType; Hub-descriptor */
+        0x00,                   /*  u8  bNbrPorts; (patched later) */
+        0x0a,                   /* u16  wHubCharacteristics; */
+        0x00,                   /*   (per-port OC, no power switching) */
+        0x01,                   /*  u8  bPwrOn2pwrGood; 2ms */
+        0x00                    /*  u8  bHubContrCurrent; 0 mA */
 
         /* DeviceRemovable and PortPwrCtrlMask patched in later */
 };
@@ -399,7 +402,7 @@ static void usb_hub_handle_control(USBDevice *dev, USBPacket *p,
         {
             unsigned int n = index - 1;
             USBHubPort *port;
-            USBDevice *dev;
+            USBDevice *pdev;
 
             trace_usb_hub_set_port_feature(s->dev.addr, index,
                                            feature_name(value));
@@ -408,7 +411,7 @@ static void usb_hub_handle_control(USBDevice *dev, USBPacket *p,
                 goto fail;
             }
             port = &s->ports[n];
-            dev = port->port.dev;
+            pdev = port->port.dev;
             switch(value) {
             case PORT_SUSPEND:
                 port->wPortStatus |= PORT_STAT_SUSPEND;
@@ -416,8 +419,8 @@ static void usb_hub_handle_control(USBDevice *dev, USBPacket *p,
             case PORT_RESET:
                 usb_hub_port_set(port, PORT_STAT_RESET);
                 usb_hub_port_clear(port, PORT_STAT_RESET);
-                if (dev && dev->attached) {
-                    usb_device_reset(dev);
+                if (pdev && pdev->attached) {
+                    usb_device_reset(pdev);
                     usb_hub_port_set(port, PORT_STAT_ENABLE);
                 }
                 usb_wakeup(s->intr, 0);
@@ -563,7 +566,7 @@ static void usb_hub_handle_data(USBDevice *dev, USBPacket *p)
     }
 }
 
-static void usb_hub_unrealize(USBDevice *dev, Error **errp)
+static void usb_hub_unrealize(USBDevice *dev)
 {
     USBHubState *s = (USBHubState *)dev;
     int i;
@@ -573,7 +576,6 @@ static void usb_hub_unrealize(USBDevice *dev, Error **errp)
                             &s->ports[i].port);
     }
 
-    timer_del(s->port_timer);
     timer_free(s->port_timer);
 }
 
@@ -621,7 +623,7 @@ static const VMStateDescription vmstate_usb_hub_port = {
     .name = "usb-hub-port",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT16(wPortStatus, USBHubPort),
         VMSTATE_UINT16(wPortChange, USBHubPort),
         VMSTATE_END_OF_LIST()
@@ -640,7 +642,7 @@ static const VMStateDescription vmstate_usb_hub_port_timer = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = usb_hub_port_timer_needed,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_TIMER_PTR(port_timer, USBHubState),
         VMSTATE_END_OF_LIST()
     },
@@ -650,13 +652,13 @@ static const VMStateDescription vmstate_usb_hub = {
     .name = "usb-hub",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_USB_DEVICE(dev, USBHubState),
         VMSTATE_STRUCT_ARRAY(ports, USBHubState, MAX_PORTS, 0,
                              vmstate_usb_hub_port, USBHubPort),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (const VMStateDescription * []) {
+    .subsections = (const VMStateDescription * const []) {
         &vmstate_usb_hub_port_timer,
         NULL
     }
@@ -684,7 +686,7 @@ static void usb_hub_class_initfn(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
     dc->fw_name = "hub";
     dc->vmsd = &vmstate_usb_hub;
-    dc->props = usb_hub_properties;
+    device_class_set_props(dc, usb_hub_properties);
 }
 
 static const TypeInfo hub_info = {

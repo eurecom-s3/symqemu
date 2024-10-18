@@ -44,6 +44,7 @@
   #define DECNLAUTHOR	"Mike Cowlishaw"	      /* Who to blame */
 
   #include "libdecnumber/dconfig.h"
+  #include "libdecnumber/decContext.h"
 
   /* Conditional code flag -- set this to match hardware platform     */
   /* 1=little-endian, 0=big-endian	                              */
@@ -97,7 +98,7 @@
 
   /* Shared lookup tables					      */
   extern const uByte  DECSTICKYTAB[10]; /* re-round digits if sticky  */
-  extern const uLong  DECPOWERS[19];    /* powers of ten table        */
+  extern const uLong  DECPOWERS[20];    /* powers of ten table        */
   /* The following are included from decDPD.h			      */
   extern const uShort DPD2BIN[1024];	/* DPD -> 0-999		      */
   extern const uShort BIN2DPD[1000];	/* 0-999 -> DPD		      */

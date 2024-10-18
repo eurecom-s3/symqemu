@@ -16,33 +16,11 @@
 #ifndef HVF_I386_H
 #define HVF_I386_H
 
-#include "sysemu/hvf.h"
-#include "cpu.h"
-#include "x86.h"
+uint32_t hvf_get_supported_cpuid(uint32_t func, uint32_t idx, int reg);
 
-#define HVF_MAX_VCPU 0x10
-#define MAX_VM_ID 0x40
-#define MAX_VCPU_ID 0x40
-
-extern struct hvf_state hvf_global;
-
-struct hvf_vm {
-    int id;
-    struct hvf_vcpu_state *vcpus[HVF_MAX_VCPU];
-};
-
-struct hvf_state {
-    uint32_t version;
-    struct hvf_vm *vm;
-    uint64_t mem_quota;
-};
-
-#ifdef NEED_CPU_H
-/* Functions exported to host specific mode */
+void hvf_handle_io(CPUArchState *, uint16_t, void *, int, int, int);
 
 /* Host specific functions */
 int hvf_inject_interrupt(CPUArchState *env, int vector);
-int hvf_vcpu_run(struct hvf_vcpu_state *vcpu);
-#endif
 
 #endif

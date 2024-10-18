@@ -18,6 +18,7 @@
  */
 #include "qemu/osdep.h"
 #include "qemu.h"
+#include "user-internals.h"
 #include "signal-common.h"
 #include "linux-user/trace.h"
 
@@ -127,24 +128,63 @@ static int setup_sigcontext(struct target_rt_sigframe *frame,
     return 1;
 }
 
+static void install_sigtramp(uint8_t *tramp)
+{
+#if TARGET_BIG_ENDIAN
+    /* Generate instruction:  MOVI a2, __NR_rt_sigreturn */
+    __put_user(0x22, &tramp[0]);
+    __put_user(0x0a, &tramp[1]);
+    __put_user(TARGET_NR_rt_sigreturn, &tramp[2]);
+    /* Generate instruction:  SYSCALL */
+    __put_user(0x00, &tramp[3]);
+    __put_user(0x05, &tramp[4]);
+    __put_user(0x00, &tramp[5]);
+#else
+    /* Generate instruction:  MOVI a2, __NR_rt_sigreturn */
+    __put_user(0x22, &tramp[0]);
+    __put_user(0xa0, &tramp[1]);
+    __put_user(TARGET_NR_rt_sigreturn, &tramp[2]);
+    /* Generate instruction:  SYSCALL */
+    __put_user(0x00, &tramp[3]);
+    __put_user(0x50, &tramp[4]);
+    __put_user(0x00, &tramp[5]);
+#endif
+}
+
 void setup_rt_frame(int sig, struct target_sigaction *ka,
                     target_siginfo_t *info,
                     target_sigset_t *set, CPUXtensaState *env)
 {
     abi_ulong frame_addr;
     struct target_rt_sigframe *frame;
+    int is_fdpic = info_is_fdpic(get_task_state(thread_cpu)->info);
+    abi_ulong handler = 0;
+    abi_ulong handler_fdpic_GOT = 0;
     uint32_t ra;
+    bool abi_call0;
+    unsigned base;
     int i;
 
     frame_addr = get_sigframe(ka, env, sizeof(*frame));
     trace_user_setup_rt_frame(env, frame_addr);
+
+    if (is_fdpic) {
+        abi_ulong funcdesc_ptr = ka->_sa_handler;
+
+        if (get_user_ual(handler, funcdesc_ptr)
+            || get_user_ual(handler_fdpic_GOT, funcdesc_ptr + 4)) {
+            goto give_sigsegv;
+        }
+    } else {
+        handler = ka->_sa_handler;
+    }
 
     if (!lock_user_struct(VERIFY_WRITE, frame, frame_addr, 0)) {
         goto give_sigsegv;
     }
 
     if (ka->sa_flags & SA_SIGINFO) {
-        tswap_siginfo(&frame->info, info);
+        frame->info = *info;
     }
 
     __put_user(0, &frame->uc.tuc_flags);
@@ -159,43 +199,43 @@ void setup_rt_frame(int sig, struct target_sigaction *ka,
     }
 
     if (ka->sa_flags & TARGET_SA_RESTORER) {
-        ra = ka->sa_restorer;
+        if (is_fdpic) {
+            if (get_user_ual(ra, ka->sa_restorer)) {
+                unlock_user_struct(frame, frame_addr, 0);
+                goto give_sigsegv;
+            }
+        } else {
+            ra = ka->sa_restorer;
+        }
     } else {
-        ra = frame_addr + offsetof(struct target_rt_sigframe, retcode);
-#ifdef TARGET_WORDS_BIGENDIAN
-        /* Generate instruction:  MOVI a2, __NR_rt_sigreturn */
-        __put_user(0x22, &frame->retcode[0]);
-        __put_user(0x0a, &frame->retcode[1]);
-        __put_user(TARGET_NR_rt_sigreturn, &frame->retcode[2]);
-        /* Generate instruction:  SYSCALL */
-        __put_user(0x00, &frame->retcode[3]);
-        __put_user(0x05, &frame->retcode[4]);
-        __put_user(0x00, &frame->retcode[5]);
-#else
-        /* Generate instruction:  MOVI a2, __NR_rt_sigreturn */
-        __put_user(0x22, &frame->retcode[0]);
-        __put_user(0xa0, &frame->retcode[1]);
-        __put_user(TARGET_NR_rt_sigreturn, &frame->retcode[2]);
-        /* Generate instruction:  SYSCALL */
-        __put_user(0x00, &frame->retcode[3]);
-        __put_user(0x50, &frame->retcode[4]);
-        __put_user(0x00, &frame->retcode[5]);
-#endif
-    }
-    env->sregs[PS] = PS_UM | (3 << PS_RING_SHIFT);
-    if (xtensa_option_enabled(env->config, XTENSA_OPTION_WINDOWED_REGISTER)) {
-        env->sregs[PS] |= PS_WOE | (1 << PS_CALLINC_SHIFT);
+        /* Not used, but retain for ABI compatibility. */
+        install_sigtramp(frame->retcode);
+        ra = default_rt_sigreturn;
     }
     memset(env->regs, 0, sizeof(env->regs));
-    env->pc = ka->_sa_handler;
+    env->pc = handler;
     env->regs[1] = frame_addr;
     env->sregs[WINDOW_BASE] = 0;
     env->sregs[WINDOW_START] = 1;
 
-    env->regs[4] = (ra & 0x3fffffff) | 0x40000000;
-    env->regs[6] = sig;
-    env->regs[7] = frame_addr + offsetof(struct target_rt_sigframe, info);
-    env->regs[8] = frame_addr + offsetof(struct target_rt_sigframe, uc);
+    abi_call0 = (env->sregs[PS] & PS_WOE) == 0;
+    env->sregs[PS] = PS_UM | (3 << PS_RING_SHIFT);
+
+    if (abi_call0) {
+        base = 0;
+        env->regs[base] = ra;
+    } else {
+        env->sregs[PS] |= PS_WOE | (1 << PS_CALLINC_SHIFT);
+        base = 4;
+        env->regs[base] = (ra & 0x3fffffff) | 0x40000000;
+    }
+    env->regs[base + 2] = sig;
+    env->regs[base + 3] = frame_addr + offsetof(struct target_rt_sigframe,
+                                                info);
+    env->regs[base + 4] = frame_addr + offsetof(struct target_rt_sigframe, uc);
+    if (is_fdpic) {
+        env->regs[base + 11] = handler_fdpic_GOT;
+    }
     unlock_user_struct(frame, frame_addr, 1);
     return;
 
@@ -244,17 +284,23 @@ long do_rt_sigreturn(CPUXtensaState *env)
     set_sigmask(&set);
 
     restore_sigcontext(env, frame);
+    target_restore_altstack(&frame->uc.tuc_stack, env);
 
-    if (do_sigaltstack(frame_addr +
-                       offsetof(struct target_rt_sigframe, uc.tuc_stack),
-                       0, get_sp_from_cpustate(env)) == -TARGET_EFAULT) {
-        goto badframe;
-    }
     unlock_user_struct(frame, frame_addr, 0);
-    return -TARGET_QEMU_ESIGRETURN;
+    return -QEMU_ESIGRETURN;
 
 badframe:
     unlock_user_struct(frame, frame_addr, 0);
     force_sig(TARGET_SIGSEGV);
-    return -TARGET_QEMU_ESIGRETURN;
+    return -QEMU_ESIGRETURN;
+}
+
+void setup_sigtramp(abi_ulong sigtramp_page)
+{
+    uint8_t *tramp = lock_user(VERIFY_WRITE, sigtramp_page, 6, 0);
+    assert(tramp != NULL);
+
+    default_rt_sigreturn = sigtramp_page;
+    install_sigtramp(tramp);
+    unlock_user(tramp, sigtramp_page, 6);
 }

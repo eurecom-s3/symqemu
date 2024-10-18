@@ -22,11 +22,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "ui/console.h"
 #include "qemu/timer.h"
 #include "hw/input/hid.h"
+#include "migration/vmstate.h"
 #include "trace.h"
 
 #define HID_USAGE_ERROR_ROLLOVER        0x01
@@ -50,8 +51,8 @@ static const uint8_t hid_usage_keys[0x100] = {
     0x45, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e,
     0xe8, 0xe9, 0x71, 0x72, 0x73, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x85, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0xe3, 0xe7, 0x65,
+    0x88, 0x00, 0x00, 0x87, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x8a, 0x00, 0x8b, 0x00, 0x89, 0xe7, 0x65,
 
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -87,7 +88,6 @@ static void hid_idle_timer(void *opaque)
 static void hid_del_idle_timer(HIDState *hs)
 {
     if (hs->idle_timer) {
-        timer_del(hs->idle_timer);
         timer_free(hs->idle_timer);
         hs->idle_timer = NULL;
     }
@@ -114,6 +114,8 @@ static void hid_pointer_event(DeviceState *dev, QemuConsole *src,
         [INPUT_BUTTON_LEFT]   = 0x01,
         [INPUT_BUTTON_RIGHT]  = 0x02,
         [INPUT_BUTTON_MIDDLE] = 0x04,
+        [INPUT_BUTTON_SIDE] = 0x08,
+        [INPUT_BUTTON_EXTRA] = 0x10,
     };
     HIDState *hs = (HIDState *)dev;
     HIDPointerEvent *e;
@@ -207,7 +209,7 @@ static void hid_pointer_sync(DeviceState *dev)
         prev->dz += curr->dz;
         curr->dz = 0;
     } else {
-        /* prepate next (clear rel, copy abs + btns) */
+        /* prepare next (clear rel, copy abs + btns) */
         if (hs->kind == HID_MOUSE) {
             next->xdx = 0;
             next->ydy = 0;
@@ -508,20 +510,20 @@ void hid_free(HIDState *hs)
     hid_del_idle_timer(hs);
 }
 
-static QemuInputHandler hid_keyboard_handler = {
+static const QemuInputHandler hid_keyboard_handler = {
     .name  = "QEMU HID Keyboard",
     .mask  = INPUT_EVENT_MASK_KEY,
     .event = hid_keyboard_event,
 };
 
-static QemuInputHandler hid_mouse_handler = {
+static const QemuInputHandler hid_mouse_handler = {
     .name  = "QEMU HID Mouse",
     .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_REL,
     .event = hid_pointer_event,
     .sync  = hid_pointer_sync,
 };
 
-static QemuInputHandler hid_tablet_handler = {
+static const QemuInputHandler hid_tablet_handler = {
     .name  = "QEMU HID Tablet",
     .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_ABS,
     .event = hid_pointer_event,
@@ -579,7 +581,7 @@ static const VMStateDescription vmstate_hid_ptr_queue = {
     .name = "HIDPointerEventQueue",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_INT32(xdx, HIDPointerEvent),
         VMSTATE_INT32(ydy, HIDPointerEvent),
         VMSTATE_INT32(dz, HIDPointerEvent),
@@ -593,7 +595,7 @@ const VMStateDescription vmstate_hid_ptr_device = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = hid_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_STRUCT_ARRAY(ptr.queue, HIDState, QUEUE_LENGTH, 0,
                              vmstate_hid_ptr_queue, HIDPointerEvent),
         VMSTATE_UINT32(head, HIDState),
@@ -609,7 +611,7 @@ const VMStateDescription vmstate_hid_keyboard_device = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = hid_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(kbd.keycodes, HIDState, QUEUE_LENGTH),
         VMSTATE_UINT32(head, HIDState),
         VMSTATE_UINT32(n, HIDState),

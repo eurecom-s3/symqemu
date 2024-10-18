@@ -9,11 +9,16 @@
  * the COPYING file in the top-level directory.
  */
 
+/*
+ * NOTE: The 9p 'proxy' backend is deprecated (since QEMU 8.1) and will be
+ * removed in a future version of QEMU!
+ */
+
 #include "qemu/osdep.h"
+#include <glib/gstdio.h>
 #include <sys/resource.h>
 #include <getopt.h>
 #include <syslog.h>
-#include <sys/capability.h>
 #include <sys/fsuid.h>
 #include <sys/vfs.h>
 #include <sys/ioctl.h>
@@ -21,11 +26,12 @@
 #ifdef CONFIG_LINUX_MAGIC_H
 #include <linux/magic.h>
 #endif
-#include "qemu-common.h"
+#include <cap-ng.h>
 #include "qemu/sockets.h"
 #include "qemu/xattr.h"
 #include "9p-iov-marshal.h"
 #include "hw/9pfs/9p-proxy.h"
+#include "hw/9pfs/9p-util.h"
 #include "fsdev/9p-iov-marshal.h"
 
 #define PROGNAME "virtfs-proxy-helper"
@@ -43,7 +49,7 @@
 #define BTRFS_SUPER_MAGIC 0x9123683E
 #endif
 
-static struct option helper_opts[] = {
+static const struct option helper_opts[] = {
     {"fd", required_argument, NULL, 'f'},
     {"path", required_argument, NULL, 'p'},
     {"nodaemon", no_argument, NULL, 'n'},
@@ -57,7 +63,7 @@ static bool is_daemon;
 static bool get_version; /* IOC getversion IOCTL supported */
 static char *prog_name;
 
-static void GCC_FMT_ATTR(2, 3) do_log(int loglevel, const char *format, ...)
+static void G_GNUC_PRINTF(2, 3) do_log(int loglevel, const char *format, ...)
 {
     va_list ap;
 
@@ -79,49 +85,10 @@ static void do_perror(const char *string)
     }
 }
 
-static int do_cap_set(cap_value_t *cap_value, int size, int reset)
-{
-    cap_t caps;
-    if (reset) {
-        /*
-         * Start with an empty set and set permitted and effective
-         */
-        caps = cap_init();
-        if (caps == NULL) {
-            do_perror("cap_init");
-            return -1;
-        }
-        if (cap_set_flag(caps, CAP_PERMITTED, size, cap_value, CAP_SET) < 0) {
-            do_perror("cap_set_flag");
-            goto error;
-        }
-    } else {
-        caps = cap_get_proc();
-        if (!caps) {
-            do_perror("cap_get_proc");
-            return -1;
-        }
-    }
-    if (cap_set_flag(caps, CAP_EFFECTIVE, size, cap_value, CAP_SET) < 0) {
-        do_perror("cap_set_flag");
-        goto error;
-    }
-    if (cap_set_proc(caps) < 0) {
-        do_perror("cap_set_proc");
-        goto error;
-    }
-    cap_free(caps);
-    return 0;
-
-error:
-    cap_free(caps);
-    return -1;
-}
-
 static int init_capabilities(void)
 {
     /* helper needs following capabilities only */
-    cap_value_t cap_list[] = {
+    int cap_list[] = {
         CAP_CHOWN,
         CAP_DAC_OVERRIDE,
         CAP_FOWNER,
@@ -130,7 +97,34 @@ static int init_capabilities(void)
         CAP_MKNOD,
         CAP_SETUID,
     };
-    return do_cap_set(cap_list, ARRAY_SIZE(cap_list), 1);
+    int i;
+
+    capng_clear(CAPNG_SELECT_BOTH);
+    for (i = 0; i < ARRAY_SIZE(cap_list); i++) {
+        if (capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED,
+                         cap_list[i]) < 0) {
+            do_perror("capng_update");
+            return -1;
+        }
+    }
+    if (capng_apply(CAPNG_SELECT_BOTH) < 0) {
+        do_perror("capng_apply");
+        return -1;
+    }
+
+    /* Prepare effective set for setugid.  */
+    for (i = 0; i < ARRAY_SIZE(cap_list); i++) {
+        if (cap_list[i] == CAP_DAC_OVERRIDE) {
+            continue;
+        }
+
+        if (capng_update(CAPNG_DROP, CAPNG_EFFECTIVE,
+                         cap_list[i]) < 0) {
+            do_perror("capng_update");
+            return -1;
+        }
+    }
+    return 0;
 }
 
 static int socket_read(int sockfd, void *buff, ssize_t size)
@@ -295,20 +289,11 @@ static int setugid(int uid, int gid, int *suid, int *sgid)
 {
     int retval;
 
-    /*
-     * We still need DAC_OVERRIDE because we don't change
-     * supplementary group ids, and hence may be subjected DAC rules
-     */
-    cap_value_t cap_list[] = {
-        CAP_DAC_OVERRIDE,
-    };
-
     *suid = geteuid();
     *sgid = getegid();
 
     if (setresgid(-1, gid, *sgid) == -1) {
-        retval = -errno;
-        goto err_out;
+        return -errno;
     }
 
     if (setresuid(-1, uid, *suid) == -1) {
@@ -316,11 +301,21 @@ static int setugid(int uid, int gid, int *suid, int *sgid)
         goto err_sgid;
     }
 
-    if (uid != 0 || gid != 0) {
-        if (do_cap_set(cap_list, ARRAY_SIZE(cap_list), 0) < 0) {
-            retval = -errno;
-            goto err_suid;
-        }
+    if (uid == 0 && gid == 0) {
+        /* Linux has already copied the permitted set to the effective set.  */
+        return 0;
+    }
+
+    /*
+     * All capabilities have been cleared from the effective set.  However
+     * we still need DAC_OVERRIDE because we don't change supplementary
+     * group ids, and hence may be subject to DAC rules.  init_capabilities
+     * left the set of capabilities that we want in libcap-ng's state.
+     */
+    if (capng_apply(CAPNG_SELECT_CAPS) < 0) {
+        retval = -errno;
+        do_perror("capng_apply");
+        goto err_suid;
     }
     return 0;
 
@@ -332,7 +327,6 @@ err_sgid:
     if (setresgid(-1, *sgid, *sgid) == -1) {
         abort();
     }
-err_out:
     return retval;
 }
 
@@ -348,6 +342,28 @@ static void resetugid(int suid, int sgid)
     if (setresuid(-1, suid, suid) == -1) {
         abort();
     }
+}
+
+/*
+ * Open regular file or directory. Attempts to open any special file are
+ * rejected.
+ *
+ * returns file descriptor or -1 on error
+ */
+static int open_regular(const char *pathname, int flags, mode_t mode)
+{
+    int fd;
+
+    fd = open(pathname, flags, mode);
+    if (fd < 0) {
+        return fd;
+    }
+
+    if (close_if_special_file(fd) < 0) {
+        return -1;
+    }
+
+    return fd;
 }
 
 /*
@@ -530,7 +546,7 @@ static void statfs_to_prstatfs(ProxyStatFS *pr_stfs, struct statfs *stfs)
 
 /*
  * Gets stat/statfs information and packs in out_iovec structure
- * on success returns number of bytes packed in out_iovec struture
+ * on success returns number of bytes packed in out_iovec structure
  * otherwise returns -errno
  */
 static int do_stat(int type, struct iovec *iovec, struct iovec *out_iovec)
@@ -652,7 +668,7 @@ static int do_create_others(int type, struct iovec *iovec)
         if (retval < 0) {
             goto err_out;
         }
-        retval = mkdir(path.data, mode);
+        retval = g_mkdir(path.data, mode);
         break;
     case T_SYMLINK:
         retval = proxy_unmarshal(iovec, offset, "ss", &oldpath, &path);
@@ -694,7 +710,7 @@ static int do_create(struct iovec *iovec)
     if (ret < 0) {
         goto unmarshal_err_out;
     }
-    ret = open(path.data, flags, mode);
+    ret = open_regular(path.data, flags, mode);
     if (ret < 0) {
         ret = -errno;
     }
@@ -719,7 +735,7 @@ static int do_open(struct iovec *iovec)
     if (ret < 0) {
         goto err_out;
     }
-    ret = open(path.data, flags);
+    ret = open_regular(path.data, flags, 0);
     if (ret < 0) {
         ret = -errno;
     }
@@ -1045,6 +1061,10 @@ int main(int argc, char **argv)
     int retval;
     struct statfs st_fs;
 #endif
+
+    fprintf(stderr, "NOTE: The 9p 'proxy' backend is deprecated (since "
+                    "QEMU 8.1) and will be removed in a future version of "
+                    "QEMU!\n");
 
     prog_name = g_path_get_basename(argv[0]);
 

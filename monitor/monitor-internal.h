@@ -27,7 +27,7 @@
 
 #include "chardev/char-fe.h"
 #include "monitor/monitor.h"
-#include "qapi/qapi-types-misc.h"
+#include "qapi/qapi-types-control.h"
 #include "qapi/qmp/dispatch.h"
 #include "qapi/qmp/json-parser.h"
 #include "qemu/readline.h"
@@ -63,7 +63,8 @@
  * '.'          other form of optional type (for 'i' and 'l')
  * 'b'          boolean
  *              user mode accepts "on" or "off"
- * '-'          optional parameter (eg. '-f')
+ * '-'          optional parameter (eg. '-f'); if followed by a 's', it
+ *              specifies an optional string param (e.g. '-fs' allows '-f foo')
  *
  */
 
@@ -75,6 +76,14 @@ typedef struct HMPCommand {
     const char *flags; /* p=preconfig */
     void (*cmd)(Monitor *mon, const QDict *qdict);
     /*
+     * If implementing a command that takes no arguments and simply
+     * prints formatted data, then leave @cmd NULL, and then set
+     * @cmd_info_hrt to the corresponding QMP handler that returns
+     * the formatted text.
+     */
+    HumanReadableText *(*cmd_info_hrt)(Error **errp);
+    bool coroutine;
+    /*
      * @sub_table is a list of 2nd level of commands. If it does not exist,
      * cmd should be used. If it exists, sub_table[?].cmd should be
      * used, and cmd of 1st level plays the role of help function.
@@ -85,13 +94,12 @@ typedef struct HMPCommand {
 
 struct Monitor {
     CharBackend chr;
-    int reset_seen;
     int suspend_cnt;            /* Needs to be accessed atomically */
     bool is_qmp;
     bool skip_flush;
     bool use_io_thread;
 
-    gchar *mon_cpu_path;
+    char *mon_cpu_path;
     QTAILQ_ENTRY(Monitor) entry;
 
     /*
@@ -104,10 +112,10 @@ struct Monitor {
      * Members that are protected by the per-monitor lock
      */
     QLIST_HEAD(, mon_fd_t) fds;
-    QString *outbuf;
+    GString *outbuf;
     guint out_watch;
-    /* Read under either BQL or mon_lock, written with BQL+mon_lock.  */
     int mux_out;
+    int reset_seen;
 };
 
 struct MonitorHMP {
@@ -133,7 +141,7 @@ typedef struct {
      * qmp_capabilities succeeds, we go into command mode, and
      * @command becomes &qmp_commands.
      */
-    QmpCommandList *commands;
+    const QmpCommandList *commands;
     bool capab_offered[QMP_CAPABILITY__MAX]; /* capabilities offered */
     bool capab[QMP_CAPABILITY__MAX];         /* offered and accepted */
     /*
@@ -155,7 +163,8 @@ static inline bool monitor_is_qmp(const Monitor *mon)
 
 typedef QTAILQ_HEAD(MonitorList, Monitor) MonitorList;
 extern IOThread *mon_iothread;
-extern QEMUBH *qmp_dispatcher_bh;
+extern Coroutine *qmp_dispatcher_co;
+extern bool qmp_dispatcher_co_shutdown;
 extern QmpCommandList qmp_commands, qmp_cap_negotiation_commands;
 extern QemuMutex monitor_lock;
 extern MonitorList mon_list;
@@ -163,7 +172,6 @@ extern int mon_refcount;
 
 extern HMPCommand hmp_cmds[];
 
-int monitor_puts(Monitor *mon, const char *str);
 void monitor_data_init(Monitor *mon, bool is_qmp, bool skip_flush,
                        bool use_io_thread);
 void monitor_data_destroy(Monitor *mon);
@@ -173,10 +181,10 @@ void monitor_fdsets_cleanup(void);
 
 void qmp_send_response(MonitorQMP *mon, const QDict *rsp);
 void monitor_data_destroy_qmp(MonitorQMP *mon);
-void monitor_qmp_bh_dispatcher(void *data);
+void coroutine_fn monitor_qmp_dispatcher_co(void *data);
+void qmp_dispatcher_co_wake(void);
 
-int get_monitor_def(int64_t *pval, const char *name);
-void help_cmd(Monitor *mon, const char *name);
+int get_monitor_def(Monitor *mon, int64_t *pval, const char *name);
 void handle_hmp_command(MonitorHMP *mon, const char *cmdline);
 int hmp_compare_cmd(const char *name, const char *list);
 

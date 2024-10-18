@@ -9,9 +9,12 @@
 #ifndef XEN_MAPCACHE_H
 #define XEN_MAPCACHE_H
 
+#include "exec/cpu-common.h"
+#include "sysemu/xen.h"
+
 typedef hwaddr (*phys_offset_to_gaddr_t)(hwaddr phys_offset,
                                          ram_addr_t size);
-#ifdef CONFIG_XEN
+#ifdef CONFIG_XEN_IS_POSSIBLE
 
 void xen_map_cache_init(phys_offset_to_gaddr_t f,
                         void *opaque);

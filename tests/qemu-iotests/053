@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# group: rw auto quick
 #
 # Test qemu-img convert when image length is not a multiple of cluster size
 #
@@ -28,8 +29,8 @@ status=1	# failure is the default!
 
 _cleanup()
 {
-	rm -f "$TEST_IMG.orig"
-	_cleanup_test_img
+    _rm_test_img "$TEST_IMG.orig"
+    _cleanup_test_img
 }
 trap "_cleanup; exit \$status" 0 1 2 3 15
 

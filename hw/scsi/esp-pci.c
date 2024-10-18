@@ -24,18 +24,22 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
+#include "hw/irq.h"
 #include "hw/nvram/eeprom93xx.h"
 #include "hw/scsi/esp.h"
+#include "migration/vmstate.h"
 #include "trace.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qom/object.h"
 
 #define TYPE_AM53C974_DEVICE "am53c974"
 
-#define PCI_ESP(obj) \
-    OBJECT_CHECK(PCIESPState, (obj), TYPE_AM53C974_DEVICE)
+typedef struct PCIESPState PCIESPState;
+DECLARE_INSTANCE_CHECKER(PCIESPState, PCI_ESP,
+                         TYPE_AM53C974_DEVICE)
 
 #define DMA_CMD   0x0
 #define DMA_STC   0x1
@@ -62,7 +66,7 @@
 
 #define SBAC_STATUS (1 << 24)
 
-typedef struct PCIESPState {
+struct PCIESPState {
     /*< private >*/
     PCIDevice parent_obj;
     /*< public >*/
@@ -71,30 +75,72 @@ typedef struct PCIESPState {
     uint32_t dma_regs[8];
     uint32_t sbac;
     ESPState esp;
-} PCIESPState;
+};
+
+static void esp_pci_update_irq(PCIESPState *pci)
+{
+    int scsi_level = !!(pci->dma_regs[DMA_STAT] & DMA_STAT_SCSIINT);
+    int dma_level = (pci->dma_regs[DMA_CMD] & DMA_CMD_INTE_D) ?
+                    !!(pci->dma_regs[DMA_STAT] & DMA_STAT_DONE) : 0;
+    int level = scsi_level || dma_level;
+
+    pci_set_irq(PCI_DEVICE(pci), level);
+}
+
+static void esp_irq_handler(void *opaque, int irq_num, int level)
+{
+    PCIESPState *pci = PCI_ESP(opaque);
+
+    if (level) {
+        pci->dma_regs[DMA_STAT] |= DMA_STAT_SCSIINT;
+
+        /*
+         * If raising the ESP IRQ to indicate end of DMA transfer, set
+         * DMA_STAT_DONE at the same time. In theory this should be done in
+         * esp_pci_dma_memory_rw(), however there is a delay between setting
+         * DMA_STAT_DONE and the ESP IRQ arriving which is visible to the
+         * guest that can cause confusion e.g. Linux
+         */
+        if ((pci->dma_regs[DMA_CMD] & DMA_CMD_MASK) == 0x3 &&
+            pci->dma_regs[DMA_WBC] == 0) {
+                pci->dma_regs[DMA_STAT] |= DMA_STAT_DONE;
+        }
+    } else {
+        pci->dma_regs[DMA_STAT] &= ~DMA_STAT_SCSIINT;
+    }
+
+    esp_pci_update_irq(pci);
+}
 
 static void esp_pci_handle_idle(PCIESPState *pci, uint32_t val)
 {
+    ESPState *s = &pci->esp;
+
     trace_esp_pci_dma_idle(val);
-    esp_dma_enable(&pci->esp, 0, 0);
+    esp_dma_enable(s, 0, 0);
 }
 
 static void esp_pci_handle_blast(PCIESPState *pci, uint32_t val)
 {
     trace_esp_pci_dma_blast(val);
     qemu_log_mask(LOG_UNIMP, "am53c974: cmd BLAST not implemented\n");
+    pci->dma_regs[DMA_STAT] |= DMA_STAT_BCMBLT;
 }
 
 static void esp_pci_handle_abort(PCIESPState *pci, uint32_t val)
 {
+    ESPState *s = &pci->esp;
+
     trace_esp_pci_dma_abort(val);
-    if (pci->esp.current_req) {
-        scsi_req_cancel(pci->esp.current_req);
+    if (s->current_req) {
+        scsi_req_cancel(s->current_req);
     }
 }
 
 static void esp_pci_handle_start(PCIESPState *pci, uint32_t val)
 {
+    ESPState *s = &pci->esp;
+
     trace_esp_pci_dma_start(val);
 
     pci->dma_regs[DMA_WBC] = pci->dma_regs[DMA_STC];
@@ -105,7 +151,7 @@ static void esp_pci_handle_start(PCIESPState *pci, uint32_t val)
                                | DMA_STAT_DONE | DMA_STAT_ABORT
                                | DMA_STAT_ERROR | DMA_STAT_PWDN);
 
-    esp_dma_enable(&pci->esp, 0, 1);
+    esp_dma_enable(s, 0, 1);
 }
 
 static void esp_pci_dma_write(PCIESPState *pci, uint32_t saddr, uint32_t val)
@@ -141,6 +187,7 @@ static void esp_pci_dma_write(PCIESPState *pci, uint32_t saddr, uint32_t val)
             /* clear some bits on write */
             uint32_t mask = DMA_STAT_ERROR | DMA_STAT_ABORT | DMA_STAT_DONE;
             pci->dma_regs[DMA_STAT] &= ~(val & mask);
+            esp_pci_update_irq(pci);
         }
         break;
     default:
@@ -155,12 +202,10 @@ static uint32_t esp_pci_dma_read(PCIESPState *pci, uint32_t saddr)
 
     val = pci->dma_regs[saddr];
     if (saddr == DMA_STAT) {
-        if (pci->esp.rregs[ESP_RSTAT] & STAT_INT) {
-            val |= DMA_STAT_SCSIINT;
-        }
         if (!(pci->sbac & SBAC_STATUS)) {
             pci->dma_regs[DMA_STAT] &= ~(DMA_STAT_ERROR | DMA_STAT_ABORT |
                                          DMA_STAT_DONE);
+            esp_pci_update_irq(pci);
         }
     }
 
@@ -172,6 +217,7 @@ static void esp_pci_io_write(void *opaque, hwaddr addr,
                              uint64_t val, unsigned int size)
 {
     PCIESPState *pci = opaque;
+    ESPState *s = &pci->esp;
 
     if (size < 4 || addr & 3) {
         /* need to upgrade request: we only support 4-bytes accesses */
@@ -179,7 +225,7 @@ static void esp_pci_io_write(void *opaque, hwaddr addr,
         int shift;
 
         if (addr < 0x40) {
-            current = pci->esp.wregs[addr >> 2];
+            current = s->wregs[addr >> 2];
         } else if (addr < 0x60) {
             current = pci->dma_regs[(addr - 0x40) >> 2];
         } else if (addr < 0x74) {
@@ -195,10 +241,11 @@ static void esp_pci_io_write(void *opaque, hwaddr addr,
         addr &= ~3;
         size = 4;
     }
+    g_assert(size >= 4);
 
     if (addr < 0x40) {
         /* SCSI core reg */
-        esp_reg_write(&pci->esp, addr >> 2, val);
+        esp_reg_write(s, addr >> 2, val);
     } else if (addr < 0x60) {
         /* PCI DMA CCB */
         esp_pci_dma_write(pci, (addr - 0x40) >> 2, val);
@@ -215,11 +262,12 @@ static uint64_t esp_pci_io_read(void *opaque, hwaddr addr,
                                 unsigned int size)
 {
     PCIESPState *pci = opaque;
+    ESPState *s = &pci->esp;
     uint32_t ret;
 
     if (addr < 0x40) {
         /* SCSI core reg */
-        ret = esp_reg_read(&pci->esp, addr >> 2);
+        ret = esp_reg_read(s, addr >> 2);
     } else if (addr < 0x60) {
         /* PCI DMA CCB */
         ret = esp_pci_dma_read(pci, (addr - 0x40) >> 2);
@@ -261,19 +309,16 @@ static void esp_pci_dma_memory_rw(PCIESPState *pci, uint8_t *buf, int len,
         qemu_log_mask(LOG_UNIMP, "am53c974: MDL transfer not implemented\n");
     }
 
-    addr = pci->dma_regs[DMA_SPA];
+    addr = pci->dma_regs[DMA_WAC];
     if (pci->dma_regs[DMA_WBC] < len) {
         len = pci->dma_regs[DMA_WBC];
     }
 
-    pci_dma_rw(PCI_DEVICE(pci), addr, buf, len, dir);
+    pci_dma_rw(PCI_DEVICE(pci), addr, buf, len, dir, MEMTXATTRS_UNSPECIFIED);
 
     /* update status registers */
     pci->dma_regs[DMA_WBC] -= len;
     pci->dma_regs[DMA_WAC] += len;
-    if (pci->dma_regs[DMA_WBC] == 0) {
-        pci->dma_regs[DMA_STAT] |= DMA_STAT_DONE;
-    }
 }
 
 static void esp_pci_dma_memory_read(void *opaque, uint8_t *buf, int len)
@@ -301,7 +346,9 @@ static const MemoryRegionOps esp_pci_io_ops = {
 static void esp_pci_hard_reset(DeviceState *dev)
 {
     PCIESPState *pci = PCI_ESP(dev);
-    esp_hard_reset(&pci->esp);
+    ESPState *s = &pci->esp;
+
+    esp_hard_reset(s);
     pci->dma_regs[DMA_CMD] &= ~(DMA_CMD_DIR | DMA_CMD_INTE_D | DMA_CMD_INTE_P
                               | DMA_CMD_MDL | DMA_CMD_DIAG | DMA_CMD_MASK);
     pci->dma_regs[DMA_WBC] &= ~0xffff;
@@ -314,26 +361,17 @@ static void esp_pci_hard_reset(DeviceState *dev)
 
 static const VMStateDescription vmstate_esp_pci_scsi = {
     .name = "pciespscsi",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .pre_save = esp_pre_save,
+    .fields = (const VMStateField[]) {
         VMSTATE_PCI_DEVICE(parent_obj, PCIESPState),
         VMSTATE_BUFFER_UNSAFE(dma_regs, PCIESPState, 0, 8 * sizeof(uint32_t)),
+        VMSTATE_UINT8_V(esp.mig_version_id, PCIESPState, 2),
         VMSTATE_STRUCT(esp, PCIESPState, 0, vmstate_esp, ESPState),
         VMSTATE_END_OF_LIST()
     }
 };
-
-static void esp_pci_command_complete(SCSIRequest *req, uint32_t status,
-                                     size_t resid)
-{
-    ESPState *s = req->hba_private;
-    PCIESPState *pci = container_of(s, PCIESPState, esp);
-
-    esp_command_complete(req, status, resid);
-    pci->dma_regs[DMA_WBC] = 0;
-    pci->dma_regs[DMA_STAT] |= DMA_STAT_DONE;
-}
 
 static const struct SCSIBusInfo esp_pci_scsi_info = {
     .tcq = false,
@@ -341,7 +379,7 @@ static const struct SCSIBusInfo esp_pci_scsi_info = {
     .max_lun = 7,
 
     .transfer_data = esp_transfer_data,
-    .complete = esp_pci_command_complete,
+    .complete = esp_command_complete,
     .cancel = esp_request_cancelled,
 };
 
@@ -351,6 +389,10 @@ static void esp_pci_scsi_realize(PCIDevice *dev, Error **errp)
     DeviceState *d = DEVICE(dev);
     ESPState *s = &pci->esp;
     uint8_t *pci_conf;
+
+    if (!qdev_realize(DEVICE(s), NULL, errp)) {
+        return;
+    }
 
     pci_conf = dev->config;
 
@@ -365,16 +407,24 @@ static void esp_pci_scsi_realize(PCIDevice *dev, Error **errp)
                           "esp-io", 0x80);
 
     pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_IO, &pci->io);
-    s->irq = pci_allocate_irq(dev);
+    s->irq = qemu_allocate_irq(esp_irq_handler, pci, 0);
 
-    scsi_bus_new(&s->bus, sizeof(s->bus), d, &esp_pci_scsi_info, NULL);
+    scsi_bus_init(&s->bus, sizeof(s->bus), d, &esp_pci_scsi_info);
 }
 
-static void esp_pci_scsi_uninit(PCIDevice *d)
+static void esp_pci_scsi_exit(PCIDevice *d)
 {
     PCIESPState *pci = PCI_ESP(d);
+    ESPState *s = &pci->esp;
 
-    qemu_free_irq(pci->esp.irq);
+    qemu_free_irq(s->irq);
+}
+
+static void esp_pci_init(Object *obj)
+{
+    PCIESPState *pci = PCI_ESP(obj);
+
+    object_initialize_child(obj, "esp", &pci->esp, TYPE_ESP);
 }
 
 static void esp_pci_class_init(ObjectClass *klass, void *data)
@@ -383,7 +433,7 @@ static void esp_pci_class_init(ObjectClass *klass, void *data)
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
     k->realize = esp_pci_scsi_realize;
-    k->exit = esp_pci_scsi_uninit;
+    k->exit = esp_pci_scsi_exit;
     k->vendor_id = PCI_VENDOR_ID_AMD;
     k->device_id = PCI_DEVICE_ID_AMD_SCSI;
     k->revision = 0x10;
@@ -397,6 +447,7 @@ static void esp_pci_class_init(ObjectClass *klass, void *data)
 static const TypeInfo esp_pci_info = {
     .name = TYPE_AM53C974_DEVICE,
     .parent = TYPE_PCI_DEVICE,
+    .instance_init = esp_pci_init,
     .instance_size = sizeof(PCIESPState),
     .class_init = esp_pci_class_init,
     .interfaces = (InterfaceInfo[]) {
@@ -405,14 +456,15 @@ static const TypeInfo esp_pci_info = {
     },
 };
 
-typedef struct {
+struct DC390State {
     PCIESPState pci;
     eeprom_t *eeprom;
-} DC390State;
+};
+typedef struct DC390State DC390State;
 
 #define TYPE_DC390_DEVICE "dc390"
-#define DC390(obj) \
-    OBJECT_CHECK(DC390State, obj, TYPE_DC390_DEVICE)
+DECLARE_INSTANCE_CHECKER(DC390State, DC390,
+                         TYPE_DC390_DEVICE)
 
 #define EE_ADAPT_SCSI_ID 64
 #define EE_MODE2         65
@@ -518,7 +570,7 @@ static void dc390_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo dc390_info = {
-    .name = "dc390",
+    .name = TYPE_DC390_DEVICE,
     .parent = TYPE_AM53C974_DEVICE,
     .instance_size = sizeof(DC390State),
     .class_init = dc390_class_init,

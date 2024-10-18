@@ -10,11 +10,11 @@
  * See the COPYING file in the top-level directory.
  */
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/acpi/cpu_hotplug.h"
 #include "qapi/error.h"
-#include "qom/cpu.h"
-#include "hw/i386/pc.h"
+#include "hw/core/cpu.h"
+#include "hw/i386/x86.h"
+#include "hw/pci/pci_device.h"
 #include "qemu/error-report.h"
 
 #define CPU_EJECT_METHOD "CPEJ"
@@ -41,7 +41,7 @@ static void cpu_status_write(void *opaque, hwaddr addr, uint64_t data,
      */
     if (addr == 0 && data == 0) {
         AcpiCpuHotplug *cpus = opaque;
-        object_property_set_bool(cpus->device, false, "cpu-hotplug-legacy",
+        object_property_set_bool(cpus->device, "cpu-hotplug-legacy", false,
                                  &error_abort);
     }
 }
@@ -52,40 +52,51 @@ static const MemoryRegionOps AcpiCpuHotplug_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 1,
+        .max_access_size = 4,
+    },
+    .impl = {
         .max_access_size = 1,
     },
 };
 
 static void acpi_set_cpu_present_bit(AcpiCpuHotplug *g, CPUState *cpu,
-                                     Error **errp)
+                                     bool *swtchd_to_modern)
 {
     CPUClass *k = CPU_GET_CLASS(cpu);
     int64_t cpu_id;
 
     cpu_id = k->get_arch_id(cpu);
     if ((cpu_id / 8) >= ACPI_GPE_PROC_LEN) {
-        object_property_set_bool(g->device, false, "cpu-hotplug-legacy",
+        object_property_set_bool(g->device, "cpu-hotplug-legacy", false,
                                  &error_abort);
+        *swtchd_to_modern = true;
         return;
     }
 
+    *swtchd_to_modern = false;
     g->sts[cpu_id / 8] |= (1 << (cpu_id % 8));
 }
 
 void legacy_acpi_cpu_plug_cb(HotplugHandler *hotplug_dev,
                              AcpiCpuHotplug *g, DeviceState *dev, Error **errp)
 {
-    acpi_set_cpu_present_bit(g, CPU(dev), errp);
-    if (*errp != NULL) {
-        return;
+    bool swtchd_to_modern;
+    Error *local_err = NULL;
+
+    acpi_set_cpu_present_bit(g, CPU(dev), &swtchd_to_modern);
+    if (swtchd_to_modern) {
+        /* propagate the hotplug to the modern interface */
+        hotplug_handler_plug(hotplug_dev, dev, &local_err);
+    } else {
+        acpi_send_event(DEVICE(hotplug_dev), ACPI_CPU_HOTPLUG_STATUS);
     }
-    acpi_send_event(DEVICE(hotplug_dev), ACPI_CPU_HOTPLUG_STATUS);
 }
 
 void legacy_acpi_cpu_hotplug_init(MemoryRegion *parent, Object *owner,
                                   AcpiCpuHotplug *gpe_cpu, uint16_t base)
 {
     CPUState *cpu;
+    bool swtchd_to_modern;
 
     memory_region_init_io(&gpe_cpu->io, owner, &AcpiCpuHotplug_ops,
                           gpe_cpu, "acpi-cpu-hotplug", ACPI_GPE_PROC_LEN);
@@ -93,7 +104,7 @@ void legacy_acpi_cpu_hotplug_init(MemoryRegion *parent, Object *owner,
     gpe_cpu->device = owner;
 
     CPU_FOREACH(cpu) {
-        acpi_set_cpu_present_bit(gpe_cpu, cpu, &error_abort);
+        acpi_set_cpu_present_bit(gpe_cpu, cpu, &swtchd_to_modern);
     }
 }
 
@@ -129,7 +140,7 @@ void build_legacy_cpu_hotplug_aml(Aml *ctx, MachineState *machine,
     Aml *one = aml_int(1);
     MachineClass *mc = MACHINE_GET_CLASS(machine);
     const CPUArchIdList *apic_ids = mc->possible_cpu_arch_ids(machine);
-    PCMachineState *pcms = PC_MACHINE(machine);
+    X86MachineState *x86ms = X86_MACHINE(machine);
 
     /*
      * _MAT method - creates an madt apic buffer
@@ -237,9 +248,9 @@ void build_legacy_cpu_hotplug_aml(Aml *ctx, MachineState *machine,
     /* The current AML generator can cover the APIC ID range [0..255],
      * inclusive, for VCPU hotplug. */
     QEMU_BUILD_BUG_ON(ACPI_CPU_HOTPLUG_ID_LIMIT > 256);
-    if (pcms->apic_id_limit > ACPI_CPU_HOTPLUG_ID_LIMIT) {
+    if (x86ms->apic_id_limit > ACPI_CPU_HOTPLUG_ID_LIMIT) {
         error_report("max_cpus is too large. APIC ID of last CPU is %u",
-                     pcms->apic_id_limit - 1);
+                     x86ms->apic_id_limit - 1);
         exit(1);
     }
 
@@ -266,26 +277,27 @@ void build_legacy_cpu_hotplug_aml(Aml *ctx, MachineState *machine,
 
     /* build Processor object for each processor */
     for (i = 0; i < apic_ids->len; i++) {
-        int apic_id = apic_ids->cpus[i].arch_id;
+        int cpu_apic_id = apic_ids->cpus[i].arch_id;
 
-        assert(apic_id < ACPI_CPU_HOTPLUG_ID_LIMIT);
+        assert(cpu_apic_id < ACPI_CPU_HOTPLUG_ID_LIMIT);
 
-        dev = aml_processor(i, 0, 0, "CP%.02X", apic_id);
+        dev = aml_processor(i, 0, 0, "CP%.02X", cpu_apic_id);
 
         method = aml_method("_MAT", 0, AML_NOTSERIALIZED);
         aml_append(method,
-            aml_return(aml_call2(CPU_MAT_METHOD, aml_int(apic_id), aml_int(i))
+            aml_return(aml_call2(CPU_MAT_METHOD,
+                                 aml_int(cpu_apic_id), aml_int(i))
         ));
         aml_append(dev, method);
 
         method = aml_method("_STA", 0, AML_NOTSERIALIZED);
         aml_append(method,
-            aml_return(aml_call1(CPU_STATUS_METHOD, aml_int(apic_id))));
+            aml_return(aml_call1(CPU_STATUS_METHOD, aml_int(cpu_apic_id))));
         aml_append(dev, method);
 
         method = aml_method("_EJ0", 1, AML_NOTSERIALIZED);
         aml_append(method,
-            aml_return(aml_call2(CPU_EJECT_METHOD, aml_int(apic_id),
+            aml_return(aml_call2(CPU_EJECT_METHOD, aml_int(cpu_apic_id),
                 aml_arg(0)))
         );
         aml_append(dev, method);
@@ -299,11 +311,11 @@ void build_legacy_cpu_hotplug_aml(Aml *ctx, MachineState *machine,
     /* Arg0 = APIC ID */
     method = aml_method(AML_NOTIFY_METHOD, 2, AML_NOTSERIALIZED);
     for (i = 0; i < apic_ids->len; i++) {
-        int apic_id = apic_ids->cpus[i].arch_id;
+        int cpu_apic_id = apic_ids->cpus[i].arch_id;
 
-        if_ctx = aml_if(aml_equal(aml_arg(0), aml_int(apic_id)));
+        if_ctx = aml_if(aml_equal(aml_arg(0), aml_int(cpu_apic_id)));
         aml_append(if_ctx,
-            aml_notify(aml_name("CP%.02X", apic_id), aml_arg(1))
+            aml_notify(aml_name("CP%.02X", cpu_apic_id), aml_arg(1))
         );
         aml_append(method, if_ctx);
     }
@@ -316,17 +328,17 @@ void build_legacy_cpu_hotplug_aml(Aml *ctx, MachineState *machine,
      * ith up to 255 elements. Windows guests up to win2k8 fail when
      * VarPackageOp is used.
      */
-    pkg = pcms->apic_id_limit <= 255 ? aml_package(pcms->apic_id_limit) :
-                                       aml_varpackage(pcms->apic_id_limit);
+    pkg = x86ms->apic_id_limit <= 255 ? aml_package(x86ms->apic_id_limit) :
+                                        aml_varpackage(x86ms->apic_id_limit);
 
     for (i = 0, apic_idx = 0; i < apic_ids->len; i++) {
-        int apic_id = apic_ids->cpus[i].arch_id;
+        int cpu_apic_id = apic_ids->cpus[i].arch_id;
 
-        for (; apic_idx < apic_id; apic_idx++) {
+        for (; apic_idx < cpu_apic_id; apic_idx++) {
             aml_append(pkg, aml_int(0));
         }
         aml_append(pkg, aml_int(apic_ids->cpus[i].cpu ? 1 : 0));
-        apic_idx = apic_id + 1;
+        apic_idx = cpu_apic_id + 1;
     }
     aml_append(sb_scope, aml_name_decl(CPU_ON_BITMAP, pkg));
     aml_append(ctx, sb_scope);

@@ -14,81 +14,82 @@
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
+#include "qemu/madvise.h"
 #include "sysemu/hostmem.h"
-#include "sysemu/sysemu.h"
 #include "qom/object_interfaces.h"
+#include "qom/object.h"
+#include "qapi/visitor.h"
+#include "qapi/qapi-visit-common.h"
 
-/* hostmem-file.c */
-/**
- * @TYPE_MEMORY_BACKEND_FILE:
- * name of backend that uses mmap on a file descriptor
- */
-#define TYPE_MEMORY_BACKEND_FILE "memory-backend-file"
+OBJECT_DECLARE_SIMPLE_TYPE(HostMemoryBackendFile, MEMORY_BACKEND_FILE)
 
-#define MEMORY_BACKEND_FILE(obj) \
-    OBJECT_CHECK(HostMemoryBackendFile, (obj), TYPE_MEMORY_BACKEND_FILE)
-
-typedef struct HostMemoryBackendFile HostMemoryBackendFile;
 
 struct HostMemoryBackendFile {
     HostMemoryBackend parent_obj;
 
     char *mem_path;
     uint64_t align;
+    uint64_t offset;
     bool discard_data;
     bool is_pmem;
+    bool readonly;
+    OnOffAuto rom;
 };
 
-static void
+static bool
 file_backend_memory_alloc(HostMemoryBackend *backend, Error **errp)
 {
 #ifndef CONFIG_POSIX
     error_setg(errp, "backend '%s' not supported on this host",
                object_get_typename(OBJECT(backend)));
+    return false;
 #else
     HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(backend);
-    gchar *name;
+    g_autofree gchar *name = NULL;
+    uint32_t ram_flags;
 
     if (!backend->size) {
         error_setg(errp, "can't create backend with size 0");
-        return;
+        return false;
     }
     if (!fb->mem_path) {
         error_setg(errp, "mem-path property not set");
-        return;
+        return false;
     }
 
-    /*
-     * Verify pmem file size since starting a guest with an incorrect size
-     * leads to confusing failures inside the guest.
-     */
-    if (fb->is_pmem) {
-        Error *local_err = NULL;
-        uint64_t size;
-
-        size = qemu_get_pmem_size(fb->mem_path, &local_err);
-        if (!size) {
-            error_propagate(errp, local_err);
-            return;
+    switch (fb->rom) {
+    case ON_OFF_AUTO_AUTO:
+        /* Traditionally, opening the file readonly always resulted in ROM. */
+        fb->rom = fb->readonly ? ON_OFF_AUTO_ON : ON_OFF_AUTO_OFF;
+        break;
+    case ON_OFF_AUTO_ON:
+        if (!fb->readonly) {
+            error_setg(errp, "property 'rom' = 'on' is not supported with"
+                       " 'readonly' = 'off'");
+            return false;
         }
-
-        if (backend->size > size) {
-            error_setg(errp, "size property %" PRIu64 " is larger than "
-                       "pmem file \"%s\" size %" PRIu64, backend->size,
-                       fb->mem_path, size);
-            return;
+        break;
+    case ON_OFF_AUTO_OFF:
+        if (fb->readonly && backend->share) {
+            error_setg(errp, "property 'rom' = 'off' is incompatible with"
+                       " 'readonly' = 'on' and 'share' = 'on'");
+            return false;
         }
+        break;
+    default:
+        g_assert_not_reached();
     }
 
-    backend->force_prealloc = mem_prealloc;
     name = host_memory_backend_get_name(backend);
-    memory_region_init_ram_from_file(&backend->mr, OBJECT(backend),
-                                     name,
-                                     backend->size, fb->align,
-                                     (backend->share ? RAM_SHARED : 0) |
-                                     (fb->is_pmem ? RAM_PMEM : 0),
-                                     fb->mem_path, errp);
-    g_free(name);
+    ram_flags = backend->share ? RAM_SHARED : 0;
+    ram_flags |= fb->readonly ? RAM_READONLY_FD : 0;
+    ram_flags |= fb->rom == ON_OFF_AUTO_ON ? RAM_READONLY : 0;
+    ram_flags |= backend->reserve ? 0 : RAM_NORESERVE;
+    ram_flags |= fb->is_pmem ? RAM_PMEM : 0;
+    ram_flags |= RAM_NAMED_FILE;
+    return memory_region_init_ram_from_file(&backend->mr, OBJECT(backend), name,
+                                            backend->size, fb->align, ram_flags,
+                                            fb->mem_path, fb->offset, errp);
 #endif
 }
 
@@ -140,25 +141,51 @@ static void file_memory_backend_set_align(Object *o, Visitor *v,
 {
     HostMemoryBackend *backend = MEMORY_BACKEND(o);
     HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(o);
-    Error *local_err = NULL;
     uint64_t val;
 
     if (host_memory_backend_mr_inited(backend)) {
-        error_setg(&local_err, "cannot change property '%s' of %s",
-                   name, object_get_typename(o));
-        goto out;
+        error_setg(errp, "cannot change property '%s' of %s", name,
+                   object_get_typename(o));
+        return;
     }
 
-    visit_type_size(v, name, &val, &local_err);
-    if (local_err) {
-        goto out;
+    if (!visit_type_size(v, name, &val, errp)) {
+        return;
     }
     fb->align = val;
-
- out:
-    error_propagate(errp, local_err);
 }
 
+static void file_memory_backend_get_offset(Object *o, Visitor *v,
+                                          const char *name, void *opaque,
+                                          Error **errp)
+{
+    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(o);
+    uint64_t val = fb->offset;
+
+    visit_type_size(v, name, &val, errp);
+}
+
+static void file_memory_backend_set_offset(Object *o, Visitor *v,
+                                          const char *name, void *opaque,
+                                          Error **errp)
+{
+    HostMemoryBackend *backend = MEMORY_BACKEND(o);
+    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(o);
+    uint64_t val;
+
+    if (host_memory_backend_mr_inited(backend)) {
+        error_setg(errp, "cannot change property '%s' of %s", name,
+                   object_get_typename(o));
+        return;
+    }
+
+    if (!visit_type_size(v, name, &val, errp)) {
+        return;
+    }
+    fb->offset = val;
+}
+
+#ifdef CONFIG_LIBPMEM
 static bool file_memory_backend_get_pmem(Object *o, Error **errp)
 {
     return MEMORY_BACKEND_FILE(o)->is_pmem;
@@ -170,26 +197,61 @@ static void file_memory_backend_set_pmem(Object *o, bool value, Error **errp)
     HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(o);
 
     if (host_memory_backend_mr_inited(backend)) {
-
         error_setg(errp, "cannot change property 'pmem' of %s.",
                    object_get_typename(o));
         return;
     }
 
-#ifndef CONFIG_LIBPMEM
-    if (value) {
-        Error *local_err = NULL;
+    fb->is_pmem = value;
+}
+#endif /* CONFIG_LIBPMEM */
 
-        error_setg(&local_err,
-                   "Lack of libpmem support while setting the 'pmem=on'"
-                   " of %s. We can't ensure data persistence.",
-                   object_get_typename(o));
-        error_propagate(errp, local_err);
+static bool file_memory_backend_get_readonly(Object *obj, Error **errp)
+{
+    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(obj);
+
+    return fb->readonly;
+}
+
+static void file_memory_backend_set_readonly(Object *obj, bool value,
+                                             Error **errp)
+{
+    HostMemoryBackend *backend = MEMORY_BACKEND(obj);
+    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(obj);
+
+    if (host_memory_backend_mr_inited(backend)) {
+        error_setg(errp, "cannot change property 'readonly' of %s.",
+                   object_get_typename(obj));
         return;
     }
-#endif
 
-    fb->is_pmem = value;
+    fb->readonly = value;
+}
+
+static void file_memory_backend_get_rom(Object *obj, Visitor *v,
+                                        const char *name, void *opaque,
+                                        Error **errp)
+{
+    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(obj);
+    OnOffAuto rom = fb->rom;
+
+    visit_type_OnOffAuto(v, name, &rom, errp);
+}
+
+static void file_memory_backend_set_rom(Object *obj, Visitor *v,
+                                        const char *name, void *opaque,
+                                        Error **errp)
+{
+    HostMemoryBackend *backend = MEMORY_BACKEND(obj);
+    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(obj);
+
+    if (host_memory_backend_mr_inited(backend)) {
+        error_setg(errp, "cannot change property '%s' of %s.", name,
+                   object_get_typename(obj));
+        return;
+    }
+
+    visit_type_OnOffAuto(v, name, &fb->rom, errp);
 }
 
 static void file_backend_unparent(Object *obj)
@@ -214,18 +276,30 @@ file_backend_class_init(ObjectClass *oc, void *data)
     oc->unparent = file_backend_unparent;
 
     object_class_property_add_bool(oc, "discard-data",
-        file_memory_backend_get_discard_data, file_memory_backend_set_discard_data,
-        &error_abort);
+        file_memory_backend_get_discard_data, file_memory_backend_set_discard_data);
     object_class_property_add_str(oc, "mem-path",
-        get_mem_path, set_mem_path,
-        &error_abort);
+        get_mem_path, set_mem_path);
     object_class_property_add(oc, "align", "int",
         file_memory_backend_get_align,
         file_memory_backend_set_align,
-        NULL, NULL, &error_abort);
+        NULL, NULL);
+    object_class_property_add(oc, "offset", "int",
+        file_memory_backend_get_offset,
+        file_memory_backend_set_offset,
+        NULL, NULL);
+    object_class_property_set_description(oc, "offset",
+        "Offset into the target file (ex: 1G)");
+#ifdef CONFIG_LIBPMEM
     object_class_property_add_bool(oc, "pmem",
-        file_memory_backend_get_pmem, file_memory_backend_set_pmem,
-        &error_abort);
+        file_memory_backend_get_pmem, file_memory_backend_set_pmem);
+#endif
+    object_class_property_add_bool(oc, "readonly",
+        file_memory_backend_get_readonly,
+        file_memory_backend_set_readonly);
+    object_class_property_add(oc, "rom", "OnOffAuto",
+        file_memory_backend_get_rom, file_memory_backend_set_rom, NULL, NULL);
+    object_class_property_set_description(oc, "rom",
+        "Whether to create Read Only Memory (ROM)");
 }
 
 static void file_backend_instance_finalize(Object *o)

@@ -15,6 +15,7 @@
 #include "virtio-scsi.h"
 #include "bswap.h"
 #include "helper.h"
+#include "s390-time.h"
 
 #define VRING_WAIT_REPLY_TIMEOUT 30
 
@@ -47,13 +48,13 @@ VirtioDevType virtio_get_device_type(void)
 static long kvm_hypercall(unsigned long nr, unsigned long param1,
                           unsigned long param2, unsigned long param3)
 {
-    register ulong r_nr asm("1") = nr;
-    register ulong r_param1 asm("2") = param1;
-    register ulong r_param2 asm("3") = param2;
-    register ulong r_param3 asm("4") = param3;
+    register unsigned long r_nr asm("1") = nr;
+    register unsigned long r_param1 asm("2") = param1;
+    register unsigned long r_param2 asm("3") = param2;
+    register unsigned long r_param3 asm("4") = param3;
     register long retval asm("2");
 
-    asm volatile ("diag 2,4,0x500"
+    asm volatile ("diag %%r2,%%r4,0x500"
                   : "=d" (retval)
                   : "d" (r_nr), "0" (r_param1), "r"(r_param2), "d"(r_param3)
                   : "memory", "cc");
@@ -144,7 +145,7 @@ void vring_send_buf(VRing *vr, void *p, int len, int flags)
         vr->avail->ring[vr->avail->idx % vr->num] = vr->next_idx;
     }
 
-    vr->desc[vr->next_idx].addr = (ulong)p;
+    vr->desc[vr->next_idx].addr = (unsigned long)p;
     vr->desc[vr->next_idx].len = len;
     vr->desc[vr->next_idx].flags = flags & ~VRING_HIDDEN_IS_CHAIN;
     vr->desc[vr->next_idx].next = vr->next_idx;
@@ -155,19 +156,6 @@ void vring_send_buf(VRing *vr, void *p, int len, int flags)
     if (!(flags & VRING_DESC_F_NEXT)) {
         vr->avail->idx++;
     }
-}
-
-u64 get_clock(void)
-{
-    u64 r;
-
-    asm volatile("stck %0" : "=Q" (r) : : "cc");
-    return r;
-}
-
-ulong get_second(void)
-{
-    return (get_clock() >> 12) / 1000000;
 }
 
 int vr_poll(VRing *vr)
@@ -194,7 +182,7 @@ int vr_poll(VRing *vr)
  */
 int vring_wait_reply(void)
 {
-    ulong target_second = get_second() + vdev.wait_reply_timeout;
+    unsigned long target_second = get_time_seconds() + vdev.wait_reply_timeout;
 
     /* Wait for any queue to be updated by the host */
     do {
@@ -207,7 +195,7 @@ int vring_wait_reply(void)
         if (r) {
             return 0;
         }
-    } while (!vdev.wait_reply_timeout || (get_second() < target_second));
+    } while (!vdev.wait_reply_timeout || (get_time_seconds() < target_second));
 
     return 1;
 }
@@ -232,7 +220,7 @@ int virtio_run(VDev *vdev, int vqid, VirtioCmd *cmd)
 void virtio_setup_ccw(VDev *vdev)
 {
     int i, rc, cfg_size = 0;
-    unsigned char status = VIRTIO_CONFIG_S_DRIVER_OK;
+    uint8_t status;
     struct VirtioFeatureDesc {
         uint32_t features;
         uint8_t index;
@@ -245,6 +233,10 @@ void virtio_setup_ccw(VDev *vdev)
     vdev->guessed_disk_nature = VIRTIO_GDN_NONE;
 
     run_ccw(vdev, CCW_CMD_VDEV_RESET, NULL, 0, false);
+
+    status = VIRTIO_CONFIG_S_ACKNOWLEDGE;
+    rc = run_ccw(vdev, CCW_CMD_WRITE_STATUS, &status, sizeof(status), false);
+    IPL_assert(rc == 0, "Could not write ACKNOWLEDGE status to host");
 
     switch (vdev->senseid.cu_model) {
     case VIRTIO_ID_NET:
@@ -265,9 +257,10 @@ void virtio_setup_ccw(VDev *vdev)
     default:
         panic("Unsupported virtio device\n");
     }
-    IPL_assert(
-        run_ccw(vdev, CCW_CMD_READ_CONF, &vdev->config, cfg_size, false) == 0,
-       "Could not get block device configuration");
+
+    status |= VIRTIO_CONFIG_S_DRIVER;
+    rc = run_ccw(vdev, CCW_CMD_WRITE_STATUS, &status, sizeof(status), false);
+    IPL_assert(rc == 0, "Could not write DRIVER status to host");
 
     /* Feature negotiation */
     for (i = 0; i < ARRAY_SIZE(vdev->guest_features); i++) {
@@ -281,6 +274,9 @@ void virtio_setup_ccw(VDev *vdev)
         IPL_assert(rc == 0, "Could not set features bits");
     }
 
+    rc = run_ccw(vdev, CCW_CMD_READ_CONF, &vdev->config, cfg_size, false);
+    IPL_assert(rc == 0, "Could not get virtio device configuration");
+
     for (i = 0; i < vdev->nr_vqs; i++) {
         VqInfo info = {
             .queue = (unsigned long long) ring_area + (i * VIRTIO_RING_SIZE),
@@ -293,9 +289,8 @@ void virtio_setup_ccw(VDev *vdev)
             .num = 0,
         };
 
-        IPL_assert(
-            run_ccw(vdev, CCW_CMD_READ_VQ_CONF, &config, sizeof(config), false) == 0,
-            "Could not get block device VQ configuration");
+        rc = run_ccw(vdev, CCW_CMD_READ_VQ_CONF, &config, sizeof(config), false);
+        IPL_assert(rc == 0, "Could not get virtio device VQ configuration");
         info.num = config.num;
         vring_init(&vdev->vrings[i], &info);
         vdev->vrings[i].schid = vdev->schid;
@@ -303,9 +298,10 @@ void virtio_setup_ccw(VDev *vdev)
             run_ccw(vdev, CCW_CMD_SET_VQ, &info, sizeof(info), false) == 0,
             "Cannot set VQ info");
     }
-    IPL_assert(
-        run_ccw(vdev, CCW_CMD_WRITE_STATUS, &status, sizeof(status), false) == 0,
-        "Could not write status to host");
+
+    status |= VIRTIO_CONFIG_S_DRIVER_OK;
+    rc = run_ccw(vdev, CCW_CMD_WRITE_STATUS, &status, sizeof(status), false);
+    IPL_assert(rc == 0, "Could not write DRIVER_OK status to host");
 }
 
 bool virtio_is_supported(SubChannelId schid)

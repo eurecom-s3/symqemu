@@ -14,7 +14,10 @@
 #include "qemu/module.h"
 #include "qapi/error.h"
 #include "hw/arm/nrf51.h"
+#include "hw/irq.h"
 #include "hw/misc/nrf51_rng.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "qemu/guest-random.h"
 
 static void update_irq(NRF51RNGState *s)
@@ -228,7 +231,7 @@ static const VMStateDescription vmstate_rng = {
     .name = "nrf51_soc.rng",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(active, NRF51RNGState),
         VMSTATE_UINT32(event_valrdy, NRF51RNGState),
         VMSTATE_UINT32(shortcut_stop_on_valrdy, NRF51RNGState),
@@ -242,7 +245,7 @@ static void nrf51_rng_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->props = nrf51_rng_properties;
+    device_class_set_props(dc, nrf51_rng_properties);
     dc->vmsd = &vmstate_rng;
     dc->reset = nrf51_rng_reset;
 }

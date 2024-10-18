@@ -106,7 +106,8 @@ static const char commands_string[] =
     " -l = thoroughness level (1 (default), 2)\n"
     " -r = rounding mode (even (default), zero, down, up, tieaway, odd)\n"
     "      Set to 'all' to test all rounding modes, if applicable\n"
-    " -s = stop when a test fails";
+    " -s = stop when a test fails\n"
+    " -q = minimise noise when testing, just show each function being tested";
 
 static void usage_complete(int argc, char *argv[])
 {
@@ -116,14 +117,14 @@ static void usage_complete(int argc, char *argv[])
 }
 
 /* keep wrappers separate but do not bother defining headers for all of them */
-#include "wrap.inc.c"
+#include "wrap.c.inc"
 
 static void not_implemented(void)
 {
     fprintf(stderr, "Not implemented.\n");
 }
 
-static bool blacklisted(unsigned op, int rmode)
+static bool is_allowed(unsigned op, int rmode)
 {
     /* odd has not been implemented for any 80-bit ops */
     if (rmode == softfloat_round_odd) {
@@ -161,10 +162,10 @@ static bool blacklisted(unsigned op, int rmode)
         case F32_TO_EXTF80:
         case F64_TO_EXTF80:
         case F128_TO_EXTF80:
-            return true;
+            return false;
         }
     }
-    return false;
+    return true;
 }
 
 static void do_testfloat(int op, int rmode, bool exact)
@@ -190,11 +191,13 @@ static void do_testfloat(int op, int rmode, bool exact)
     ab_f128M_z_bool true_ab_f128M_z_bool;
     ab_f128M_z_bool subj_ab_f128M_z_bool;
 
-    fputs(">> Testing ", stderr);
-    verCases_writeFunctionName(stderr);
-    fputs("\n", stderr);
+    if (verCases_verbosity) {
+        fputs(">> Testing ", stderr);
+        verCases_writeFunctionName(stderr);
+        fputs("\n", stderr);
+    }
 
-    if (blacklisted(op, rmode)) {
+    if (!is_allowed(op, rmode)) {
         not_implemented();
         return;
     }
@@ -717,7 +720,7 @@ static void do_testfloat(int op, int rmode, bool exact)
         test_abz_f128(true_abz_f128M, subj_abz_f128M);
         break;
     case F128_MULADD:
-        not_implemented();
+        test_abcz_f128(slow_f128M_mulAdd, qemu_f128M_mulAdd);
         break;
     case F128_SQRT:
         test_az_f128(slow_f128M_sqrt, qemu_f128M_sqrt);
@@ -837,7 +840,7 @@ static void parse_args(int argc, char *argv[])
     int c;
 
     for (;;) {
-        c = getopt(argc, argv, "he:f:l:r:s");
+        c = getopt(argc, argv, "he:f:l:r:sq");
         if (c < 0) {
             break;
         }
@@ -874,8 +877,14 @@ static void parse_args(int argc, char *argv[])
                 }
             }
             break;
+        /*
+         * The following flags are declared in testfloat/source/verCases_common.c
+         */
         case 's':
             verCases_errorStop = true;
+            break;
+        case 'q':
+            verCases_verbosity = 0;
             break;
         case '?':
             /* invalid option or missing argument; getopt prints error info */
@@ -921,7 +930,8 @@ static void parse_args(int argc, char *argv[])
     }
 }
 
-static void QEMU_NORETURN run_test(void)
+static G_NORETURN
+void run_test(void)
 {
     unsigned int i;
 
@@ -963,18 +973,21 @@ static void QEMU_NORETURN run_test(void)
             verCases_usesExact = !!(attrs & FUNC_ARG_EXACT);
 
             for (k = 0; k < 3; k++) {
-                int prec80 = 32;
+                FloatX80RoundPrec qsf_prec80 = floatx80_precision_x;
+                int prec80 = 80;
                 int l;
 
                 if (k == 1) {
                     prec80 = 64;
+                    qsf_prec80 = floatx80_precision_d;
                 } else if (k == 2) {
-                    prec80 = 80;
+                    prec80 = 32;
+                    qsf_prec80 = floatx80_precision_s;
                 }
 
                 verCases_roundingPrecision = 0;
                 slow_extF80_roundingPrecision = prec80;
-                qsf.floatx80_rounding_precision = prec80;
+                qsf.floatx80_rounding_precision = qsf_prec80;
 
                 if (attrs & FUNC_EFF_ROUNDINGPRECISION) {
                     verCases_roundingPrecision = prec80;
@@ -989,7 +1002,7 @@ static void QEMU_NORETURN run_test(void)
 
                     verCases_tininessCode = 0;
                     slowfloat_detectTininess = tmode;
-                    qsf.float_detect_tininess = sf_tininess_to_qemu(tmode);
+                    qsf.tininess_before_rounding = sf_tininess_to_qemu(tmode);
 
                     if (attrs & FUNC_EFF_TININESSMODE ||
                         ((attrs & FUNC_EFF_TININESSMODE_REDUCEDPREC) &&

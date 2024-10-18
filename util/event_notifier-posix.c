@@ -11,7 +11,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/cutils.h"
 #include "qemu/event_notifier.h"
 #include "qemu/main-loop.h"
@@ -29,6 +28,7 @@ void event_notifier_init_fd(EventNotifier *e, int fd)
 {
     e->rfd = fd;
     e->wfd = fd;
+    e->initialized = true;
 }
 #endif
 
@@ -49,22 +49,21 @@ int event_notifier_init(EventNotifier *e, int active)
         if (errno != ENOSYS) {
             return -errno;
         }
-        if (qemu_pipe(fds) < 0) {
+        if (!g_unix_open_pipe(fds, FD_CLOEXEC, NULL)) {
             return -errno;
         }
-        ret = fcntl_setfl(fds[0], O_NONBLOCK);
-        if (ret < 0) {
+        if (!g_unix_set_fd_nonblocking(fds[0], true, NULL)) {
             ret = -errno;
             goto fail;
         }
-        ret = fcntl_setfl(fds[1], O_NONBLOCK);
-        if (ret < 0) {
+        if (!g_unix_set_fd_nonblocking(fds[1], true, NULL)) {
             ret = -errno;
             goto fail;
         }
         e->rfd = fds[0];
         e->wfd = fds[1];
     }
+    e->initialized = true;
     if (active) {
         event_notifier_set(e);
     }
@@ -78,12 +77,18 @@ fail:
 
 void event_notifier_cleanup(EventNotifier *e)
 {
+    if (!e->initialized) {
+        return;
+    }
+
     if (e->rfd != e->wfd) {
         close(e->rfd);
-        e->rfd = -1;
     }
+
+    e->rfd = -1;
     close(e->wfd);
     e->wfd = -1;
+    e->initialized = false;
 }
 
 int event_notifier_get_fd(const EventNotifier *e)
@@ -91,10 +96,19 @@ int event_notifier_get_fd(const EventNotifier *e)
     return e->rfd;
 }
 
+int event_notifier_get_wfd(const EventNotifier *e)
+{
+    return e->wfd;
+}
+
 int event_notifier_set(EventNotifier *e)
 {
     static const uint64_t value = 1;
     ssize_t ret;
+
+    if (!e->initialized) {
+        return -1;
+    }
 
     do {
         ret = write(e->wfd, &value, sizeof(value));
@@ -112,6 +126,10 @@ int event_notifier_test_and_clear(EventNotifier *e)
     int value;
     ssize_t len;
     char buffer[512];
+
+    if (!e->initialized) {
+        return 0;
+    }
 
     /* Drain the notify pipe.  For eventfd, only 8 bytes will be read.  */
     value = 0;

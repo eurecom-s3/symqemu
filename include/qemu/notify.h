@@ -40,15 +40,21 @@ void notifier_remove(Notifier *notifier);
 
 void notifier_list_notify(NotifierList *list, void *data);
 
+bool notifier_list_empty(NotifierList *list);
+
 /* Same as Notifier but allows .notify() to return errors */
 typedef struct NotifierWithReturn NotifierWithReturn;
+
+/* Return int to allow for different failure modes and recovery actions */
+typedef int (*NotifierWithReturnFunc)(NotifierWithReturn *notifier, void *data,
+                                      Error **errp);
 
 struct NotifierWithReturn {
     /**
      * Return 0 on success (next notifier will be invoked), otherwise
      * notifier_with_return_list_notify() will stop and return the value.
      */
-    int (*notify)(NotifierWithReturn *notifier, void *data);
+    NotifierWithReturnFunc notify;
     QLIST_ENTRY(NotifierWithReturn) node;
 };
 
@@ -67,6 +73,6 @@ void notifier_with_return_list_add(NotifierWithReturnList *list,
 void notifier_with_return_remove(NotifierWithReturn *notifier);
 
 int notifier_with_return_list_notify(NotifierWithReturnList *list,
-                                     void *data);
+                                     void *data, Error **errp);
 
 #endif

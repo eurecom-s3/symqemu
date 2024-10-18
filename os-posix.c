@@ -24,35 +24,21 @@
  */
 
 #include "qemu/osdep.h"
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <pwd.h>
 #include <grp.h>
 #include <libgen.h>
 
-#include "qemu-common.h"
-/* Needed early for CONFIG_BSD etc. */
-#include "sysemu/sysemu.h"
-#include "net/slirp.h"
-#include "qemu-options.h"
 #include "qemu/error-report.h"
 #include "qemu/log.h"
+#include "sysemu/runstate.h"
 #include "qemu/cutils.h"
 
 #ifdef CONFIG_LINUX
 #include <sys/prctl.h>
 #endif
 
-/*
- * Must set all three of these at once.
- * Legal combinations are              unset   by name   by uid
- */
-static struct passwd *user_pwd;    /*   NULL   non-NULL   NULL   */
-static uid_t user_uid = (uid_t)-1; /*   -1      -1        >=0    */
-static gid_t user_gid = (gid_t)-1; /*   -1      -1        >=0    */
-
-static const char *chroot_dir;
-static int daemonize;
-static int daemon_pipe;
 
 void os_setup_early_signal_handling(void)
 {
@@ -80,42 +66,6 @@ void os_setup_signal_handling(void)
     sigaction(SIGTERM, &act, NULL);
 }
 
-/* Find a likely location for support files using the location of the binary.
-   For installed binaries this will be "$bindir/../share/qemu".  When
-   running from the build tree this will be "$bindir/../pc-bios".  */
-#define SHARE_SUFFIX "/share/qemu"
-#define BUILD_SUFFIX "/pc-bios"
-char *os_find_datadir(void)
-{
-    char *dir, *exec_dir;
-    char *res;
-    size_t max_len;
-
-    exec_dir = qemu_get_exec_dir();
-    if (exec_dir == NULL) {
-        return NULL;
-    }
-    dir = g_path_get_dirname(exec_dir);
-
-    max_len = strlen(dir) +
-        MAX(strlen(SHARE_SUFFIX), strlen(BUILD_SUFFIX)) + 1;
-    res = g_malloc0(max_len);
-    snprintf(res, max_len, "%s%s", dir, SHARE_SUFFIX);
-    if (access(res, R_OK)) {
-        snprintf(res, max_len, "%s%s", dir, BUILD_SUFFIX);
-        if (access(res, R_OK)) {
-            g_free(res);
-            res = NULL;
-        }
-    }
-
-    g_free(dir);
-    g_free(exec_dir);
-    return res;
-}
-#undef SHARE_SUFFIX
-#undef BUILD_SUFFIX
-
 void os_set_proc_name(const char *s)
 {
 #if defined(PR_SET_NAME)
@@ -136,7 +86,22 @@ void os_set_proc_name(const char *s)
 }
 
 
-static bool os_parse_runas_uid_gid(const char *optarg)
+/*
+ * Must set all three of these at once.
+ * Legal combinations are              unset   by name   by uid
+ */
+static struct passwd *user_pwd;    /*   NULL   non-NULL   NULL   */
+static uid_t user_uid = (uid_t)-1; /*   -1      -1        >=0    */
+static gid_t user_gid = (gid_t)-1; /*   -1      -1        >=0    */
+
+/*
+ * Prepare to change user ID. user_id can be one of 3 forms:
+ *   - a username, in which case user ID will be changed to its uid,
+ *     with primary and supplementary groups set up too;
+ *   - a numeric uid, in which case only the uid will be set;
+ *   - a pair of numeric uid:gid.
+ */
+bool os_set_runas(const char *user_id)
 {
     unsigned long lv;
     const char *ep;
@@ -144,7 +109,14 @@ static bool os_parse_runas_uid_gid(const char *optarg)
     gid_t got_gid;
     int rc;
 
-    rc = qemu_strtoul(optarg, &ep, 0, &lv);
+    user_pwd = getpwnam(user_id);
+    if (user_pwd) {
+        user_uid = -1;
+        user_gid = -1;
+        return true;
+    }
+
+    rc = qemu_strtoul(user_id, &ep, 0, &lv);
     got_uid = lv; /* overflow here is ID in C99 */
     if (rc || *ep != ':' || got_uid != lv || got_uid == (uid_t)-1) {
         return false;
@@ -160,43 +132,6 @@ static bool os_parse_runas_uid_gid(const char *optarg)
     user_uid = got_uid;
     user_gid = got_gid;
     return true;
-}
-
-/*
- * Parse OS specific command line options.
- * return 0 if option handled, -1 otherwise
- */
-int os_parse_cmd_args(int index, const char *optarg)
-{
-    switch (index) {
-    case QEMU_OPTION_runas:
-        user_pwd = getpwnam(optarg);
-        if (user_pwd) {
-            user_uid = -1;
-            user_gid = -1;
-        } else if (!os_parse_runas_uid_gid(optarg)) {
-            error_report("User \"%s\" doesn't exist"
-                         " (and is not <uid>:<gid>)",
-                         optarg);
-            exit(1);
-        }
-        break;
-    case QEMU_OPTION_chroot:
-        chroot_dir = optarg;
-        break;
-    case QEMU_OPTION_daemonize:
-        daemonize = 1;
-        break;
-#if defined(CONFIG_LINUX)
-    case QEMU_OPTION_enablefips:
-        fips_set_state(true);
-        break;
-#endif
-    default:
-        return -1;
-    }
-
-    return 0;
 }
 
 static void change_process_uid(void)
@@ -236,6 +171,14 @@ static void change_process_uid(void)
     }
 }
 
+
+static const char *chroot_dir;
+
+void os_set_chroot(const char *path)
+{
+    chroot_dir = path;
+}
+
 static void change_root(void)
 {
     if (chroot_dir) {
@@ -251,13 +194,28 @@ static void change_root(void)
 
 }
 
+
+static int daemonize;
+static int daemon_pipe;
+
+bool is_daemonized(void)
+{
+    return daemonize;
+}
+
+int os_set_daemonize(bool d)
+{
+    daemonize = d;
+    return 0;
+}
+
 void os_daemonize(void)
 {
     if (daemonize) {
         pid_t pid;
         int fds[2];
 
-        if (pipe(fds) == -1) {
+        if (!g_unix_open_pipe(fds, FD_CLOEXEC, NULL)) {
             exit(1);
         }
 
@@ -282,7 +240,6 @@ void os_daemonize(void)
 
         close(fds[0]);
         daemon_pipe = fds[1];
-        qemu_set_cloexec(daemon_pipe);
 
         setsid();
 
@@ -300,6 +257,27 @@ void os_daemonize(void)
     }
 }
 
+void os_setup_limits(void)
+{
+    struct rlimit nofile;
+
+    if (getrlimit(RLIMIT_NOFILE, &nofile) < 0) {
+        warn_report("unable to query NOFILE limit: %s", strerror(errno));
+        return;
+    }
+
+    if (nofile.rlim_cur == nofile.rlim_max) {
+        return;
+    }
+
+    nofile.rlim_cur = nofile.rlim_max;
+
+    if (setrlimit(RLIMIT_NOFILE, &nofile) < 0) {
+        warn_report("unable to set NOFILE limit: %s", strerror(errno));
+        return;
+    }
+}
+
 void os_setup_post(void)
 {
     int fd = 0;
@@ -309,7 +287,7 @@ void os_setup_post(void)
             error_report("not able to chdir to /: %s", strerror(errno));
             exit(1);
         }
-        TFR(fd = qemu_open("/dev/null", O_RDWR));
+        fd = RETRY_ON_EINTR(qemu_open_old("/dev/null", O_RDWR));
         if (fd == -1) {
             exit(1);
         }
@@ -325,7 +303,7 @@ void os_setup_post(void)
         dup2(fd, 0);
         dup2(fd, 1);
         /* In case -D is given do not redirect stderr to /dev/null */
-        if (!qemu_logfile) {
+        if (!qemu_log_enabled()) {
             dup2(fd, 2);
         }
 
@@ -345,13 +323,9 @@ void os_set_line_buffering(void)
     setvbuf(stdout, NULL, _IOLBF, 0);
 }
 
-bool is_daemonized(void)
-{
-    return daemonize;
-}
-
 int os_mlock(void)
 {
+#ifdef HAVE_MLOCKALL
     int ret = 0;
 
     ret = mlockall(MCL_CURRENT | MCL_FUTURE);
@@ -360,4 +334,7 @@ int os_mlock(void)
     }
 
     return ret;
+#else
+    return -ENOSYS;
+#endif
 }

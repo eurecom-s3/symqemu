@@ -24,8 +24,9 @@
 
 #include "qemu/osdep.h"
 #include <dirent.h>
+#include "hw/qdev-core.h"
 #include "monitor-internal.h"
-#include "qapi/error.h"
+#include "monitor/hmp.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/qnum.h"
 #include "qemu/config-file.h"
@@ -35,7 +36,6 @@
 #include "qemu/option.h"
 #include "qemu/units.h"
 #include "sysemu/block-backend.h"
-#include "sysemu/sysemu.h"
 #include "trace.h"
 
 static void monitor_command_cb(void *opaque, const char *cmdline,
@@ -213,6 +213,11 @@ static bool cmd_can_preconfig(const HMPCommand *cmd)
     return strchr(cmd->flags, 'p');
 }
 
+static bool cmd_available(const HMPCommand *cmd)
+{
+    return phase_check(PHASE_MACHINE_READY) || cmd_can_preconfig(cmd);
+}
+
 static void help_cmd_dump_one(Monitor *mon,
                               const HMPCommand *cmd,
                               char **prefix_args,
@@ -220,7 +225,7 @@ static void help_cmd_dump_one(Monitor *mon,
 {
     int i;
 
-    if (runstate_check(RUN_STATE_PRECONFIG) && !cmd_can_preconfig(cmd)) {
+    if (!cmd_available(cmd)) {
         return;
     }
 
@@ -248,8 +253,7 @@ static void help_cmd_dump(Monitor *mon, const HMPCommand *cmds,
     /* Find one entry to dump */
     for (cmd = cmds; cmd->name != NULL; cmd++) {
         if (hmp_compare_cmd(args[arg_index], cmd->name) &&
-            ((!runstate_check(RUN_STATE_PRECONFIG) ||
-                cmd_can_preconfig(cmd)))) {
+            cmd_available(cmd)) {
             if (cmd->sub_table) {
                 /* continue with next arg */
                 help_cmd_dump(mon, cmd->sub_table,
@@ -268,7 +272,7 @@ static void help_cmd_dump(Monitor *mon, const HMPCommand *cmds,
     }
 }
 
-void help_cmd(Monitor *mon, const char *name)
+void hmp_help_cmd(Monitor *mon, const char *name)
 {
     char *args[MAX_ARGS];
     int nb_args = 0;
@@ -279,10 +283,15 @@ void help_cmd(Monitor *mon, const char *name)
         if (!strcmp(name, "log")) {
             const QEMULogItem *item;
             monitor_printf(mon, "Log items (comma separated):\n");
-            monitor_printf(mon, "%-10s %s\n", "none", "remove all logs");
+            monitor_printf(mon, "%-15s %s\n", "none", "remove all logs");
             for (item = qemu_log_items; item->mask != 0; item++) {
-                monitor_printf(mon, "%-10s %s\n", item->name, item->help);
+                monitor_printf(mon, "%-15s %s\n", item->name, item->help);
             }
+#ifdef CONFIG_TRACE_LOG
+            monitor_printf(mon, "trace:PATTERN   enable trace events\n");
+            monitor_printf(mon, "\nUse \"log trace:help\" to get a list of "
+                           "trace events.\n\n");
+#endif
             return;
         }
 
@@ -302,8 +311,8 @@ void help_cmd(Monitor *mon, const char *name)
 static const char *pch;
 static sigjmp_buf expr_env;
 
-static void GCC_FMT_ATTR(2, 3) QEMU_NORETURN
-expr_error(Monitor *mon, const char *fmt, ...)
+static G_NORETURN G_GNUC_PRINTF(2, 3)
+void expr_error(Monitor *mon, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
@@ -384,7 +393,7 @@ static int64_t expr_unary(Monitor *mon)
                 pch++;
             }
             *q = 0;
-            ret = get_monitor_def(&reg, buf);
+            ret = get_monitor_def(mon, &reg, buf);
             if (ret < 0) {
                 expr_error(mon, "unknown register");
             }
@@ -653,9 +662,9 @@ static const HMPCommand *monitor_parse_command(MonitorHMP *hmp_mon,
                        (int)(p - cmdp_start), cmdp_start);
         return NULL;
     }
-    if (runstate_check(RUN_STATE_PRECONFIG) && !cmd_can_preconfig(cmd)) {
-        monitor_printf(mon, "Command '%.*s' not available with -preconfig "
-                            "until after exit_preconfig.\n",
+    if (!cmd_available(cmd)) {
+        monitor_printf(mon, "Command '%.*s' not available "
+                            "until machine initialization has completed.\n",
                        (int)(p - cmdp_start), cmdp_start);
         return NULL;
     }
@@ -975,6 +984,7 @@ static QDict *monitor_parse_arguments(Monitor *mon,
             {
                 const char *tmp = p;
                 int skip_key = 0;
+                int ret;
                 /* option */
 
                 c = *typestr++;
@@ -997,11 +1007,27 @@ static QDict *monitor_parse_arguments(Monitor *mon,
                     }
                     if (skip_key) {
                         p = tmp;
+                    } else if (*typestr == 's') {
+                        /* has option with string value */
+                        typestr++;
+                        tmp = p++;
+                        while (qemu_isspace(*p)) {
+                            p++;
+                        }
+                        ret = get_str(buf, sizeof(buf), &p);
+                        if (ret < 0) {
+                            monitor_printf(mon, "%s: value expected for -%c\n",
+                                           cmd->name, *tmp);
+                            goto fail;
+                        }
+                        qdict_put_str(qdict, key, buf);
                     } else {
-                        /* has option */
+                        /* has boolean option */
                         p++;
                         qdict_put_bool(qdict, key, true);
                     }
+                } else if (*typestr == 's') {
+                    typestr++;
                 }
             }
             break;
@@ -1056,6 +1082,46 @@ fail:
     return NULL;
 }
 
+static void hmp_info_human_readable_text(Monitor *mon,
+                                         HumanReadableText *(*handler)(Error **))
+{
+    Error *err = NULL;
+    g_autoptr(HumanReadableText) info = handler(&err);
+
+    if (hmp_handle_error(mon, err)) {
+        return;
+    }
+
+    monitor_puts(mon, info->human_readable_text);
+}
+
+static void handle_hmp_command_exec(Monitor *mon,
+                                    const HMPCommand *cmd,
+                                    QDict *qdict)
+{
+    if (cmd->cmd_info_hrt) {
+        hmp_info_human_readable_text(mon,
+                                     cmd->cmd_info_hrt);
+    } else {
+        cmd->cmd(mon, qdict);
+    }
+}
+
+typedef struct HandleHmpCommandCo {
+    Monitor *mon;
+    const HMPCommand *cmd;
+    QDict *qdict;
+    bool done;
+} HandleHmpCommandCo;
+
+static void handle_hmp_command_co(void *opaque)
+{
+    HandleHmpCommandCo *data = opaque;
+    handle_hmp_command_exec(data->mon, data->cmd, data->qdict);
+    monitor_set_cur(qemu_coroutine_self(), NULL);
+    data->done = true;
+}
+
 void handle_hmp_command(MonitorHMP *mon, const char *cmdline)
 {
     QDict *qdict;
@@ -1069,6 +1135,13 @@ void handle_hmp_command(MonitorHMP *mon, const char *cmdline)
         return;
     }
 
+    if (!cmd->cmd && !cmd->cmd_info_hrt) {
+        /* FIXME: is it useful to try autoload modules here ??? */
+        monitor_printf(&mon->common, "Command \"%.*s\" is not available.\n",
+                       (int)(cmdline - cmd_start), cmd_start);
+        return;
+    }
+
     qdict = monitor_parse_arguments(&mon->common, &cmdline, cmd);
     if (!qdict) {
         while (cmdline > cmd_start && qemu_isspace(cmdline[-1])) {
@@ -1079,7 +1152,24 @@ void handle_hmp_command(MonitorHMP *mon, const char *cmdline)
         return;
     }
 
-    cmd->cmd(&mon->common, qdict);
+    if (!cmd->coroutine) {
+        /* old_mon is non-NULL when called from qmp_human_monitor_command() */
+        Monitor *old_mon = monitor_set_cur(qemu_coroutine_self(), &mon->common);
+        handle_hmp_command_exec(&mon->common, cmd, qdict);
+        monitor_set_cur(qemu_coroutine_self(), old_mon);
+    } else {
+        HandleHmpCommandCo data = {
+            .mon = &mon->common,
+            .cmd = cmd,
+            .qdict = qdict,
+            .done = false,
+        };
+        Coroutine *co = qemu_coroutine_create(handle_hmp_command_co, &data);
+        monitor_set_cur(co, &mon->common);
+        aio_co_enter(qemu_get_aio_context(), co);
+        AIO_WAIT_WHILE_UNLOCKED(NULL, !data.done);
+    }
+
     qobject_unref(qdict);
 }
 
@@ -1099,9 +1189,7 @@ static void cmd_completion(MonitorHMP *mon, const char *name, const char *list)
         }
         memcpy(cmd, pstart, len);
         cmd[len] = '\0';
-        if (name[0] == '\0' || !strncmp(name, cmd, strlen(name))) {
-            readline_add_completion(mon->rs, cmd);
-        }
+        readline_add_completion_of(mon->rs, name, cmd);
         if (*p == '\0') {
             break;
         }
@@ -1180,7 +1268,7 @@ static void monitor_find_completion_by_table(MonitorHMP *mon,
 {
     const char *cmdname;
     int i;
-    const char *ptype, *old_ptype, *str, *name;
+    const char *ptype, *old_ptype, *str;
     const HMPCommand *cmd;
     BlockBackend *blk = NULL;
 
@@ -1193,8 +1281,7 @@ static void monitor_find_completion_by_table(MonitorHMP *mon,
         }
         readline_set_completion_index(mon->rs, strlen(cmdname));
         for (cmd = cmd_table; cmd->name != NULL; cmd++) {
-            if (!runstate_check(RUN_STATE_PRECONFIG) ||
-                 cmd_can_preconfig(cmd)) {
+            if (cmd_available(cmd)) {
                 cmd_completion(mon, cmdname, cmd->name);
             }
         }
@@ -1202,8 +1289,7 @@ static void monitor_find_completion_by_table(MonitorHMP *mon,
         /* find the command */
         for (cmd = cmd_table; cmd->name != NULL; cmd++) {
             if (hmp_compare_cmd(args[0], cmd->name) &&
-                (!runstate_check(RUN_STATE_PRECONFIG) ||
-                 cmd_can_preconfig(cmd))) {
+                cmd_available(cmd)) {
                 break;
             }
         }
@@ -1247,11 +1333,7 @@ static void monitor_find_completion_by_table(MonitorHMP *mon,
             /* block device name completion */
             readline_set_completion_index(mon->rs, strlen(str));
             while ((blk = blk_next(blk)) != NULL) {
-                name = blk_name(blk);
-                if (str[0] == '\0' ||
-                    !strncmp(name, str, strlen(str))) {
-                    readline_add_completion(mon->rs, name);
-                }
+                readline_add_completion_of(mon->rs, str, blk_name(blk));
             }
             break;
         case 's':
@@ -1300,12 +1382,8 @@ cleanup:
 
 static void monitor_read(void *opaque, const uint8_t *buf, int size)
 {
-    MonitorHMP *mon;
-    Monitor *old_mon = cur_mon;
+    MonitorHMP *mon = container_of(opaque, MonitorHMP, common);
     int i;
-
-    cur_mon = opaque;
-    mon = container_of(cur_mon, MonitorHMP, common);
 
     if (mon->rs) {
         for (i = 0; i < size; i++) {
@@ -1313,63 +1391,62 @@ static void monitor_read(void *opaque, const uint8_t *buf, int size)
         }
     } else {
         if (size == 0 || buf[size - 1] != 0) {
-            monitor_printf(cur_mon, "corrupted command\n");
+            monitor_printf(&mon->common, "corrupted command\n");
         } else {
             handle_hmp_command(mon, (char *)buf);
         }
     }
-
-    cur_mon = old_mon;
 }
 
-static void monitor_event(void *opaque, int event)
+static void monitor_event(void *opaque, QEMUChrEvent event)
 {
     Monitor *mon = opaque;
-    MonitorHMP *hmp_mon = container_of(mon, MonitorHMP, common);
 
     switch (event) {
     case CHR_EVENT_MUX_IN:
         qemu_mutex_lock(&mon->mon_lock);
-        mon->mux_out = 0;
-        qemu_mutex_unlock(&mon->mon_lock);
-        if (mon->reset_seen) {
-            readline_restart(hmp_mon->rs);
+        if (mon->mux_out) {
+            mon->mux_out = 0;
             monitor_resume(mon);
-            monitor_flush(mon);
-        } else {
-            atomic_mb_set(&mon->suspend_cnt, 0);
         }
+        qemu_mutex_unlock(&mon->mon_lock);
         break;
 
     case CHR_EVENT_MUX_OUT:
-        if (mon->reset_seen) {
-            if (atomic_mb_read(&mon->suspend_cnt) == 0) {
-                monitor_printf(mon, "\n");
-            }
-            monitor_flush(mon);
-            monitor_suspend(mon);
-        } else {
-            atomic_inc(&mon->suspend_cnt);
-        }
         qemu_mutex_lock(&mon->mon_lock);
-        mon->mux_out = 1;
+        if (!mon->mux_out) {
+            if (mon->reset_seen && !mon->suspend_cnt) {
+                monitor_puts_locked(mon, "\n");
+            } else {
+                monitor_flush_locked(mon);
+            }
+            monitor_suspend(mon);
+            mon->mux_out = 1;
+        }
         qemu_mutex_unlock(&mon->mon_lock);
         break;
 
     case CHR_EVENT_OPENED:
         monitor_printf(mon, "QEMU %s monitor - type 'help' for more "
                        "information\n", QEMU_VERSION);
-        if (!mon->mux_out) {
-            readline_restart(hmp_mon->rs);
-            readline_show_prompt(hmp_mon->rs);
-        }
+        qemu_mutex_lock(&mon->mon_lock);
         mon->reset_seen = 1;
+        if (!mon->mux_out) {
+            /* Suspend-resume forces the prompt to be printed.  */
+            monitor_suspend(mon);
+            monitor_resume(mon);
+        }
+        qemu_mutex_unlock(&mon->mon_lock);
         mon_refcount++;
         break;
 
     case CHR_EVENT_CLOSED:
         mon_refcount--;
         monitor_fdsets_cleanup();
+        break;
+
+    case CHR_EVENT_BREAK:
+        /* Ignored */
         break;
     }
 }
@@ -1379,7 +1456,7 @@ static void monitor_event(void *opaque, int event)
  * These functions just adapt the readline interface in a typesafe way.  We
  * could cast function pointers but that discards compiler checks.
  */
-static void GCC_FMT_ATTR(2, 3) monitor_readline_printf(void *opaque,
+static void G_GNUC_PRINTF(2, 3) monitor_readline_printf(void *opaque,
                                                        const char *fmt, ...)
 {
     MonitorHMP *mon = opaque;
@@ -1395,12 +1472,16 @@ static void monitor_readline_flush(void *opaque)
     monitor_flush(&mon->common);
 }
 
-void monitor_init_hmp(Chardev *chr, bool use_readline)
+void monitor_init_hmp(Chardev *chr, bool use_readline, Error **errp)
 {
     MonitorHMP *mon = g_new0(MonitorHMP, 1);
 
+    if (!qemu_chr_fe_init(&mon->common.chr, chr, errp)) {
+        g_free(mon);
+        return;
+    }
+
     monitor_data_init(&mon->common, false, false, false);
-    qemu_chr_fe_init(&mon->common.chr, chr, &error_abort);
 
     mon->use_readline = use_readline;
     if (mon->use_readline) {

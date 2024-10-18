@@ -24,8 +24,9 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "sysemu/sysemu.h"
+#include "hw/irq.h"
 #include "hw/ptimer.h"
+#include "hw/qdev-properties.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "qemu/bitops.h"
@@ -34,6 +35,7 @@
 #include "hw/register.h"
 #include "sysemu/dma.h"
 #include "migration/blocker.h"
+#include "migration/vmstate.h"
 
 #ifndef XILINX_SPIPS_ERR_DEBUG
 #define XILINX_SPIPS_ERR_DEBUG 0
@@ -107,6 +109,7 @@
 #define R_GPIO              (0x30 / 4)
 #define R_LPBK_DLY_ADJ      (0x38 / 4)
 #define R_LPBK_DLY_ADJ_RESET (0x33)
+#define R_IOU_TAPDLY_BYPASS (0x3C / 4)
 #define R_TXD1              (0x80 / 4)
 #define R_TXD2              (0x84 / 4)
 #define R_TXD3              (0x88 / 4)
@@ -137,6 +140,8 @@
 #define R_LQSPI_STS         (0xA4 / 4)
 #define LQSPI_STS_WR_RECVD      (1 << 1)
 
+#define R_DUMMY_CYCLE_EN    (0xC8 / 4)
+#define R_ECO               (0xF8 / 4)
 #define R_MOD_ID            (0xFC / 4)
 
 #define R_GQSPI_SELECT          (0x144 / 4)
@@ -158,7 +163,7 @@
     FIELD(GQSPI_CNFG, ENDIAN, 26, 1)
     /* Poll timeout not implemented */
     FIELD(GQSPI_CNFG, EN_POLL_TIMEOUT, 20, 1)
-    /* QEMU doesnt care about any of these last three */
+    /* QEMU doesn't care about any of these last three */
     FIELD(GQSPI_CNFG, BR, 3, 3)
     FIELD(GQSPI_CNFG, CPH, 2, 1)
     FIELD(GQSPI_CNFG, CPL, 1, 1)
@@ -171,7 +176,8 @@
     FIELD(GQSPI_FIFO_CTRL, GENERIC_FIFO_RESET, 0, 1)
 #define R_GQSPI_GFIFO_THRESH    (0x150 / 4)
 #define R_GQSPI_DATA_STS (0x15c / 4)
-/* We use the snapshot register to hold the core state for the currently
+/*
+ * We use the snapshot register to hold the core state for the currently
  * or most recently executed command. So the generic fifo format is defined
  * for the snapshot register
  */
@@ -188,13 +194,6 @@
     FIELD(GQSPI_GF_SNAPSHOT, IMMEDIATE_DATA, 0, 8)
 #define R_GQSPI_MOD_ID        (0x1fc / 4)
 #define R_GQSPI_MOD_ID_RESET  (0x10a0000)
-
-#define R_QSPIDMA_DST_CTRL         (0x80c / 4)
-#define R_QSPIDMA_DST_CTRL_RESET   (0x803ffa00)
-#define R_QSPIDMA_DST_I_MASK       (0x820 / 4)
-#define R_QSPIDMA_DST_I_MASK_RESET (0xfe)
-#define R_QSPIDMA_DST_CTRL2        (0x824 / 4)
-#define R_QSPIDMA_DST_CTRL2_RESET  (0x081bfff8)
 
 /* size of TXRX FIFOs */
 #define RXFF_A          (128)
@@ -231,7 +230,8 @@ static void xilinx_spips_update_cs(XilinxSPIPS *s, int field)
         if (old_state != new_state) {
             s->cs_lines_state[i] = new_state;
             s->rx_discard = ARRAY_FIELD_EX32(s->regs, CMND, RX_DISCARD);
-            DB_PRINT_L(1, "%sselecting slave %d\n", new_state ? "" : "de", i);
+            DB_PRINT_L(1, "%sselecting peripheral %d\n",
+                       new_state ? "" : "de", i);
         }
         qemu_set_irq(s->cs_lines[i], !new_state);
     }
@@ -410,15 +410,13 @@ static void xlnx_zynqmp_qspips_reset(DeviceState *d)
     s->regs[R_GQSPI_GPIO] = 1;
     s->regs[R_GQSPI_LPBK_DLY_ADJ] = R_GQSPI_LPBK_DLY_ADJ_RESET;
     s->regs[R_GQSPI_MOD_ID] = R_GQSPI_MOD_ID_RESET;
-    s->regs[R_QSPIDMA_DST_CTRL] = R_QSPIDMA_DST_CTRL_RESET;
-    s->regs[R_QSPIDMA_DST_I_MASK] = R_QSPIDMA_DST_I_MASK_RESET;
-    s->regs[R_QSPIDMA_DST_CTRL2] = R_QSPIDMA_DST_CTRL2_RESET;
     s->man_start_com_g = false;
     s->gqspi_irqline = 0;
     xlnx_zynqmp_qspips_update_ixr(s);
 }
 
-/* N way (num) in place bit striper. Lay out row wise bits (MSB to LSB)
+/*
+ * N way (num) in place bit striper. Lay out row wise bits (MSB to LSB)
  * column wise (from element 0 to N-1). num is the length of x, and dir
  * reverses the direction of the transform. Best illustrated by example:
  * Each digit in the below array is a single bit (num == 3):
@@ -471,7 +469,7 @@ static void xlnx_zynqmp_qspips_flush_fifo_g(XlnxZynqMPQSPIPS *s)
 
             imm = ARRAY_FIELD_EX32(s->regs, GQSPI_GF_SNAPSHOT, IMMEDIATE_DATA);
             if (!ARRAY_FIELD_EX32(s->regs, GQSPI_GF_SNAPSHOT, DATA_XFER)) {
-                /* immedate transfer */
+                /* immediate transfer */
                 if (ARRAY_FIELD_EX32(s->regs, GQSPI_GF_SNAPSHOT, TRANSMIT) ||
                     ARRAY_FIELD_EX32(s->regs, GQSPI_GF_SNAPSHOT, RECIEVE)) {
                     s->regs[R_GQSPI_DATA_STS] = 1;
@@ -571,11 +569,11 @@ static int xilinx_spips_num_dummies(XilinxQSPIPS *qs, uint8_t command)
     case FAST_READ:
     case DOR:
     case QOR:
+    case FAST_READ_4:
     case DOR_4:
     case QOR_4:
         return 1;
     case DIOR:
-    case FAST_READ_4:
     case DIOR_4:
         return 2;
     case QIOR:
@@ -631,8 +629,10 @@ static void xilinx_spips_flush_txfifo(XilinxSPIPS *s)
                 tx_rx[i] = tx;
             }
         } else {
-            /* Extract a dummy byte and generate dummy cycles according to the
-             * link state */
+            /*
+             * Extract a dummy byte and generate dummy cycles according to the
+             * link state
+             */
             tx = fifo8_pop(&s->tx_fifo);
             dummy_cycles = 8 / s->link_state;
         }
@@ -715,8 +715,9 @@ static void xilinx_spips_flush_txfifo(XilinxSPIPS *s)
             }
             break;
         case (SNOOP_ADDR):
-            /* Address has been transmitted, transmit dummy cycles now if
-             * needed */
+            /*
+             * Address has been transmitted, transmit dummy cycles now if needed
+             */
             if (s->cmd_dummies < 0) {
                 s->snoop_state = SNOOP_NONE;
             } else {
@@ -767,7 +768,7 @@ static void xilinx_spips_check_zero_pump(XilinxSPIPS *s)
      */
     while (s->regs[R_TRANSFER_SIZE] &&
            s->rx_fifo.num + s->tx_fifo.num < RXFF_A_Q - 3) {
-        /* endianess just doesn't matter when zero pumping */
+        /* endianness just doesn't matter when zero pumping */
         tx_data_bytes(&s->tx_fifo, 0, 4, false);
         s->regs[R_TRANSFER_SIZE] &= ~0x03ull;
         s->regs[R_TRANSFER_SIZE] -= 4;
@@ -863,14 +864,14 @@ static void xlnx_zynqmp_qspips_notify(void *opaque)
 
         memcpy(rq->dma_buf, rxd, num);
 
-        ret = stream_push(rq->dma, rq->dma_buf, num);
+        ret = stream_push(rq->dma, rq->dma_buf, num, false);
         assert(ret == num);
         xlnx_zynqmp_qspips_check_flush(rq);
     }
 }
 
 static uint64_t xilinx_spips_read(void *opaque, hwaddr addr,
-                                                        unsigned size)
+                                  unsigned size)
 {
     XilinxSPIPS *s = opaque;
     uint32_t mask = ~0;
@@ -886,7 +887,7 @@ static uint64_t xilinx_spips_read(void *opaque, hwaddr addr,
     case R_INTR_STATUS:
         ret = s->regs[addr] & IXR_ALL;
         s->regs[addr] = 0;
-        DB_PRINT_L(0, "addr=" TARGET_FMT_plx " = %x\n", addr * 4, ret);
+        DB_PRINT_L(0, "addr=" HWADDR_FMT_plx " = %x\n", addr * 4, ret);
         xilinx_spips_update_ixr(s);
         return ret;
     case R_INTR_MASK:
@@ -915,12 +916,12 @@ static uint64_t xilinx_spips_read(void *opaque, hwaddr addr,
         if (!(s->regs[R_CONFIG] & R_CONFIG_ENDIAN)) {
             ret <<= 8 * shortfall;
         }
-        DB_PRINT_L(0, "addr=" TARGET_FMT_plx " = %x\n", addr * 4, ret);
+        DB_PRINT_L(0, "addr=" HWADDR_FMT_plx " = %x\n", addr * 4, ret);
         xilinx_spips_check_flush(s);
         xilinx_spips_update_ixr(s);
         return ret;
     }
-    DB_PRINT_L(0, "addr=" TARGET_FMT_plx " = %x\n", addr * 4,
+    DB_PRINT_L(0, "addr=" HWADDR_FMT_plx " = %x\n", addr * 4,
                s->regs[addr] & mask);
     return s->regs[addr] & mask;
 
@@ -964,13 +965,16 @@ static uint64_t xlnx_zynqmp_qspips_read(void *opaque,
 }
 
 static void xilinx_spips_write(void *opaque, hwaddr addr,
-                                        uint64_t value, unsigned size)
+                               uint64_t value, unsigned size)
 {
     int mask = ~0;
     XilinxSPIPS *s = opaque;
+    bool try_flush = true;
 
-    DB_PRINT_L(0, "addr=" TARGET_FMT_plx " = %x\n", addr, (unsigned)value);
+    DB_PRINT_L(0, "addr=" HWADDR_FMT_plx " = %x\n", addr, (unsigned)value);
     addr >>= 2;
+    assert(addr < XLNX_SPIPS_R_MAX);
+
     switch (addr) {
     case R_CONFIG:
         mask = ~(R_CONFIG_RSVD | MAN_START_COM);
@@ -1017,13 +1021,23 @@ static void xilinx_spips_write(void *opaque, hwaddr addr,
         tx_data_bytes(&s->tx_fifo, (uint32_t)value, 3,
                       s->regs[R_CONFIG] & R_CONFIG_ENDIAN);
         goto no_reg_update;
+    /* Skip SPI bus update for below registers writes */
+    case R_GPIO:
+    case R_LPBK_DLY_ADJ:
+    case R_IOU_TAPDLY_BYPASS:
+    case R_DUMMY_CYCLE_EN:
+    case R_ECO:
+        try_flush = false;
+        break;
     }
     s->regs[addr] = (s->regs[addr] & ~mask) | (value & mask);
 no_reg_update:
-    xilinx_spips_update_cs_lines(s);
-    xilinx_spips_check_flush(s);
-    xilinx_spips_update_cs_lines(s);
-    xilinx_spips_update_ixr(s);
+    if (try_flush) {
+        xilinx_spips_update_cs_lines(s);
+        xilinx_spips_check_flush(s);
+        xilinx_spips_update_cs_lines(s);
+        xilinx_spips_update_ixr(s);
+    }
 }
 
 static const MemoryRegionOps spips_ops = {
@@ -1055,7 +1069,7 @@ static void xilinx_qspips_write(void *opaque, hwaddr addr,
 }
 
 static void xlnx_zynqmp_qspips_write(void *opaque, hwaddr addr,
-                                        uint64_t value, unsigned size)
+                                     uint64_t value, unsigned size)
 {
     XlnxZynqMPQSPIPS *s = XLNX_ZYNQMP_QSPIPS(opaque);
     uint32_t reg = addr / 4;
@@ -1138,7 +1152,7 @@ static void lqspi_load_cache(void *opaque, hwaddr addr)
     int i;
     int flash_addr = ((addr & ~(LQSPI_CACHE_SIZE - 1))
                    / num_effective_busses(s));
-    int slave = flash_addr >> LQSPI_ADDRESS_BITS;
+    int peripheral = flash_addr >> LQSPI_ADDRESS_BITS;
     int cache_entry = 0;
     uint32_t u_page_save = s->regs[R_LQSPI_STS] & ~LQSPI_CFG_U_PAGE;
 
@@ -1146,7 +1160,7 @@ static void lqspi_load_cache(void *opaque, hwaddr addr)
             addr > q->lqspi_cached_addr + LQSPI_CACHE_SIZE - 4) {
         xilinx_qspips_invalidate_mmio_ptr(q);
         s->regs[R_LQSPI_STS] &= ~LQSPI_CFG_U_PAGE;
-        s->regs[R_LQSPI_STS] |= slave ? LQSPI_CFG_U_PAGE : 0;
+        s->regs[R_LQSPI_STS] |= peripheral ? LQSPI_CFG_U_PAGE : 0;
 
         DB_PRINT_L(0, "config reg status: %08x\n", s->regs[R_LQSPI_CFG]);
 
@@ -1254,7 +1268,6 @@ static void xilinx_spips_realize(DeviceState *dev, Error **errp)
     XilinxSPIPS *s = XILINX_SPIPS(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
     XilinxSPIPSClass *xsc = XILINX_SPIPS_GET_CLASS(s);
-    qemu_irq *cs;
     int i;
 
     DB_PRINT_L(0, "realized spips\n");
@@ -1281,9 +1294,6 @@ static void xilinx_spips_realize(DeviceState *dev, Error **errp)
 
     s->cs_lines = g_new0(qemu_irq, s->num_cs * s->num_busses);
     s->cs_lines_state = g_new0(bool, s->num_cs * s->num_busses);
-    for (i = 0, cs = s->cs_lines; i < s->num_busses; ++i, cs += s->num_cs) {
-        ssi_auto_connect_slaves(DEVICE(s), cs, s->spi[i]);
-    }
 
     sysbus_init_irq(sbd, &s->irq);
     for (i = 0; i < s->num_cs * s->num_busses; ++i) {
@@ -1291,7 +1301,7 @@ static void xilinx_spips_realize(DeviceState *dev, Error **errp)
     }
 
     memory_region_init_io(&s->iomem, OBJECT(s), xsc->reg_ops, s,
-                          "spi", XLNX_ZYNQMP_SPIPS_R_MAX * 4);
+                          "spi", xsc->reg_size);
     sysbus_init_mmio(sbd, &s->iomem);
 
     s->irqline = -1;
@@ -1341,11 +1351,10 @@ static void xlnx_zynqmp_qspips_init(Object *obj)
 {
     XlnxZynqMPQSPIPS *rq = XLNX_ZYNQMP_QSPIPS(obj);
 
-    object_property_add_link(obj, "stream-connected-dma", TYPE_STREAM_SLAVE,
+    object_property_add_link(obj, "stream-connected-dma", TYPE_STREAM_SINK,
                              (Object **)&rq->dma,
                              object_property_allow_set_link,
-                             OBJ_PROP_LINK_STRONG,
-                             NULL);
+                             OBJ_PROP_LINK_STRONG);
 }
 
 static int xilinx_spips_post_load(void *opaque, int version_id)
@@ -1360,7 +1369,7 @@ static const VMStateDescription vmstate_xilinx_spips = {
     .version_id = 2,
     .minimum_version_id = 2,
     .post_load = xilinx_spips_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_FIFO8(tx_fifo, XilinxSPIPS),
         VMSTATE_FIFO8(rx_fifo, XilinxSPIPS),
         VMSTATE_UINT32_ARRAY(regs, XilinxSPIPS, XLNX_SPIPS_R_MAX),
@@ -1386,7 +1395,7 @@ static const VMStateDescription vmstate_xilinx_qspips = {
     .name = "xilinx_qspips",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_STRUCT(parent_obj, XilinxQSPIPS, 0,
                        vmstate_xilinx_spips, XilinxSPIPS),
         VMSTATE_END_OF_LIST()
@@ -1398,7 +1407,7 @@ static const VMStateDescription vmstate_xlnx_zynqmp_qspips = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = xlnx_zynqmp_qspips_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_STRUCT(parent_obj, XlnxZynqMPQSPIPS, 0,
                        vmstate_xilinx_qspips, XilinxQSPIPS),
         VMSTATE_FIFO8(tx_fifo_g, XlnxZynqMPQSPIPS),
@@ -1428,6 +1437,7 @@ static void xilinx_qspips_class_init(ObjectClass *klass, void * data)
 
     dc->realize = xilinx_qspips_realize;
     xsc->reg_ops = &qspips_ops;
+    xsc->reg_size = XLNX_SPIPS_R_MAX * 4;
     xsc->rx_fifo_size = RXFF_A_Q;
     xsc->tx_fifo_size = TXFF_A_Q;
 }
@@ -1439,10 +1449,11 @@ static void xilinx_spips_class_init(ObjectClass *klass, void *data)
 
     dc->realize = xilinx_spips_realize;
     dc->reset = xilinx_spips_reset;
-    dc->props = xilinx_spips_properties;
+    device_class_set_props(dc, xilinx_spips_properties);
     dc->vmsd = &vmstate_xilinx_spips;
 
     xsc->reg_ops = &spips_ops;
+    xsc->reg_size = XLNX_SPIPS_R_MAX * 4;
     xsc->rx_fifo_size = RXFF_A;
     xsc->tx_fifo_size = TXFF_A;
 }
@@ -1455,8 +1466,9 @@ static void xlnx_zynqmp_qspips_class_init(ObjectClass *klass, void * data)
     dc->realize = xlnx_zynqmp_qspips_realize;
     dc->reset = xlnx_zynqmp_qspips_reset;
     dc->vmsd = &vmstate_xlnx_zynqmp_qspips;
-    dc->props = xilinx_zynqmp_qspips_properties;
+    device_class_set_props(dc, xilinx_zynqmp_qspips_properties);
     xsc->reg_ops = &xlnx_zynqmp_qspips_ops;
+    xsc->reg_size = XLNX_ZYNQMP_SPIPS_R_MAX * 4;
     xsc->rx_fifo_size = RXFF_A_Q;
     xsc->tx_fifo_size = TXFF_A_Q;
 }

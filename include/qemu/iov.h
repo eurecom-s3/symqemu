@@ -130,6 +130,29 @@ size_t iov_discard_front(struct iovec **iov, unsigned int *iov_cnt,
 size_t iov_discard_back(struct iovec *iov, unsigned int *iov_cnt,
                         size_t bytes);
 
+/* Information needed to undo an iov_discard_*() operation */
+typedef struct {
+    struct iovec *modified_iov;
+    struct iovec orig;
+} IOVDiscardUndo;
+
+/*
+ * Undo an iov_discard_front_undoable() or iov_discard_back_undoable()
+ * operation. If multiple operations are made then each one needs a separate
+ * IOVDiscardUndo and iov_discard_undo() must be called in the reverse order
+ * that the operations were made.
+ */
+void iov_discard_undo(IOVDiscardUndo *undo);
+
+/*
+ * Undoable versions of iov_discard_front() and iov_discard_back(). Use
+ * iov_discard_undo() to reset to the state before the discard operations.
+ */
+size_t iov_discard_front_undoable(struct iovec **iov, unsigned int *iov_cnt,
+                                  size_t bytes, IOVDiscardUndo *undo);
+size_t iov_discard_back_undoable(struct iovec *iov, unsigned int *iov_cnt,
+                                 size_t bytes, IOVDiscardUndo *undo);
+
 typedef struct QEMUIOVector {
     struct iovec *iov;
     int niov;
@@ -199,13 +222,12 @@ static inline void *qemu_iovec_buf(QEMUIOVector *qiov)
 
 void qemu_iovec_init(QEMUIOVector *qiov, int alloc_hint);
 void qemu_iovec_init_external(QEMUIOVector *qiov, struct iovec *iov, int niov);
-void qemu_iovec_init_extended(
-        QEMUIOVector *qiov,
-        void *head_buf, size_t head_len,
-        QEMUIOVector *mid_qiov, size_t mid_offset, size_t mid_len,
-        void *tail_buf, size_t tail_len);
 void qemu_iovec_init_slice(QEMUIOVector *qiov, QEMUIOVector *source,
                            size_t offset, size_t len);
+struct iovec *qemu_iovec_slice(QEMUIOVector *qiov,
+                               size_t offset, size_t len,
+                               size_t *head, size_t *tail, int *niov);
+int qemu_iovec_subvec_niov(QEMUIOVector *qiov, size_t offset, size_t len);
 void qemu_iovec_add(QEMUIOVector *qiov, void *base, size_t len);
 void qemu_iovec_concat(QEMUIOVector *dst,
                        QEMUIOVector *src, size_t soffset, size_t sbytes);

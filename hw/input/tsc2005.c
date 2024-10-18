@@ -20,10 +20,12 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "hw/hw.h"
 #include "qemu/timer.h"
+#include "sysemu/reset.h"
 #include "ui/console.h"
 #include "hw/input/tsc2xxx.h"
+#include "hw/irq.h"
+#include "migration/vmstate.h"
 #include "trace.h"
 
 #define TSC_CUT_RESOLUTION(value, p)	((value) >> (16 - (p ? 12 : 10)))
@@ -155,14 +157,14 @@ static uint16_t tsc2005_read(TSC2005State *s, int reg)
         s->reset = true;
         return ret;
 
-    case 0x8:	/* AUX high treshold */
+    case 0x8:   /* AUX high threshold */
         return s->aux_thr[1];
-    case 0x9:	/* AUX low treshold */
+    case 0x9:   /* AUX low threshold */
         return s->aux_thr[0];
 
-    case 0xa:	/* TEMP high treshold */
+    case 0xa:   /* TEMP high threshold */
         return s->temp_thr[1];
-    case 0xb:	/* TEMP low treshold */
+    case 0xb:   /* TEMP low threshold */
         return s->temp_thr[0];
 
     case 0xc:	/* CFR0 */
@@ -184,17 +186,17 @@ static uint16_t tsc2005_read(TSC2005State *s, int reg)
 static void tsc2005_write(TSC2005State *s, int reg, uint16_t data)
 {
     switch (reg) {
-    case 0x8:	/* AUX high treshold */
+    case 0x8:   /* AUX high threshold */
         s->aux_thr[1] = data;
         break;
-    case 0x9:	/* AUX low treshold */
+    case 0x9:   /* AUX low threshold */
         s->aux_thr[0] = data;
         break;
 
-    case 0xa:	/* TEMP high treshold */
+    case 0xa:   /* TEMP high threshold */
         s->temp_thr[1] = data;
         break;
-    case 0xb:	/* TEMP low treshold */
+    case 0xb:   /* TEMP low threshold */
         s->temp_thr[0] = data;
         break;
 
@@ -452,7 +454,7 @@ static const VMStateDescription vmstate_tsc2005 = {
     .version_id = 2,
     .minimum_version_id = 2,
     .post_load = tsc2005_post_load,
-    .fields      = (VMStateField []) {
+    .fields = (const VMStateField []) {
         VMSTATE_BOOL(pressure, TSC2005State),
         VMSTATE_BOOL(irq, TSC2005State),
         VMSTATE_BOOL(command, TSC2005State),
@@ -487,8 +489,7 @@ void *tsc2005_init(qemu_irq pintdav)
 {
     TSC2005State *s;
 
-    s = (TSC2005State *)
-            g_malloc0(sizeof(TSC2005State));
+    s = g_new0(TSC2005State, 1);
     s->x = 400;
     s->y = 240;
     s->pressure = false;
@@ -522,7 +523,7 @@ void *tsc2005_init(qemu_irq pintdav)
  * from the touchscreen.  Assuming 12-bit precision was used during
  * tslib calibration.
  */
-void tsc2005_set_transform(void *opaque, MouseTransformInfo *info)
+void tsc2005_set_transform(void *opaque, const MouseTransformInfo *info)
 {
     TSC2005State *s = (TSC2005State *) opaque;
 

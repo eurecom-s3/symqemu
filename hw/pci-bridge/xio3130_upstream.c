@@ -24,6 +24,7 @@
 #include "hw/pci/msi.h"
 #include "hw/pci/pcie.h"
 #include "hw/pci/pcie_port.h"
+#include "migration/vmstate.h"
 #include "qemu/module.h"
 
 #define PCI_DEVICE_ID_TI_XIO3130U       0x8232  /* upstream port */
@@ -74,7 +75,7 @@ static void xio3130_upstream_realize(PCIDevice *d, Error **errp)
                                XIO3130_SSVID_SVID, XIO3130_SSVID_SSID,
                                errp);
     if (rc < 0) {
-        goto err_bridge;
+        goto err_msi;
     }
 
     rc = pcie_cap_init(d, XIO3130_EXP_OFFSET, PCI_EXP_TYPE_UPSTREAM,
@@ -114,7 +115,7 @@ static const VMStateDescription vmstate_xio3130_upstream = {
     .priority = MIG_PRI_PCI_BUS,
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_PCI_DEVICE(parent_obj.parent_obj, PCIEPort),
         VMSTATE_STRUCT(parent_obj.parent_obj.exp.aer_log, PCIEPort, 0,
                        vmstate_pcie_aer_log, PCIEAERLog),
@@ -127,7 +128,6 @@ static void xio3130_upstream_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
-    k->is_bridge = true;
     k->config_write = xio3130_upstream_write_config;
     k->realize = xio3130_upstream_realize;
     k->exit = xio3130_upstream_exitfn;

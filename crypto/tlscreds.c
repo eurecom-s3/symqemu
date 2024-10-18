@@ -20,6 +20,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qapi-types-crypto.h"
 #include "qemu/module.h"
 #include "tlscredspriv.h"
 #include "trace.h"
@@ -226,22 +227,18 @@ qcrypto_tls_creds_class_init(ObjectClass *oc, void *data)
 {
     object_class_property_add_bool(oc, "verify-peer",
                                    qcrypto_tls_creds_prop_get_verify,
-                                   qcrypto_tls_creds_prop_set_verify,
-                                   NULL);
+                                   qcrypto_tls_creds_prop_set_verify);
     object_class_property_add_str(oc, "dir",
                                   qcrypto_tls_creds_prop_get_dir,
-                                  qcrypto_tls_creds_prop_set_dir,
-                                  NULL);
+                                  qcrypto_tls_creds_prop_set_dir);
     object_class_property_add_enum(oc, "endpoint",
                                    "QCryptoTLSCredsEndpoint",
                                    &QCryptoTLSCredsEndpoint_lookup,
                                    qcrypto_tls_creds_prop_get_endpoint,
-                                   qcrypto_tls_creds_prop_set_endpoint,
-                                   NULL);
+                                   qcrypto_tls_creds_prop_set_endpoint);
     object_class_property_add_str(oc, "priority",
                                   qcrypto_tls_creds_prop_get_priority,
-                                  qcrypto_tls_creds_prop_set_priority,
-                                  NULL);
+                                  qcrypto_tls_creds_prop_set_priority);
 }
 
 
@@ -263,6 +260,17 @@ qcrypto_tls_creds_finalize(Object *obj)
     g_free(creds->priority);
 }
 
+bool qcrypto_tls_creds_check_endpoint(QCryptoTLSCreds *creds,
+                                      QCryptoTLSCredsEndpoint endpoint,
+                                      Error **errp)
+{
+    if (creds->endpoint != endpoint) {
+        error_setg(errp, "Expected TLS credentials for a %s endpoint",
+                   QCryptoTLSCredsEndpoint_str(endpoint));
+        return false;
+    }
+    return true;
+}
 
 static const TypeInfo qcrypto_tls_creds_info = {
     .parent = TYPE_OBJECT,

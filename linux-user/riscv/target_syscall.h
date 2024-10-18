@@ -45,14 +45,15 @@ struct target_pt_regs {
 
 #ifdef TARGET_RISCV32
 #define UNAME_MACHINE "riscv32"
+#define UNAME_MINIMUM_RELEASE "5.4.0"
 #else
 #define UNAME_MACHINE "riscv64"
-#endif
 #define UNAME_MINIMUM_RELEASE "4.15.0"
+#endif
 
-#define TARGET_MINSIGSTKSZ 2048
-#define TARGET_MLOCKALL_MCL_CURRENT 1
-#define TARGET_MLOCKALL_MCL_FUTURE  2
+#define TARGET_MCL_CURRENT 1
+#define TARGET_MCL_FUTURE  2
+#define TARGET_MCL_ONFAULT 4
 
 /* clone(flags, newsp, ptidptr, tls, ctidptr) for RISC-V */
 /* This comes from linux/kernel/fork.c, CONFIG_CLONE_BACKWARDS */

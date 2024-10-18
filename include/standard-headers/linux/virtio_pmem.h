@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
+/* SPDX-License-Identifier: (GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause */
 /*
  * Definitions for virtio-pmem devices.
  *
@@ -7,12 +7,19 @@
  * Author(s): Pankaj Gupta <pagupta@redhat.com>
  */
 
-#ifndef _UAPI_LINUX_VIRTIO_PMEM_H
-#define _UAPI_LINUX_VIRTIO_PMEM_H
+#ifndef _LINUX_VIRTIO_PMEM_H
+#define _LINUX_VIRTIO_PMEM_H
 
 #include "standard-headers/linux/types.h"
 #include "standard-headers/linux/virtio_ids.h"
 #include "standard-headers/linux/virtio_config.h"
+
+/* Feature bits */
+/* guest physical address range will be indicated as shared memory region 0 */
+#define VIRTIO_PMEM_F_SHMEM_REGION 0
+
+/* shmid of the shared memory region corresponding to the pmem */
+#define VIRTIO_PMEM_SHMEM_REGION_ID 0
 
 struct virtio_pmem_config {
 	uint64_t start;

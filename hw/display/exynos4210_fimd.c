@@ -23,11 +23,18 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/qdev-properties.h"
+#include "hw/hw.h"
+#include "hw/irq.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "ui/console.h"
 #include "ui/pixel_ops.h"
 #include "qemu/bswap.h"
 #include "qemu/module.h"
+#include "qemu/log.h"
+#include "qapi/error.h"
+#include "qom/object.h"
 
 /* Debug messages configuration */
 #define EXYNOS4210_FIMD_DEBUG              0
@@ -36,20 +43,15 @@
 #if EXYNOS4210_FIMD_DEBUG == 0
     #define DPRINT_L1(fmt, args...)       do { } while (0)
     #define DPRINT_L2(fmt, args...)       do { } while (0)
-    #define DPRINT_ERROR(fmt, args...)    do { } while (0)
 #elif EXYNOS4210_FIMD_DEBUG == 1
     #define DPRINT_L1(fmt, args...) \
         do {fprintf(stderr, "QEMU FIMD: "fmt, ## args); } while (0)
     #define DPRINT_L2(fmt, args...)       do { } while (0)
-    #define DPRINT_ERROR(fmt, args...)  \
-        do {fprintf(stderr, "QEMU FIMD ERROR: "fmt, ## args); } while (0)
 #else
     #define DPRINT_L1(fmt, args...) \
         do {fprintf(stderr, "QEMU FIMD: "fmt, ## args); } while (0)
     #define DPRINT_L2(fmt, args...) \
         do {fprintf(stderr, "QEMU FIMD: "fmt, ## args); } while (0)
-    #define DPRINT_ERROR(fmt, args...)  \
-        do {fprintf(stderr, "QEMU FIMD ERROR: "fmt, ## args); } while (0)
 #endif
 
 #if EXYNOS4210_FIMD_MODE_TRACE == 0
@@ -294,15 +296,15 @@ struct Exynos4210fimdWindow {
 };
 
 #define TYPE_EXYNOS4210_FIMD "exynos4210.fimd"
-#define EXYNOS4210_FIMD(obj) \
-    OBJECT_CHECK(Exynos4210fimdState, (obj), TYPE_EXYNOS4210_FIMD)
+OBJECT_DECLARE_SIMPLE_TYPE(Exynos4210fimdState, EXYNOS4210_FIMD)
 
-typedef struct {
+struct Exynos4210fimdState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
     QemuConsole *console;
     qemu_irq irq[3];
+    MemoryRegion *fbmem;
 
     uint32_t vidcon[4];     /* Video main control registers 0-3 */
     uint32_t vidtcon[4];    /* Video time control registers 0-3 */
@@ -326,7 +328,7 @@ typedef struct {
     uint8_t *ifb;           /* Internal frame buffer */
     bool invalidate;        /* Image needs to be redrawn */
     bool enabled;           /* Display controller is enabled */
-} Exynos4210fimdState;
+};
 
 /* Perform byte/halfword/word swap of data according to WINCON */
 static inline void fimd_swap_data(unsigned int swap_ctl, uint64_t *data)
@@ -1105,7 +1107,7 @@ static inline int fimd_get_buffer_id(Exynos4210fimdWindow *w)
     case FIMD_WINCON_BUF2_STAT:
         return 2;
     default:
-        DPRINT_ERROR("Non-existent buffer index\n");
+        qemu_log_mask(LOG_GUEST_ERROR, "FIMD: Non-existent buffer index\n");
         return 0;
     }
 }
@@ -1120,7 +1122,6 @@ static void exynos4210_fimd_invalidate(void *opaque)
  * VIDOSDA, VIDOSDB, VIDWADDx and SHADOWCON registers */
 static void fimd_update_memory_section(Exynos4210fimdState *s, unsigned win)
 {
-    SysBusDevice *sbd = SYS_BUS_DEVICE(s);
     Exynos4210fimdWindow *w = &s->window[win];
     hwaddr fb_start_addr, fb_mapped_len;
 
@@ -1148,8 +1149,7 @@ static void fimd_update_memory_section(Exynos4210fimdState *s, unsigned win)
         memory_region_unref(w->mem_section.mr);
     }
 
-    w->mem_section = memory_region_find(sysbus_address_space(sbd),
-                                        fb_start_addr, w->fb_len);
+    w->mem_section = memory_region_find(s->fbmem, fb_start_addr, w->fb_len);
     assert(w->mem_section.mr);
     assert(w->mem_section.offset_within_address_space == fb_start_addr);
     DPRINT_TRACE("Window %u framebuffer changed: address=0x%08x, len=0x%x\n",
@@ -1157,19 +1157,24 @@ static void fimd_update_memory_section(Exynos4210fimdState *s, unsigned win)
 
     if (int128_get64(w->mem_section.size) != w->fb_len ||
             !memory_region_is_ram(w->mem_section.mr)) {
-        DPRINT_ERROR("Failed to find window %u framebuffer region\n", win);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "FIMD: Failed to find window %u framebuffer region\n",
+                      win);
         goto error_return;
     }
 
-    w->host_fb_addr = cpu_physical_memory_map(fb_start_addr, &fb_mapped_len, 0);
+    w->host_fb_addr = cpu_physical_memory_map(fb_start_addr, &fb_mapped_len,
+                                              false);
     if (!w->host_fb_addr) {
-        DPRINT_ERROR("Failed to map window %u framebuffer\n", win);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "FIMD: Failed to map window %u framebuffer\n", win);
         goto error_return;
     }
 
     if (fb_mapped_len != w->fb_len) {
-        DPRINT_ERROR("Window %u mapped framebuffer length is less then "
-                "expected\n", win);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "FIMD: Window %u mapped framebuffer length is less than "
+                      "expected\n", win);
         cpu_physical_memory_unmap(w->host_fb_addr, fb_mapped_len, 0, 0);
         goto error_return;
     }
@@ -1271,12 +1276,14 @@ static void exynos4210_fimd_update(void *opaque)
     bool blend = false;
     uint8_t *host_fb_addr;
     bool is_dirty = false;
-    const int global_width = (s->vidtcon[2] & FIMD_VIDTCON2_SIZE_MASK) + 1;
+    int global_width;
 
     if (!s || !s->console || !s->enabled ||
         surface_bits_per_pixel(qemu_console_surface(s->console)) == 0) {
         return;
     }
+
+    global_width = (s->vidtcon[2] & FIMD_VIDTCON2_SIZE_MASK) + 1;
     exynos4210_update_resolution(s);
     surface = qemu_console_surface(s->console);
 
@@ -1307,7 +1314,6 @@ static void exynos4210_fimd_update(void *opaque)
                 }
                 host_fb_addr += inc_size;
                 fb_line_addr += inc_size;
-                is_dirty = false;
             }
             g_free(snap);
             blend = true;
@@ -1487,7 +1493,9 @@ static void exynos4210_fimd_write(void *opaque, hwaddr offset,
             break;
         case 3:
             if (w != 1 && w != 2) {
-                DPRINT_ERROR("Bad write offset 0x%08x\n", offset);
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "FIMD: Bad write offset 0x%08"HWADDR_PRIx"\n",
+                              offset);
                 return;
             }
             s->window[w].osdsize = val;
@@ -1621,7 +1629,9 @@ static void exynos4210_fimd_write(void *opaque, hwaddr offset,
         break;
     case FIMD_VIDW0ADD0_B2 ... FIMD_VIDW4ADD0_B2:
         if (offset & 0x0004) {
-            DPRINT_ERROR("bad write offset 0x%08x\n", offset);
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "FIMD: bad write offset 0x%08"HWADDR_PRIx"\n",
+                          offset);
             break;
         }
         w = (offset - FIMD_VIDW0ADD0_B2) >> 3;
@@ -1635,14 +1645,18 @@ static void exynos4210_fimd_write(void *opaque, hwaddr offset,
         break;
     case FIMD_SHD_ADD0_START ... FIMD_SHD_ADD0_END:
         if (offset & 0x0004) {
-            DPRINT_ERROR("bad write offset 0x%08x\n", offset);
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "FIMD: bad write offset 0x%08"HWADDR_PRIx"\n",
+                          offset);
             break;
         }
         s->window[(offset - FIMD_SHD_ADD0_START) >> 3].shadow_buf_start = val;
         break;
     case FIMD_SHD_ADD1_START ... FIMD_SHD_ADD1_END:
         if (offset & 0x0004) {
-            DPRINT_ERROR("bad write offset 0x%08x\n", offset);
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "FIMD: bad write offset 0x%08"HWADDR_PRIx"\n",
+                          offset);
             break;
         }
         s->window[(offset - FIMD_SHD_ADD1_START) >> 3].shadow_buf_end = val;
@@ -1662,7 +1676,8 @@ static void exynos4210_fimd_write(void *opaque, hwaddr offset,
         s->window[w].palette[i] = val;
         break;
     default:
-        DPRINT_ERROR("bad write offset 0x%08x\n", offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "FIMD: bad write offset 0x%08"HWADDR_PRIx"\n", offset);
         break;
     }
 }
@@ -1712,7 +1727,9 @@ static uint64_t exynos4210_fimd_read(void *opaque, hwaddr offset,
             break;
         case 3:
             if (w != 1 && w != 2) {
-                DPRINT_ERROR("bad read offset 0x%08x\n", offset);
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "FIMD: bad read offset 0x%08"HWADDR_PRIx"\n",
+                              offset);
                 return 0xBAADBAAD;
             }
             ret = s->window[w].osdsize;
@@ -1806,7 +1823,8 @@ static uint64_t exynos4210_fimd_read(void *opaque, hwaddr offset,
         return s->window[w].palette[i];
     }
 
-    DPRINT_ERROR("bad read offset 0x%08x\n", offset);
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "FIMD: bad read offset 0x%08"HWADDR_PRIx"\n", offset);
     return 0xBAADBAAD;
 }
 
@@ -1848,7 +1866,7 @@ static const VMStateDescription exynos4210_fimd_window_vmstate = {
     .name = "exynos4210.fimd_window",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(wincon, Exynos4210fimdWindow),
         VMSTATE_UINT32_ARRAY(buf_start, Exynos4210fimdWindow, 3),
         VMSTATE_UINT32_ARRAY(buf_end, Exynos4210fimdWindow, 3),
@@ -1878,7 +1896,7 @@ static const VMStateDescription exynos4210_fimd_vmstate = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = exynos4210_fimd_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(vidcon, Exynos4210fimdState, 4),
         VMSTATE_UINT32_ARRAY(vidtcon, Exynos4210fimdState, 4),
         VMSTATE_UINT32(shadowcon, Exynos4210fimdState),
@@ -1907,6 +1925,12 @@ static const GraphicHwOps exynos4210_fimd_ops = {
     .gfx_update  = exynos4210_fimd_update,
 };
 
+static Property exynos4210_fimd_properties[] = {
+    DEFINE_PROP_LINK("framebuffer-memory", Exynos4210fimdState, fbmem,
+                     TYPE_MEMORY_REGION, MemoryRegion *),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void exynos4210_fimd_init(Object *obj)
 {
     Exynos4210fimdState *s = EXYNOS4210_FIMD(obj);
@@ -1927,6 +1951,11 @@ static void exynos4210_fimd_realize(DeviceState *dev, Error **errp)
 {
     Exynos4210fimdState *s = EXYNOS4210_FIMD(dev);
 
+    if (!s->fbmem) {
+        error_setg(errp, "'framebuffer-memory' property was not set");
+        return;
+    }
+
     s->console = graphic_console_init(dev, 0, &exynos4210_fimd_ops, s);
 }
 
@@ -1937,6 +1966,7 @@ static void exynos4210_fimd_class_init(ObjectClass *klass, void *data)
     dc->vmsd = &exynos4210_fimd_vmstate;
     dc->reset = exynos4210_fimd_reset;
     dc->realize = exynos4210_fimd_realize;
+    device_class_set_props(dc, exynos4210_fimd_properties);
 }
 
 static const TypeInfo exynos4210_fimd_info = {

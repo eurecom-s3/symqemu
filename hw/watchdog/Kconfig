@@ -14,3 +14,13 @@ config WDT_IB700
 
 config WDT_DIAG288
     bool
+
+config WDT_IMX2
+    bool
+
+config WDT_SBSA
+    bool
+
+config ALLWINNER_WDT
+    bool
+    select PTIMER

@@ -29,7 +29,7 @@ status=1	# failure is the default!
 _cleanup()
 {
     _cleanup_test_img
-    rm -f $TEST_IMG.snap
+    _rm_test_img "$TEST_IMG.snap"
 }
 trap "_cleanup; exit \$status" 0 1 2 3 15
 
@@ -67,7 +67,7 @@ size=128M
 
 TEST_IMG="$TEST_IMG.base" _make_test_img $size
 TEST_IMG="$TEST_IMG.snap" _make_test_img $size
-_make_test_img -b "$TEST_IMG.base" $size
+_make_test_img -b "$TEST_IMG.base" $size -F $IMGFMT
 
 echo
 echo === Simple test for all cache modes ===
@@ -349,6 +349,35 @@ info block backing
 info block backing-file"
 
 echo "$hmp_cmds" | run_qemu -drive "$files","$ids" | grep "Cache"
+
+echo
+echo "--- Alignment after changing O_DIRECT ---"
+echo
+
+# Directly test the protocol level: Can unaligned requests succeed even if
+# O_DIRECT was only enabled through a reopen and vice versa?
+
+# Ensure image size is a multiple of the sector size (required for O_DIRECT)
+$QEMU_IMG create -f file "$TEST_IMG" 1M | _filter_img_create
+
+# And write some data (not strictly necessary, but it feels better to actually
+# have something to be read)
+$QEMU_IO -f file -c 'write 0 4096' "$TEST_IMG" | _filter_qemu_io
+
+$QEMU_IO --cache=writeback -f file $TEST_IMG <<EOF | _filter_qemu_io
+read 42 42
+reopen -o cache.direct=on
+read 42 42
+reopen -o cache.direct=off
+read 42 42
+EOF
+$QEMU_IO --cache=none -f file $TEST_IMG <<EOF | _filter_qemu_io
+read 42 42
+reopen -o cache.direct=off
+read 42 42
+reopen -o cache.direct=on
+read 42 42
+EOF
 
 # success, all done
 echo "*** done"

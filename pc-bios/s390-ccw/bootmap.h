@@ -45,9 +45,23 @@ typedef struct EckdBlockPtr {
                     * it's 0 for TablePtr, ScriptPtr, and SectionPtr */
 } __attribute__ ((packed)) EckdBlockPtr;
 
-typedef struct ExtEckdBlockPtr {
+typedef struct LdEckdCHS {
+    uint32_t cylinder;
+    uint8_t head;
+    uint8_t sector;
+} __attribute__ ((packed)) LdEckdCHS;
+
+typedef struct LdEckdBlockPtr {
+    LdEckdCHS chs; /* cylinder/head/sector is an address of the block */
+    uint8_t reserved[4];
+    uint16_t count;
+    uint32_t pad;
+} __attribute__ ((packed)) LdEckdBlockPtr;
+
+/* bptr is used for CCW type IPL, while ldptr is for list-directed IPL */
+typedef union ExtEckdBlockPtr {
     EckdBlockPtr bptr;
-    uint8_t reserved[8];
+    LdEckdBlockPtr ldptr;
 } __attribute__ ((packed)) ExtEckdBlockPtr;
 
 typedef union BootMapPointer {
@@ -57,6 +71,15 @@ typedef union BootMapPointer {
     ExtEckdBlockPtr xeckd;
 } __attribute__ ((packed)) BootMapPointer;
 
+typedef struct BootRecord {
+    uint8_t magic[4];
+    uint32_t version;
+    uint64_t res1;
+    BootMapPointer pgt;
+    uint8_t reserved[510 - 32];
+    uint16_t os_id;
+} __attribute__ ((packed)) BootRecord;
+
 /* aka Program Table */
 typedef struct BootMapTable {
     uint8_t magic[4];
@@ -64,11 +87,16 @@ typedef struct BootMapTable {
     BootMapPointer entry[];
 } __attribute__ ((packed)) BootMapTable;
 
+typedef union ComponentEntryData {
+    uint64_t load_psw;
+    uint64_t load_addr;
+} ComponentEntryData;
+
 typedef struct ComponentEntry {
     ScsiBlockPtr data;
     uint8_t pad[7];
     uint8_t component_type;
-    uint64_t load_address;
+    ComponentEntryData compdat;
 } __attribute((packed)) ComponentEntry;
 
 typedef struct ComponentHeader {
@@ -136,7 +164,7 @@ typedef struct BootMapScriptHeader {
 
 typedef struct BootMapScript {
     BootMapScriptHeader header;
-    BootMapScriptEntry  entry[0];
+    BootMapScriptEntry  entry[];
 } __attribute__ ((packed)) BootMapScript;
 
 /*
@@ -287,7 +315,8 @@ typedef struct IplVolumeLabel {
         struct {
             unsigned char key[4]; /* == "VOL1" */
             unsigned char volser[6];
-            unsigned char reserved[6];
+            unsigned char reserved[64];
+            EckdCHS br; /* Location of Boot Record for list-directed IPL */
         } f;
     };
 } __attribute__((packed)) IplVolumeLabel;

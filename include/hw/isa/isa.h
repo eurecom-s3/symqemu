@@ -5,41 +5,22 @@
 
 #include "exec/memory.h"
 #include "exec/ioport.h"
-#include "hw/qdev.h"
+#include "hw/qdev-core.h"
+#include "qom/object.h"
 
 #define ISA_NUM_IRQS 16
 
 #define TYPE_ISA_DEVICE "isa-device"
-#define ISA_DEVICE(obj) \
-     OBJECT_CHECK(ISADevice, (obj), TYPE_ISA_DEVICE)
-#define ISA_DEVICE_CLASS(klass) \
-     OBJECT_CLASS_CHECK(ISADeviceClass, (klass), TYPE_ISA_DEVICE)
-#define ISA_DEVICE_GET_CLASS(obj) \
-     OBJECT_GET_CLASS(ISADeviceClass, (obj), TYPE_ISA_DEVICE)
+OBJECT_DECLARE_SIMPLE_TYPE(ISADevice, ISA_DEVICE)
 
 #define TYPE_ISA_BUS "ISA"
-#define ISA_BUS(obj) OBJECT_CHECK(ISABus, (obj), TYPE_ISA_BUS)
-
-#define TYPE_APPLE_SMC "isa-applesmc"
-#define APPLESMC_MAX_DATA_LENGTH       32
-#define APPLESMC_PROP_IO_BASE "iobase"
-
-static inline uint16_t applesmc_port(void)
-{
-    Object *obj = object_resolve_path_type("", TYPE_APPLE_SMC, NULL);
-
-    if (obj) {
-        return object_property_get_uint(obj, APPLESMC_PROP_IO_BASE, NULL);
-    }
-    return 0;
-}
+OBJECT_DECLARE_SIMPLE_TYPE(ISABus, ISA_BUS)
 
 #define TYPE_ISADMA "isa-dma"
 
-#define ISADMA_CLASS(klass) \
-    OBJECT_CLASS_CHECK(IsaDmaClass, (klass), TYPE_ISADMA)
-#define ISADMA_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(IsaDmaClass, (obj), TYPE_ISADMA)
+typedef struct IsaDmaClass IsaDmaClass;
+DECLARE_CLASS_CHECKERS(IsaDmaClass, ISADMA,
+                       TYPE_ISADMA)
 #define ISADMA(obj) \
     INTERFACE_CHECK(IsaDma, (obj), TYPE_ISADMA)
 
@@ -53,10 +34,9 @@ typedef enum {
 typedef int (*IsaDmaTransferHandler)(void *opaque, int nchan, int pos,
                                      int size);
 
-typedef struct IsaDmaClass {
+struct IsaDmaClass {
     InterfaceClass parent;
 
-    IsaDmaTransferMode (*get_transfer_mode)(IsaDma *obj, int nchan);
     bool (*has_autoinitialization)(IsaDma *obj, int nchan);
     int (*read_memory)(IsaDma *obj, int nchan, void *buf, int pos, int len);
     int (*write_memory)(IsaDma *obj, int nchan, void *buf, int pos, int len);
@@ -66,11 +46,7 @@ typedef struct IsaDmaClass {
     void (*register_channel)(IsaDma *obj, int nchan,
                              IsaDmaTransferHandler transfer_handler,
                              void *opaque);
-} IsaDmaClass;
-
-typedef struct ISADeviceClass {
-    DeviceClass parent_class;
-} ISADeviceClass;
+};
 
 struct ISABus {
     /*< private >*/
@@ -79,7 +55,7 @@ struct ISABus {
 
     MemoryRegion *address_space;
     MemoryRegion *address_space_io;
-    qemu_irq *irqs;
+    qemu_irq *irqs_in;
     IsaDma *dma[2];
 };
 
@@ -88,26 +64,34 @@ struct ISADevice {
     DeviceState parent_obj;
     /*< public >*/
 
-    uint32_t isairq[2];
-    int nirqs;
     int ioport_id;
 };
 
 ISABus *isa_bus_new(DeviceState *dev, MemoryRegion *address_space,
                     MemoryRegion *address_space_io, Error **errp);
-void isa_bus_irqs(ISABus *bus, qemu_irq *irqs);
-qemu_irq isa_get_irq(ISADevice *dev, int isairq);
-void isa_init_irq(ISADevice *dev, qemu_irq *p, int isairq);
-void isa_connect_gpio_out(ISADevice *isadev, int gpioirq, int isairq);
+void isa_bus_register_input_irqs(ISABus *bus, qemu_irq *irqs_in);
 void isa_bus_dma(ISABus *bus, IsaDma *dma8, IsaDma *dma16);
-IsaDma *isa_get_dma(ISABus *bus, int nchan);
-MemoryRegion *isa_address_space(ISADevice *dev);
-MemoryRegion *isa_address_space_io(ISADevice *dev);
-ISADevice *isa_create(ISABus *bus, const char *name);
-ISADevice *isa_try_create(ISABus *bus, const char *name);
+IsaDma *isa_bus_get_dma(ISABus *bus, int nchan);
+/**
+ * isa_bus_get_irq: Return input IRQ on ISA bus.
+ * @bus: the #ISABus to plug ISA devices on.
+ * @irqnum: the ISA IRQ number.
+ *
+ * Return IRQ @irqnum from the PIC associated on ISA @bus.
+ */
+qemu_irq isa_bus_get_irq(ISABus *bus, unsigned irqnum);
+ISADevice *isa_new(const char *name);
+ISADevice *isa_try_new(const char *name);
+bool isa_realize_and_unref(ISADevice *dev, ISABus *bus, Error **errp);
 ISADevice *isa_create_simple(ISABus *bus, const char *name);
 
 ISADevice *isa_vga_init(ISABus *bus);
+
+qemu_irq isa_get_irq(ISADevice *dev, unsigned isairq);
+void isa_connect_gpio_out(ISADevice *isadev, int gpioirq, unsigned isairq);
+MemoryRegion *isa_address_space(ISADevice *dev);
+MemoryRegion *isa_address_space_io(ISADevice *dev);
+ISABus *isa_bus_from_device(ISADevice *dev);
 
 /**
  * isa_register_ioport: Install an I/O port region on the ISA bus.
@@ -135,16 +119,14 @@ void isa_register_ioport(ISADevice *dev, MemoryRegion *io, uint16_t start);
  * @portio: the ports, sorted by offset.
  * @opaque: passed into the portio callbacks.
  * @name: passed into memory_region_init_io.
+ *
+ * Returns: 0 on success, negative error code otherwise (e.g. if the
+ *          ISA bus is not available)
  */
-void isa_register_portio_list(ISADevice *dev,
-                              PortioList *piolist,
-                              uint16_t start,
-                              const MemoryRegionPortio *portio,
-                              void *opaque, const char *name);
-
-static inline ISABus *isa_bus_from_device(ISADevice *d)
-{
-    return ISA_BUS(qdev_get_parent_bus(DEVICE(d)));
-}
+int isa_register_portio_list(ISADevice *dev,
+                             PortioList *piolist,
+                             uint16_t start,
+                             const MemoryRegionPortio *portio,
+                             void *opaque, const char *name);
 
 #endif

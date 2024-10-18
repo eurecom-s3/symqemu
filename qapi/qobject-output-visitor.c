@@ -13,6 +13,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/compat-policy.h"
 #include "qapi/qobject-output-visitor.h"
 #include "qapi/visitor-impl.h"
 #include "qemu/queue.h"
@@ -31,6 +32,7 @@ typedef struct QStackEntry {
 
 struct QObjectOutputVisitor {
     Visitor visitor;
+
     QSLIST_HEAD(, QStackEntry) stack; /* Stack of unfinished containers */
     QObject *root; /* Root of the output visit */
     QObject **result; /* User's storage location for result */
@@ -103,7 +105,7 @@ static void qobject_output_add_obj(QObjectOutputVisitor *qov, const char *name,
     }
 }
 
-static void qobject_output_start_struct(Visitor *v, const char *name,
+static bool qobject_output_start_struct(Visitor *v, const char *name,
                                         void **obj, size_t unused, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
@@ -111,6 +113,7 @@ static void qobject_output_start_struct(Visitor *v, const char *name,
 
     qobject_output_add(qov, name, dict);
     qobject_output_push(qov, dict, obj);
+    return true;
 }
 
 static void qobject_output_end_struct(Visitor *v, void **obj)
@@ -120,7 +123,7 @@ static void qobject_output_end_struct(Visitor *v, void **obj)
     assert(qobject_type(value) == QTYPE_QDICT);
 }
 
-static void qobject_output_start_list(Visitor *v, const char *name,
+static bool qobject_output_start_list(Visitor *v, const char *name,
                                       GenericList **listp, size_t size,
                                       Error **errp)
 {
@@ -129,6 +132,7 @@ static void qobject_output_start_list(Visitor *v, const char *name,
 
     qobject_output_add(qov, name, list);
     qobject_output_push(qov, list, listp);
+    return true;
 }
 
 static GenericList *qobject_output_next_list(Visitor *v, GenericList *tail,
@@ -144,28 +148,31 @@ static void qobject_output_end_list(Visitor *v, void **obj)
     assert(qobject_type(value) == QTYPE_QLIST);
 }
 
-static void qobject_output_type_int64(Visitor *v, const char *name,
+static bool qobject_output_type_int64(Visitor *v, const char *name,
                                       int64_t *obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qnum_from_int(*obj));
+    return true;
 }
 
-static void qobject_output_type_uint64(Visitor *v, const char *name,
+static bool qobject_output_type_uint64(Visitor *v, const char *name,
                                        uint64_t *obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qnum_from_uint(*obj));
+    return true;
 }
 
-static void qobject_output_type_bool(Visitor *v, const char *name, bool *obj,
+static bool qobject_output_type_bool(Visitor *v, const char *name, bool *obj,
                                      Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qbool_from_bool(*obj));
+    return true;
 }
 
-static void qobject_output_type_str(Visitor *v, const char *name, char **obj,
+static bool qobject_output_type_str(Visitor *v, const char *name, char **obj,
                                     Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
@@ -174,28 +181,43 @@ static void qobject_output_type_str(Visitor *v, const char *name, char **obj,
     } else {
         qobject_output_add(qov, name, qstring_from_str(""));
     }
+    return true;
 }
 
-static void qobject_output_type_number(Visitor *v, const char *name,
+static bool qobject_output_type_number(Visitor *v, const char *name,
                                        double *obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qnum_from_double(*obj));
+    return true;
 }
 
-static void qobject_output_type_any(Visitor *v, const char *name,
+static bool qobject_output_type_any(Visitor *v, const char *name,
                                     QObject **obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
 
     qobject_output_add_obj(qov, name, qobject_ref(*obj));
+    return true;
 }
 
-static void qobject_output_type_null(Visitor *v, const char *name,
+static bool qobject_output_type_null(Visitor *v, const char *name,
                                      QNull **obj, Error **errp)
 {
     QObjectOutputVisitor *qov = to_qov(v);
     qobject_output_add(qov, name, qnull());
+    return true;
+}
+
+static bool qobject_output_policy_skip(Visitor *v, const char *name,
+                                       unsigned special_features)
+{
+    CompatPolicy *pol = &v->compat_policy;
+
+    return ((special_features & 1u << QAPI_DEPRECATED)
+            && pol->deprecated_output == COMPAT_POLICY_OUTPUT_HIDE)
+        || ((special_features & 1u << QAPI_UNSTABLE)
+            && pol->unstable_output == COMPAT_POLICY_OUTPUT_HIDE);
 }
 
 /* Finish building, and return the root object.
@@ -247,6 +269,7 @@ Visitor *qobject_output_visitor_new(QObject **result)
     v->visitor.type_number = qobject_output_type_number;
     v->visitor.type_any = qobject_output_type_any;
     v->visitor.type_null = qobject_output_type_null;
+    v->visitor.policy_skip = qobject_output_policy_skip;
     v->visitor.complete = qobject_output_complete;
     v->visitor.free = qobject_output_free;
 

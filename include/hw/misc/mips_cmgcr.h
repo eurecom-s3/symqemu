@@ -10,8 +10,11 @@
 #ifndef MIPS_CMGCR_H
 #define MIPS_CMGCR_H
 
+#include "hw/sysbus.h"
+#include "qom/object.h"
+
 #define TYPE_MIPS_GCR "mips-gcr"
-#define MIPS_GCR(obj) OBJECT_CHECK(MIPSGCRState, (obj), TYPE_MIPS_GCR)
+OBJECT_DECLARE_SIMPLE_TYPE(MIPSGCRState, MIPS_GCR)
 
 #define GCR_BASE_ADDR           0x1fbf8000ULL
 #define GCR_ADDRSPACE_SZ        0x8000
@@ -68,12 +71,11 @@ struct MIPSGCRVPState {
     uint64_t reset_base;
 };
 
-typedef struct MIPSGCRState MIPSGCRState;
 struct MIPSGCRState {
     SysBusDevice parent_obj;
 
     int32_t gcr_rev;
-    int32_t num_vps;
+    uint32_t num_vps;
     hwaddr gcr_base;
     MemoryRegion iomem;
     MemoryRegion *cpc_mr;

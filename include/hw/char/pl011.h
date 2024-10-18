@@ -17,14 +17,18 @@
 
 #include "hw/sysbus.h"
 #include "chardev/char-fe.h"
+#include "qom/object.h"
 
 #define TYPE_PL011 "pl011"
-#define PL011(obj) OBJECT_CHECK(PL011State, (obj), TYPE_PL011)
+OBJECT_DECLARE_SIMPLE_TYPE(PL011State, PL011)
 
 /* This shares the same struct (and cast macro) as the base pl011 device */
 #define TYPE_PL011_LUMINARY "pl011_luminary"
 
-typedef struct PL011State {
+/* Depth of UART FIFO in bytes, when FIFO mode is enabled (else depth == 1) */
+#define PL011_FIFO_DEPTH 16
+
+struct PL011State {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -36,7 +40,7 @@ typedef struct PL011State {
     uint32_t dmacr;
     uint32_t int_enabled;
     uint32_t int_level;
-    uint32_t read_fifo[16];
+    uint32_t read_fifo[PL011_FIFO_DEPTH];
     uint32_t ilpr;
     uint32_t ibrd;
     uint32_t fbrd;
@@ -46,41 +50,11 @@ typedef struct PL011State {
     int read_trigger;
     CharBackend chr;
     qemu_irq irq[6];
+    Clock *clk;
+    bool migrate_clk;
     const unsigned char *id;
-} PL011State;
+};
 
-static inline DeviceState *pl011_create(hwaddr addr,
-                                        qemu_irq irq,
-                                        Chardev *chr)
-{
-    DeviceState *dev;
-    SysBusDevice *s;
-
-    dev = qdev_create(NULL, "pl011");
-    s = SYS_BUS_DEVICE(dev);
-    qdev_prop_set_chr(dev, "chardev", chr);
-    qdev_init_nofail(dev);
-    sysbus_mmio_map(s, 0, addr);
-    sysbus_connect_irq(s, 0, irq);
-
-    return dev;
-}
-
-static inline DeviceState *pl011_luminary_create(hwaddr addr,
-                                                 qemu_irq irq,
-                                                 Chardev *chr)
-{
-    DeviceState *dev;
-    SysBusDevice *s;
-
-    dev = qdev_create(NULL, "pl011_luminary");
-    s = SYS_BUS_DEVICE(dev);
-    qdev_prop_set_chr(dev, "chardev", chr);
-    qdev_init_nofail(dev);
-    sysbus_mmio_map(s, 0, addr);
-    sysbus_connect_irq(s, 0, irq);
-
-    return dev;
-}
+DeviceState *pl011_create(hwaddr addr, qemu_irq irq, Chardev *chr);
 
 #endif

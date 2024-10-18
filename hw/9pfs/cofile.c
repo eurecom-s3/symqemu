@@ -11,10 +11,15 @@
  *
  */
 
+/*
+ * Not so fast! You might want to read the 9p developer docs first:
+ * https://wiki.qemu.org/Documentation/9p
+ */
+
 #include "qemu/osdep.h"
 #include "fsdev/qemu-fsdev.h"
 #include "qemu/thread.h"
-#include "qemu/coroutine.h"
+#include "qemu/main-loop.h"
 #include "coth.h"
 
 int coroutine_fn v9fs_co_st_gen(V9fsPDU *pdu, V9fsPath *path, mode_t st_mode,
@@ -247,7 +252,7 @@ int coroutine_fn v9fs_co_pwritev(V9fsPDU *pdu, V9fsFidState *fidp,
     if (v9fs_request_cancelled(pdu)) {
         return -EINTR;
     }
-    fsdev_co_throttle_request(s->ctx.fst, true, iov, iovcnt);
+    fsdev_co_throttle_request(s->ctx.fst, THROTTLE_WRITE, iov, iovcnt);
     v9fs_co_run_in_worker(
         {
             err = s->ops->pwritev(&s->ctx, &fidp->fs, iov, iovcnt, offset);
@@ -267,7 +272,7 @@ int coroutine_fn v9fs_co_preadv(V9fsPDU *pdu, V9fsFidState *fidp,
     if (v9fs_request_cancelled(pdu)) {
         return -EINTR;
     }
-    fsdev_co_throttle_request(s->ctx.fst, false, iov, iovcnt);
+    fsdev_co_throttle_request(s->ctx.fst, THROTTLE_READ, iov, iovcnt);
     v9fs_co_run_in_worker(
         {
             err = s->ops->preadv(&s->ctx, &fidp->fs, iov, iovcnt, offset);

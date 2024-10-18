@@ -1,5 +1,5 @@
 /*
- * QEMU Xtensa CPU
+ * QEMU Xtensa CPU QOM header (target agnostic)
  *
  * Copyright (c) 2012 SUSE LINUX Products GmbH
  * All rights reserved.
@@ -29,38 +29,13 @@
 #ifndef QEMU_XTENSA_CPU_QOM_H
 #define QEMU_XTENSA_CPU_QOM_H
 
-#include "qom/cpu.h"
+#include "hw/core/cpu.h"
 
 #define TYPE_XTENSA_CPU "xtensa-cpu"
 
-#define XTENSA_CPU_CLASS(class) \
-    OBJECT_CLASS_CHECK(XtensaCPUClass, (class), TYPE_XTENSA_CPU)
-#define XTENSA_CPU(obj) \
-    OBJECT_CHECK(XtensaCPU, (obj), TYPE_XTENSA_CPU)
-#define XTENSA_CPU_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(XtensaCPUClass, (obj), TYPE_XTENSA_CPU)
+OBJECT_DECLARE_CPU_TYPE(XtensaCPU, XtensaCPUClass, XTENSA_CPU)
 
-typedef struct XtensaConfig XtensaConfig;
-
-/**
- * XtensaCPUClass:
- * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
- * @config: The CPU core configuration.
- *
- * An Xtensa CPU model.
- */
-typedef struct XtensaCPUClass {
-    /*< private >*/
-    CPUClass parent_class;
-    /*< public >*/
-
-    DeviceRealize parent_realize;
-    void (*parent_reset)(CPUState *cpu);
-
-    const XtensaConfig *config;
-} XtensaCPUClass;
-
-typedef struct XtensaCPU XtensaCPU;
+#define XTENSA_CPU_TYPE_SUFFIX "-" TYPE_XTENSA_CPU
+#define XTENSA_CPU_TYPE_NAME(model) model XTENSA_CPU_TYPE_SUFFIX
 
 #endif

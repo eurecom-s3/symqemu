@@ -4,9 +4,11 @@
 #include "qemu/range.h"
 #include "qemu/error-report.h"
 #include "hw/pci/shpc.h"
+#include "migration/qemu-file-types.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/msi.h"
+#include "trace.h"
 
 /* TODO: model power only and disabled slot states. */
 /* TODO: handle SERR and wakeups */
@@ -122,10 +124,41 @@
 #define SHPC_PCI_TO_IDX(pci_slot) ((pci_slot) - 1)
 #define SHPC_IDX_TO_PHYSICAL(slot) ((slot) + 1)
 
-static uint16_t shpc_get_status(SHPCDevice *shpc, int slot, uint16_t msk)
+static const char *shpc_led_state_to_str(uint8_t value)
+{
+    switch (value) {
+    case SHPC_LED_ON:
+        return "on";
+    case SHPC_LED_BLINK:
+        return "blink";
+    case SHPC_LED_OFF:
+        return "off";
+    default:
+        return "invalid";
+    }
+}
+
+static const char *shpc_slot_state_to_str(uint8_t value)
+{
+    switch (value) {
+    case SHPC_STATE_PWRONLY:
+        return "power-only";
+    case SHPC_STATE_ENABLED:
+        return "enabled";
+    case SHPC_STATE_DISABLED:
+        return "disabled";
+    default:
+        return "invalid";
+    }
+}
+
+static uint8_t shpc_get_status(SHPCDevice *shpc, int slot, uint16_t msk)
 {
     uint8_t *status = shpc->config + SHPC_SLOT_STATUS(slot);
-    return (pci_get_word(status) & msk) >> ctz32(msk);
+    uint16_t result = (pci_get_word(status) & msk) >> ctz32(msk);
+
+    assert(result <= UINT8_MAX);
+    return result;
 }
 
 static void shpc_set_status(SHPCDevice *shpc,
@@ -222,6 +255,7 @@ void shpc_reset(PCIDevice *d)
                             SHPC_SLOT_STATUS_PRSNT_MASK);
             shpc_set_status(shpc, i, SHPC_LED_OFF, SHPC_SLOT_PWR_LED_MASK);
         }
+        shpc_set_status(shpc, i, SHPC_LED_OFF, SHPC_SLOT_ATTN_LED_MASK);
         shpc_set_status(shpc, i, 0, SHPC_SLOT_STATUS_66);
     }
     shpc_set_sec_bus_speed(shpc, SHPC_SEC_BUS_33);
@@ -253,61 +287,83 @@ static void shpc_free_devices_in_slot(SHPCDevice *shpc, int slot)
     }
 }
 
-static void shpc_slot_command(SHPCDevice *shpc, uint8_t target,
+static bool shpc_slot_is_off(uint8_t state, uint8_t power, uint8_t attn)
+{
+    return state == SHPC_STATE_DISABLED && power == SHPC_LED_OFF;
+}
+
+static void shpc_slot_command(PCIDevice *d, uint8_t target,
                               uint8_t state, uint8_t power, uint8_t attn)
 {
-    uint8_t current_state;
+    SHPCDevice *shpc = d->shpc;
     int slot = SHPC_LOGICAL_TO_IDX(target);
+    uint8_t old_state = shpc_get_status(shpc, slot, SHPC_SLOT_STATE_MASK);
+    uint8_t old_power = shpc_get_status(shpc, slot, SHPC_SLOT_PWR_LED_MASK);
+    uint8_t old_attn = shpc_get_status(shpc, slot, SHPC_SLOT_ATTN_LED_MASK);
+
     if (target < SHPC_CMD_TRGT_MIN || slot >= shpc->nslots) {
         shpc_invalid_command(shpc);
         return;
     }
-    current_state = shpc_get_status(shpc, slot, SHPC_SLOT_STATE_MASK);
-    if (current_state == SHPC_STATE_ENABLED && state == SHPC_STATE_PWRONLY) {
+
+    if (old_state == SHPC_STATE_ENABLED && state == SHPC_STATE_PWRONLY) {
         shpc_invalid_command(shpc);
         return;
     }
 
-    switch (power) {
-    case SHPC_LED_NO:
-        break;
-    default:
+    if (power == SHPC_LED_NO) {
+        power = old_power;
+    } else {
         /* TODO: send event to monitor */
         shpc_set_status(shpc, slot, power, SHPC_SLOT_PWR_LED_MASK);
     }
-    switch (attn) {
-    case SHPC_LED_NO:
-        break;
-    default:
+
+    if (attn == SHPC_LED_NO) {
+        attn = old_attn;
+    } else {
         /* TODO: send event to monitor */
         shpc_set_status(shpc, slot, attn, SHPC_SLOT_ATTN_LED_MASK);
     }
 
-    if ((current_state == SHPC_STATE_DISABLED && state == SHPC_STATE_PWRONLY) ||
-        (current_state == SHPC_STATE_DISABLED && state == SHPC_STATE_ENABLED)) {
+    if (state == SHPC_STATE_NO) {
+        state = old_state;
+    } else {
         shpc_set_status(shpc, slot, state, SHPC_SLOT_STATE_MASK);
-    } else if ((current_state == SHPC_STATE_ENABLED ||
-                current_state == SHPC_STATE_PWRONLY) &&
-               state == SHPC_STATE_DISABLED) {
-        shpc_set_status(shpc, slot, state, SHPC_SLOT_STATE_MASK);
-        power = shpc_get_status(shpc, slot, SHPC_SLOT_PWR_LED_MASK);
-        /* TODO: track what monitor requested. */
-        /* Look at LED to figure out whether it's ok to remove the device. */
-        if (power == SHPC_LED_OFF) {
-            shpc_free_devices_in_slot(shpc, slot);
-            shpc_set_status(shpc, slot, 1, SHPC_SLOT_STATUS_MRL_OPEN);
-            shpc_set_status(shpc, slot, SHPC_SLOT_STATUS_PRSNT_EMPTY,
-                            SHPC_SLOT_STATUS_PRSNT_MASK);
-            shpc->config[SHPC_SLOT_EVENT_LATCH(slot)] |=
-                SHPC_SLOT_EVENT_BUTTON |
-                SHPC_SLOT_EVENT_MRL |
-                SHPC_SLOT_EVENT_PRESENCE;
-        }
+    }
+
+    if (trace_event_get_state_backends(TRACE_SHPC_SLOT_COMMAND)) {
+        DeviceState *parent = DEVICE(d);
+        int pci_slot = SHPC_IDX_TO_PCI(slot);
+        DeviceState *child =
+            DEVICE(shpc->sec_bus->devices[PCI_DEVFN(pci_slot, 0)]);
+
+        trace_shpc_slot_command(
+            parent->canonical_path, pci_slot,
+            child ? child->canonical_path : "no-child",
+            shpc_led_state_to_str(old_power),
+            shpc_led_state_to_str(power),
+            shpc_led_state_to_str(old_attn),
+            shpc_led_state_to_str(attn),
+            shpc_slot_state_to_str(old_state),
+            shpc_slot_state_to_str(state));
+    }
+
+    if (!shpc_slot_is_off(old_state, old_power, old_attn) &&
+        shpc_slot_is_off(state, power, attn))
+    {
+        shpc_free_devices_in_slot(shpc, slot);
+        shpc_set_status(shpc, slot, 1, SHPC_SLOT_STATUS_MRL_OPEN);
+        shpc_set_status(shpc, slot, SHPC_SLOT_STATUS_PRSNT_EMPTY,
+                        SHPC_SLOT_STATUS_PRSNT_MASK);
+        shpc->config[SHPC_SLOT_EVENT_LATCH(slot)] |=
+            SHPC_SLOT_EVENT_MRL |
+            SHPC_SLOT_EVENT_PRESENCE;
     }
 }
 
-static void shpc_command(SHPCDevice *shpc)
+static void shpc_command(PCIDevice *d)
 {
+    SHPCDevice *shpc = d->shpc;
     uint8_t code = pci_get_byte(shpc->config + SHPC_CMD_CODE);
     uint8_t speed;
     uint8_t target;
@@ -328,7 +384,7 @@ static void shpc_command(SHPCDevice *shpc)
         state = (code & SHPC_SLOT_STATE_MASK) >> SHPC_SLOT_STATE_SHIFT;
         power = (code & SHPC_SLOT_PWR_LED_MASK) >> SHPC_SLOT_PWR_LED_SHIFT;
         attn = (code & SHPC_SLOT_ATTN_LED_MASK) >> SHPC_SLOT_ATTN_LED_SHIFT;
-        shpc_slot_command(shpc, target, state, power, attn);
+        shpc_slot_command(d, target, state, power, attn);
         break;
     case 0x40 ... 0x47:
         speed = code & SHPC_SEC_BUS_MASK;
@@ -346,10 +402,10 @@ static void shpc_command(SHPCDevice *shpc)
         }
         for (i = 0; i < shpc->nslots; ++i) {
             if (!(shpc_get_status(shpc, i, SHPC_SLOT_STATUS_MRL_OPEN))) {
-                shpc_slot_command(shpc, i + SHPC_CMD_TRGT_MIN,
+                shpc_slot_command(d, i + SHPC_CMD_TRGT_MIN,
                                   SHPC_STATE_PWRONLY, SHPC_LED_ON, SHPC_LED_NO);
             } else {
-                shpc_slot_command(shpc, i + SHPC_CMD_TRGT_MIN,
+                shpc_slot_command(d, i + SHPC_CMD_TRGT_MIN,
                                   SHPC_STATE_NO, SHPC_LED_OFF, SHPC_LED_NO);
             }
         }
@@ -367,10 +423,10 @@ static void shpc_command(SHPCDevice *shpc)
         }
         for (i = 0; i < shpc->nslots; ++i) {
             if (!(shpc_get_status(shpc, i, SHPC_SLOT_STATUS_MRL_OPEN))) {
-                shpc_slot_command(shpc, i + SHPC_CMD_TRGT_MIN,
+                shpc_slot_command(d, i + SHPC_CMD_TRGT_MIN,
                                   SHPC_STATE_ENABLED, SHPC_LED_ON, SHPC_LED_NO);
             } else {
-                shpc_slot_command(shpc, i + SHPC_CMD_TRGT_MIN,
+                shpc_slot_command(d, i + SHPC_CMD_TRGT_MIN,
                                   SHPC_STATE_NO, SHPC_LED_OFF, SHPC_LED_NO);
             }
         }
@@ -402,7 +458,7 @@ static void shpc_write(PCIDevice *d, unsigned addr, uint64_t val, int l)
         shpc->config[a] &= ~(val & w1cmask); /* W1C: Write 1 to Clear */
     }
     if (ranges_overlap(addr, l, SHPC_CMD_CODE, 2)) {
-        shpc_command(shpc);
+        shpc_command(d);
     }
     shpc_interrupt_update(d);
 }
@@ -456,7 +512,7 @@ static int shpc_cap_add_config(PCIDevice *d, Error **errp)
     pci_set_byte(config + SHPC_CAP_CxP, 0);
     pci_set_long(config + SHPC_CAP_DWORD_DATA, 0);
     d->shpc->cap = config_offset;
-    /* Make dword select and data writeable. */
+    /* Make dword select and data writable. */
     pci_set_byte(d->wmask + config_offset + SHPC_CAP_DWORD_SELECT, 0xff);
     pci_set_long(d->wmask + config_offset + SHPC_CAP_DWORD_DATA, 0xffffffff);
     return 0;
@@ -480,13 +536,15 @@ static const MemoryRegionOps shpc_mmio_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         /* SHPC ECN requires dword accesses, but the original 1.0 spec doesn't.
-         * It's easier to suppport all sizes than worry about it. */
+         * It's easier to support all sizes than worry about it.
+         */
         .min_access_size = 1,
         .max_access_size = 4,
     },
 };
-static void shpc_device_plug_common(PCIDevice *affected_dev, int *slot,
-                                    SHPCDevice *shpc, Error **errp)
+
+static bool shpc_device_get_slot(PCIDevice *affected_dev, int *slot,
+                                 SHPCDevice *shpc, Error **errp)
 {
     int pci_slot = PCI_SLOT(affected_dev->devfn);
     *slot = SHPC_PCI_TO_IDX(pci_slot);
@@ -496,21 +554,20 @@ static void shpc_device_plug_common(PCIDevice *affected_dev, int *slot,
                    "controller. Valid slots are between %d and %d.",
                    pci_slot, SHPC_IDX_TO_PCI(0),
                    SHPC_IDX_TO_PCI(shpc->nslots) - 1);
-        return;
+        return false;
     }
+
+    return true;
 }
 
 void shpc_device_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
                             Error **errp)
 {
-    Error *local_err = NULL;
     PCIDevice *pci_hotplug_dev = PCI_DEVICE(hotplug_dev);
     SHPCDevice *shpc = pci_hotplug_dev->shpc;
     int slot;
 
-    shpc_device_plug_common(PCI_DEVICE(dev), &slot, shpc, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!shpc_device_get_slot(PCI_DEVICE(dev), &slot, shpc, errp)) {
         return;
     }
 
@@ -546,28 +603,31 @@ void shpc_device_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
 void shpc_device_unplug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
                            Error **errp)
 {
-    object_property_set_bool(OBJECT(dev), false, "realized", NULL);
+    qdev_unrealize(dev);
 }
 
 void shpc_device_unplug_request_cb(HotplugHandler *hotplug_dev,
                                    DeviceState *dev, Error **errp)
 {
-    Error *local_err = NULL;
     PCIDevice *pci_hotplug_dev = PCI_DEVICE(hotplug_dev);
     SHPCDevice *shpc = pci_hotplug_dev->shpc;
     uint8_t state;
     uint8_t led;
     int slot;
 
-    shpc_device_plug_common(PCI_DEVICE(dev), &slot, shpc, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!shpc_device_get_slot(PCI_DEVICE(dev), &slot, shpc, errp)) {
         return;
     }
 
-    shpc->config[SHPC_SLOT_EVENT_LATCH(slot)] |= SHPC_SLOT_EVENT_BUTTON;
     state = shpc_get_status(shpc, slot, SHPC_SLOT_STATE_MASK);
     led = shpc_get_status(shpc, slot, SHPC_SLOT_PWR_LED_MASK);
+
+    if (led == SHPC_LED_BLINK) {
+        error_setg(errp, "Hot-unplug failed: "
+                   "guest is busy (power indicator blinking)");
+        return;
+    }
+
     if (state == SHPC_STATE_DISABLED && led == SHPC_LED_OFF) {
         shpc_free_devices_in_slot(shpc, slot);
         shpc_set_status(shpc, slot, 1, SHPC_SLOT_STATUS_MRL_OPEN);
@@ -576,6 +636,8 @@ void shpc_device_unplug_request_cb(HotplugHandler *hotplug_dev,
         shpc->config[SHPC_SLOT_EVENT_LATCH(slot)] |=
             SHPC_SLOT_EVENT_MRL |
             SHPC_SLOT_EVENT_PRESENCE;
+    } else {
+        shpc->config[SHPC_SLOT_EVENT_LATCH(slot)] |= SHPC_SLOT_EVENT_BUTTON;
     }
     shpc_set_status(shpc, slot, 0, SHPC_SLOT_STATUS_66);
     shpc_interrupt_update(pci_hotplug_dev);
@@ -599,7 +661,7 @@ int shpc_init(PCIDevice *d, PCIBus *sec_bus, MemoryRegion *bar,
     }
     if (nslots > SHPC_MAX_SLOTS ||
         SHPC_IDX_TO_PCI(nslots) > PCI_SLOT_MAX) {
-        /* TODO: report an error mesage that makes sense. */
+        /* TODO: report an error message that makes sense. */
         return -EINVAL;
     }
     shpc->nslots = nslots;
@@ -648,7 +710,7 @@ int shpc_init(PCIDevice *d, PCIBus *sec_bus, MemoryRegion *bar,
     shpc_cap_update_dword(d);
     memory_region_add_subregion(bar, offset, &shpc->mmio);
 
-    qbus_set_hotplug_handler(BUS(sec_bus), OBJECT(d), NULL);
+    qbus_set_hotplug_handler(BUS(sec_bus), OBJECT(d));
 
     d->cap_present |= QEMU_PCI_CAP_SHPC;
     return 0;
@@ -698,7 +760,7 @@ void shpc_cap_write_config(PCIDevice *d, uint32_t addr, uint32_t val, int l)
 }
 
 static int shpc_save(QEMUFile *f, void *pv, size_t size,
-                     const VMStateField *field, QJSON *vmdesc)
+                     const VMStateField *field, JSONWriter *vmdesc)
 {
     PCIDevice *d = container_of(pv, PCIDevice, shpc);
     qemu_put_buffer(f, d->shpc->config, SHPC_SIZEOF(d));
@@ -720,7 +782,7 @@ static int shpc_load(QEMUFile *f, void *pv, size_t size,
     return 0;
 }
 
-VMStateInfo shpc_vmstate_info = {
+const VMStateInfo shpc_vmstate_info = {
     .name = "shpc",
     .get  = shpc_load,
     .put  = shpc_save,

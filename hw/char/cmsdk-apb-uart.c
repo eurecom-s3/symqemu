@@ -21,10 +21,13 @@
 #include "qapi/error.h"
 #include "trace.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/registerfields.h"
 #include "chardev/char-fe.h"
 #include "chardev/char-serial.h"
 #include "hw/char/cmsdk-apb-uart.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties-system.h"
 
 REG32(DATA, 0)
 REG32(STATE, 4)
@@ -188,7 +191,7 @@ static uint64_t uart_read(void *opaque, hwaddr offset, unsigned size)
 /* Try to send tx data, and arrange to be called back later if
  * we can't (ie the char backend is busy/blocking).
  */
-static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+static gboolean uart_transmit(void *do_not_use, GIOCondition cond, void *opaque)
 {
     CMSDKAPBUART *s = CMSDK_APB_UART(opaque);
     int ret;
@@ -196,7 +199,7 @@ static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque)
     s->watch_tag = 0;
 
     if (!(s->ctrl & R_CTRL_TX_EN_MASK) || !(s->state & R_STATE_TXFULL_MASK)) {
-        return FALSE;
+        return G_SOURCE_REMOVE;
     }
 
     ret = qemu_chr_fe_write(&s->chr, &s->txbuf, 1);
@@ -212,7 +215,7 @@ static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque)
         }
         /* Transmit pending */
         trace_cmsdk_apb_uart_tx_pending();
-        return FALSE;
+        return G_SOURCE_REMOVE;
     }
 
 buffer_drained:
@@ -224,7 +227,7 @@ buffer_drained:
         s->intstatus |= R_INTSTATUS_TX_MASK;
     }
     cmsdk_apb_uart_update(s);
-    return FALSE;
+    return G_SOURCE_REMOVE;
 }
 
 static void uart_cancel_transmit(CMSDKAPBUART *s)
@@ -363,7 +366,7 @@ static const VMStateDescription cmsdk_apb_uart_vmstate = {
     .version_id = 1,
     .minimum_version_id = 1,
     .post_load = cmsdk_apb_uart_post_load,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(state, CMSDKAPBUART),
         VMSTATE_UINT32(ctrl, CMSDKAPBUART),
         VMSTATE_UINT32(intstatus, CMSDKAPBUART),
@@ -387,7 +390,7 @@ static void cmsdk_apb_uart_class_init(ObjectClass *klass, void *data)
     dc->realize = cmsdk_apb_uart_realize;
     dc->vmsd = &cmsdk_apb_uart_vmstate;
     dc->reset = cmsdk_apb_uart_reset;
-    dc->props = cmsdk_apb_uart_properties;
+    device_class_set_props(dc, cmsdk_apb_uart_properties);
 }
 
 static const TypeInfo cmsdk_apb_uart_info = {

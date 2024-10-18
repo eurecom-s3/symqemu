@@ -16,8 +16,10 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
-#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
+#include "migration/vmstate.h"
 #include "hw/pci/msix.h"
 #include "net/net.h"
 #include "net/eth.h"
@@ -26,6 +28,7 @@
 #include "qemu/iov.h"
 #include "qemu/module.h"
 #include "qemu/bitops.h"
+#include "qemu/log.h"
 
 #include "rocker.h"
 #include "rocker_hw.h"
@@ -70,11 +73,6 @@ struct rocker {
 
     QLIST_ENTRY(rocker) next;
 };
-
-#define TYPE_ROCKER "rocker"
-
-#define ROCKER(obj) \
-    OBJECT_CHECK(Rocker, (obj), TYPE_ROCKER)
 
 static QLIST_HEAD(, rocker) rockers;
 
@@ -130,13 +128,7 @@ RockerPortList *qmp_query_rocker_ports(const char *name, Error **errp)
     }
 
     for (i = r->fp_ports - 1; i >= 0; i--) {
-        RockerPortList *info = g_malloc0(sizeof(*info));
-        info->value = g_malloc0(sizeof(*info->value));
-        struct fp_port *port = r->fp_port[i];
-
-        fp_port_get_info(port, info);
-        info->next = list;
-        list = info;
+        QAPI_LIST_PREPEND(list, fp_port_get_info(r->fp_port[i]));
     }
 
     return list;
@@ -206,14 +198,22 @@ static int tx_consume(Rocker *r, DescInfo *info)
 
     if (tlvs[ROCKER_TLV_TX_L3_CSUM_OFF]) {
         tx_l3_csum_off = rocker_tlv_get_le16(tlvs[ROCKER_TLV_TX_L3_CSUM_OFF]);
+        qemu_log_mask(LOG_UNIMP, "rocker %s: L3 not implemented"
+                                 " (cksum off: %u)\n",
+                      __func__, tx_l3_csum_off);
     }
 
     if (tlvs[ROCKER_TLV_TX_TSO_MSS]) {
         tx_tso_mss = rocker_tlv_get_le16(tlvs[ROCKER_TLV_TX_TSO_MSS]);
+        qemu_log_mask(LOG_UNIMP, "rocker %s: TSO not implemented (MSS: %u)\n",
+                      __func__, tx_tso_mss);
     }
 
     if (tlvs[ROCKER_TLV_TX_TSO_HDR_LEN]) {
         tx_tso_hdr_len = rocker_tlv_get_le16(tlvs[ROCKER_TLV_TX_TSO_HDR_LEN]);
+        qemu_log_mask(LOG_UNIMP, "rocker %s: TSO not implemented"
+                                 " (hdr length: %u)\n",
+                      __func__, tx_tso_hdr_len);
     }
 
     rocker_tlv_for_each_nested(tlv_frag, tlvs[ROCKER_TLV_TX_FRAGS], rem) {
@@ -246,12 +246,6 @@ static int tx_consume(Rocker *r, DescInfo *info)
                      iov[iovcnt].iov_len);
 
         iovcnt++;
-    }
-
-    if (iovcnt) {
-        /* XXX perform Tx offloads */
-        /* XXX   silence compiler for now */
-        tx_l3_csum_off += tx_tso_mss = tx_tso_hdr_len = 0;
     }
 
     err = fp_port_eg(r->fp_port[port], iov, iovcnt);
@@ -821,7 +815,7 @@ static void rocker_io_writel(void *opaque, hwaddr addr, uint32_t val)
             }
             break;
         default:
-            DPRINTF("not implemented dma reg write(l) addr=0x" TARGET_FMT_plx
+            DPRINTF("not implemented dma reg write(l) addr=0x" HWADDR_FMT_plx
                     " val=0x%08x (ring %d, addr=0x%02x)\n",
                     addr, val, index, offset);
             break;
@@ -863,7 +857,7 @@ static void rocker_io_writel(void *opaque, hwaddr addr, uint32_t val)
         r->lower32 = 0;
         break;
     default:
-        DPRINTF("not implemented write(l) addr=0x" TARGET_FMT_plx
+        DPRINTF("not implemented write(l) addr=0x" HWADDR_FMT_plx
                 " val=0x%08x\n", addr, val);
         break;
     }
@@ -882,8 +876,8 @@ static void rocker_io_writeq(void *opaque, hwaddr addr, uint64_t val)
             desc_ring_set_base_addr(r->rings[index], val);
             break;
         default:
-            DPRINTF("not implemented dma reg write(q) addr=0x" TARGET_FMT_plx
-                    " val=0x" TARGET_FMT_plx " (ring %d, offset=0x%02x)\n",
+            DPRINTF("not implemented dma reg write(q) addr=0x" HWADDR_FMT_plx
+                    " val=0x" HWADDR_FMT_plx " (ring %d, offset=0x%02x)\n",
                     addr, val, index, offset);
             break;
         }
@@ -901,8 +895,8 @@ static void rocker_io_writeq(void *opaque, hwaddr addr, uint64_t val)
         rocker_port_phys_enable_write(r, val);
         break;
     default:
-        DPRINTF("not implemented write(q) addr=0x" TARGET_FMT_plx
-                " val=0x" TARGET_FMT_plx "\n", addr, val);
+        DPRINTF("not implemented write(q) addr=0x" HWADDR_FMT_plx
+                " val=0x" HWADDR_FMT_plx "\n", addr, val);
         break;
     }
 }
@@ -993,8 +987,8 @@ static const char *rocker_reg_name(void *opaque, hwaddr addr)
 static void rocker_mmio_write(void *opaque, hwaddr addr, uint64_t val,
                               unsigned size)
 {
-    DPRINTF("Write %s addr " TARGET_FMT_plx
-            ", size %u, val " TARGET_FMT_plx "\n",
+    DPRINTF("Write %s addr " HWADDR_FMT_plx
+            ", size %u, val " HWADDR_FMT_plx "\n",
             rocker_reg_name(opaque, addr), addr, size, val);
 
     switch (size) {
@@ -1016,7 +1010,7 @@ static uint64_t rocker_port_phys_link_status(Rocker *r)
         FpPort *port = r->fp_port[i];
 
         if (fp_port_get_link_up(port)) {
-            status |= 1 << (i + 1);
+            status |= 1ULL << (i + 1);
         }
     }
     return status;
@@ -1031,7 +1025,7 @@ static uint64_t rocker_port_phys_enable_read(Rocker *r)
         FpPort *port = r->fp_port[i];
 
         if (fp_port_enabled(port)) {
-            ret |= 1 << (i + 1);
+            ret |= 1ULL << (i + 1);
         }
     }
     return ret;
@@ -1066,7 +1060,7 @@ static uint32_t rocker_io_readl(void *opaque, hwaddr addr)
             ret = desc_ring_get_credits(r->rings[index]);
             break;
         default:
-            DPRINTF("not implemented dma reg read(l) addr=0x" TARGET_FMT_plx
+            DPRINTF("not implemented dma reg read(l) addr=0x" HWADDR_FMT_plx
                     " (ring %d, addr=0x%02x)\n", addr, index, offset);
             ret = 0;
             break;
@@ -1121,7 +1115,7 @@ static uint32_t rocker_io_readl(void *opaque, hwaddr addr)
         ret = (uint32_t)(r->switch_id >> 32);
         break;
     default:
-        DPRINTF("not implemented read(l) addr=0x" TARGET_FMT_plx "\n", addr);
+        DPRINTF("not implemented read(l) addr=0x" HWADDR_FMT_plx "\n", addr);
         ret = 0;
         break;
     }
@@ -1142,7 +1136,7 @@ static uint64_t rocker_io_readq(void *opaque, hwaddr addr)
             ret = desc_ring_get_base_addr(r->rings[index]);
             break;
         default:
-            DPRINTF("not implemented dma reg read(q) addr=0x" TARGET_FMT_plx
+            DPRINTF("not implemented dma reg read(q) addr=0x" HWADDR_FMT_plx
                     " (ring %d, addr=0x%02x)\n", addr, index, offset);
             ret = 0;
             break;
@@ -1171,7 +1165,7 @@ static uint64_t rocker_io_readq(void *opaque, hwaddr addr)
         ret = r->switch_id;
         break;
     default:
-        DPRINTF("not implemented read(q) addr=0x" TARGET_FMT_plx "\n", addr);
+        DPRINTF("not implemented read(q) addr=0x" HWADDR_FMT_plx "\n", addr);
         ret = 0;
         break;
     }
@@ -1180,7 +1174,7 @@ static uint64_t rocker_io_readq(void *opaque, hwaddr addr)
 
 static uint64_t rocker_mmio_read(void *opaque, hwaddr addr, unsigned size)
 {
-    DPRINTF("Read %s addr " TARGET_FMT_plx ", size %u\n",
+    DPRINTF("Read %s addr " HWADDR_FMT_plx ", size %u\n",
             rocker_reg_name(opaque, addr), addr, size);
 
     switch (size) {
@@ -1218,24 +1212,14 @@ static void rocker_msix_vectors_unuse(Rocker *r,
     }
 }
 
-static int rocker_msix_vectors_use(Rocker *r,
-                                   unsigned int num_vectors)
+static void rocker_msix_vectors_use(Rocker *r, unsigned int num_vectors)
 {
     PCIDevice *dev = PCI_DEVICE(r);
-    int err;
     int i;
 
     for (i = 0; i < num_vectors; i++) {
-        err = msix_vector_use(dev, i);
-        if (err) {
-            goto rollback;
-        }
+        msix_vector_use(dev, i);
     }
-    return 0;
-
-rollback:
-    rocker_msix_vectors_unuse(r, i);
-    return err;
 }
 
 static int rocker_msix_init(Rocker *r, Error **errp)
@@ -1253,16 +1237,9 @@ static int rocker_msix_init(Rocker *r, Error **errp)
         return err;
     }
 
-    err = rocker_msix_vectors_use(r, ROCKER_MSIX_VEC_COUNT(r->fp_ports));
-    if (err) {
-        goto err_msix_vectors_use;
-    }
+    rocker_msix_vectors_use(r, ROCKER_MSIX_VEC_COUNT(r->fp_ports));
 
     return 0;
-
-err_msix_vectors_use:
-    msix_uninit(dev, &r->msix_bar, &r->msix_bar);
-    return err;
 }
 
 static void rocker_msix_uninit(Rocker *r)
@@ -1518,7 +1495,7 @@ static void rocker_class_init(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
     dc->desc = "Rocker Switch";
     dc->reset = rocker_reset;
-    dc->props = rocker_properties;
+    device_class_set_props(dc, rocker_properties);
     dc->vmsd = &rocker_vmsd;
 }
 

@@ -37,68 +37,50 @@ DEF_HELPER_2(lldt, void, env, int)
 DEF_HELPER_2(ltr, void, env, int)
 DEF_HELPER_3(load_seg, void, env, int, int)
 DEF_HELPER_4(ljmp_protected, void, env, int, tl, tl)
-DEF_HELPER_5(lcall_real, void, env, int, tl, int, int)
+DEF_HELPER_5(lcall_real, void, env, i32, i32, int, i32)
 DEF_HELPER_5(lcall_protected, void, env, int, tl, int, tl)
 DEF_HELPER_2(iret_real, void, env, int)
 DEF_HELPER_3(iret_protected, void, env, int, int)
 DEF_HELPER_3(lret_protected, void, env, int, int)
-DEF_HELPER_2(read_crN, tl, env, int)
-DEF_HELPER_3(write_crN, void, env, int, tl)
-DEF_HELPER_2(lmsw, void, env, tl)
 DEF_HELPER_1(clts, void, env)
+
+#ifndef CONFIG_USER_ONLY
 DEF_HELPER_FLAGS_3(set_dr, TCG_CALL_NO_WG, void, env, int, tl)
 DEF_HELPER_FLAGS_2(get_dr, TCG_CALL_NO_WG, tl, env, int)
-DEF_HELPER_2(invlpg, void, env, tl)
+#endif /* !CONFIG_USER_ONLY */
 
 DEF_HELPER_1(sysenter, void, env)
 DEF_HELPER_2(sysexit, void, env, int)
-#ifdef TARGET_X86_64
 DEF_HELPER_2(syscall, void, env, int)
 DEF_HELPER_2(sysret, void, env, int)
-#endif
-DEF_HELPER_2(hlt, void, env, int)
-DEF_HELPER_2(monitor, void, env, tl)
-DEF_HELPER_2(mwait, void, env, int)
-DEF_HELPER_2(pause, void, env, int)
-DEF_HELPER_1(debug, void, env)
-DEF_HELPER_1(reset_rf, void, env)
-DEF_HELPER_3(raise_interrupt, void, env, int, int)
-DEF_HELPER_2(raise_exception, void, env, int)
-DEF_HELPER_1(cli, void, env)
-DEF_HELPER_1(sti, void, env)
-DEF_HELPER_1(clac, void, env)
-DEF_HELPER_1(stac, void, env)
+DEF_HELPER_FLAGS_2(pause, TCG_CALL_NO_WG, noreturn, env, int)
+DEF_HELPER_FLAGS_3(raise_interrupt, TCG_CALL_NO_WG, noreturn, env, int, int)
+DEF_HELPER_FLAGS_2(raise_exception, TCG_CALL_NO_WG, noreturn, env, int)
 DEF_HELPER_3(boundw, void, env, tl, int)
 DEF_HELPER_3(boundl, void, env, tl, int)
+
+#ifndef CONFIG_USER_ONLY
 DEF_HELPER_1(rsm, void, env)
+#endif /* !CONFIG_USER_ONLY */
+
 DEF_HELPER_2(into, void, env, int)
-DEF_HELPER_2(cmpxchg8b_unlocked, void, env, tl)
-DEF_HELPER_2(cmpxchg8b, void, env, tl)
-#ifdef TARGET_X86_64
-DEF_HELPER_2(cmpxchg16b_unlocked, void, env, tl)
-DEF_HELPER_2(cmpxchg16b, void, env, tl)
-#endif
-DEF_HELPER_1(single_step, void, env)
+DEF_HELPER_FLAGS_1(single_step, TCG_CALL_NO_WG, noreturn, env)
 DEF_HELPER_1(rechecking_single_step, void, env)
 DEF_HELPER_1(cpuid, void, env)
+DEF_HELPER_FLAGS_1(rdpid, TCG_CALL_NO_WG, tl, env)
 DEF_HELPER_1(rdtsc, void, env)
-DEF_HELPER_1(rdtscp, void, env)
-DEF_HELPER_1(rdpmc, void, env)
-DEF_HELPER_1(rdmsr, void, env)
-DEF_HELPER_1(wrmsr, void, env)
+DEF_HELPER_FLAGS_1(rdpmc, TCG_CALL_NO_WG, noreturn, env)
 
-DEF_HELPER_2(check_iob, void, env, i32)
-DEF_HELPER_2(check_iow, void, env, i32)
-DEF_HELPER_2(check_iol, void, env, i32)
+#ifndef CONFIG_USER_ONLY
 DEF_HELPER_3(outb, void, env, i32, i32)
 DEF_HELPER_2(inb, tl, env, i32)
 DEF_HELPER_3(outw, void, env, i32, i32)
 DEF_HELPER_2(inw, tl, env, i32)
 DEF_HELPER_3(outl, void, env, i32, i32)
 DEF_HELPER_2(inl, tl, env, i32)
+DEF_HELPER_FLAGS_3(check_io, TCG_CALL_NO_WG, void, env, i32, i32)
 DEF_HELPER_FLAGS_4(bpt_io, TCG_CALL_NO_WG, void, env, i32, i32, tl)
-
-DEF_HELPER_3(svm_check_intercept_param, void, env, i32, i64)
+DEF_HELPER_2(svm_check_intercept, void, env, i32)
 DEF_HELPER_4(svm_check_io, void, env, i32, i32, i32)
 DEF_HELPER_3(vmrun, void, env, int, int)
 DEF_HELPER_1(vmmcall, void, env)
@@ -106,8 +88,15 @@ DEF_HELPER_2(vmload, void, env, int)
 DEF_HELPER_2(vmsave, void, env, int)
 DEF_HELPER_1(stgi, void, env)
 DEF_HELPER_1(clgi, void, env)
-DEF_HELPER_1(skinit, void, env)
-DEF_HELPER_2(invlpga, void, env, int)
+DEF_HELPER_FLAGS_2(flush_page, TCG_CALL_NO_RWG, void, env, tl)
+DEF_HELPER_FLAGS_2(hlt, TCG_CALL_NO_WG, noreturn, env, int)
+DEF_HELPER_FLAGS_2(monitor, TCG_CALL_NO_WG, void, env, tl)
+DEF_HELPER_FLAGS_2(mwait, TCG_CALL_NO_WG, noreturn, env, int)
+DEF_HELPER_1(rdmsr, void, env)
+DEF_HELPER_1(wrmsr, void, env)
+DEF_HELPER_FLAGS_2(read_crN, TCG_CALL_NO_RWG, tl, env, int)
+DEF_HELPER_FLAGS_3(write_crN, TCG_CALL_NO_RWG, void, env, int, tl)
+#endif /* !CONFIG_USER_ONLY */
 
 /* x86 FPU */
 
@@ -207,14 +196,16 @@ DEF_HELPER_FLAGS_2(pext, TCG_CALL_NO_RWG_SE, tl, tl, tl)
 /* MMX/SSE */
 
 DEF_HELPER_2(ldmxcsr, void, env, i32)
+DEF_HELPER_1(update_mxcsr, void, env)
 DEF_HELPER_1(enter_mmx, void, env)
 DEF_HELPER_1(emms, void, env)
-DEF_HELPER_3(movq, void, env, ptr, ptr)
 
 #define SHIFT 0
-#include "ops_sse_header.h"
+#include "tcg/ops_sse_header.h.inc"
 #define SHIFT 1
-#include "ops_sse_header.h"
+#include "tcg/ops_sse_header.h.inc"
+#define SHIFT 2
+#include "tcg/ops_sse_header.h.inc"
 
 DEF_HELPER_3(rclb, tl, env, tl, tl)
 DEF_HELPER_3(rclw, tl, env, tl, tl)

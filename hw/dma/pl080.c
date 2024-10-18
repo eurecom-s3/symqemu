@@ -9,10 +9,13 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "exec/address-spaces.h"
+#include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/dma/pl080.h"
+#include "hw/hw.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "qapi/error.h"
 
 #define PL080_CONF_E    0x1
@@ -36,7 +39,7 @@ static const VMStateDescription vmstate_pl080_channel = {
     .name = "pl080_channel",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT32(src, pl080_channel),
         VMSTATE_UINT32(dest, pl080_channel),
         VMSTATE_UINT32(lli, pl080_channel),
@@ -50,7 +53,7 @@ static const VMStateDescription vmstate_pl080 = {
     .name = "pl080",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (VMStateField[]) {
+    .fields = (const VMStateField[]) {
         VMSTATE_UINT8(tc_int, PL080State),
         VMSTATE_UINT8(tc_mask, PL080State),
         VMSTATE_UINT8(err_int, PL080State),
@@ -417,7 +420,7 @@ static void pl080_class_init(ObjectClass *oc, void *data)
 
     dc->vmsd = &vmstate_pl080;
     dc->realize = pl080_realize;
-    dc->props = pl080_properties;
+    device_class_set_props(dc, pl080_properties);
     dc->reset = pl080_reset;
 }
 

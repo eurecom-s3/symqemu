@@ -129,7 +129,7 @@ test ibreak_remove
 4:
 test_end
 
-test ibreak_priority
+test ibreak_break_priority
     set_vector debug_vector, 2f
     rsil    a2, debug_level - 1
     movi    a2, 1f
@@ -143,6 +143,29 @@ test ibreak_priority
 2:
     rsr     a2, debugcause
     movi    a3, 0x2
+    assert  eq, a2, a3
+test_end
+
+test ibreak_icount_priority
+    set_vector debug_vector, 2f
+    rsil    a2, debug_level - 1
+    movi    a2, 1f
+    wsr     a2, ibreaka0
+    movi    a2, 1
+    wsr     a2, ibreakenable
+    movi    a2, -2
+    wsr     a2, icount
+    movi    a2, 1
+    wsr     a2, icountlevel
+    isync
+    rsil    a2, 0
+    nop
+1:
+    break   0, 0
+    test_fail
+2:
+    rsr     a2, debugcause
+    movi    a3, 0x1
     assert  eq, a2, a3
 test_end
 #endif
@@ -200,64 +223,70 @@ test_end
 .endm
 
 #if XCHAL_NUM_DBREAK
+#define DB0 0
+#if XCHAL_NUM_DBREAK > 1
+#define DB1 1
+#else
+#define DB1 0
+#endif
 test dbreak_exact
-    dbreak_test 0, 0x4000003f, 0xd000007f, 0xd000007f, l8ui
-    dbreak_test 1, 0x4000003e, 0xd000007e, 0xd000007e, l16ui
-    dbreak_test 0, 0x4000003c, 0xd000007c, 0xd000007c, l32i
+    dbreak_test DB0, 0x4000003f, 0xd000007f, 0xd000007f, l8ui
+    dbreak_test DB1, 0x4000003e, 0xd000007e, 0xd000007e, l16ui
+    dbreak_test DB0, 0x4000003c, 0xd000007c, 0xd000007c, l32i
 
-    dbreak_test 1, 0x8000003f, 0xd000007f, 0xd000007f, s8i
-    dbreak_test 0, 0x8000003e, 0xd000007e, 0xd000007e, s16i
-    dbreak_test 1, 0x8000003c, 0xd000007c, 0xd000007c, s32i
+    dbreak_test DB1, 0x8000003f, 0xd000007f, 0xd000007f, s8i
+    dbreak_test DB0, 0x8000003e, 0xd000007e, 0xd000007e, s16i
+    dbreak_test DB1, 0x8000003c, 0xd000007c, 0xd000007c, s32i
 test_end
 
-test dbreak_overlap
-    dbreak_test 0, 0x4000003f, 0xd000007d, 0xd000007c, l16ui
-    dbreak_test 1, 0x4000003f, 0xd000007d, 0xd000007c, l32i
+test DBdbreak_overlap
+    dbreak_test DB0, 0x4000003f, 0xd000007d, 0xd000007c, l16ui
+    dbreak_test DB1, 0x4000003f, 0xd000007d, 0xd000007c, l32i
 
-    dbreak_test 0, 0x4000003e, 0xd000007e, 0xd000007f, l8ui
-    dbreak_test 1, 0x4000003e, 0xd000007e, 0xd000007c, l32i
+    dbreak_test DB0, 0x4000003e, 0xd000007e, 0xd000007f, l8ui
+    dbreak_test DB1, 0x4000003e, 0xd000007e, 0xd000007c, l32i
 
-    dbreak_test 0, 0x4000003c, 0xd000007c, 0xd000007d, l8ui
-    dbreak_test 1, 0x4000003c, 0xd000007c, 0xd000007c, l16ui
+    dbreak_test DB0, 0x4000003c, 0xd000007c, 0xd000007d, l8ui
+    dbreak_test DB1, 0x4000003c, 0xd000007c, 0xd000007c, l16ui
 
-    dbreak_test 0, 0x40000038, 0xd0000078, 0xd000007b, l8ui
-    dbreak_test 1, 0x40000038, 0xd0000078, 0xd000007a, l16ui
-    dbreak_test 0, 0x40000038, 0xd0000078, 0xd000007c, l32i
+    dbreak_test DB0, 0x40000038, 0xd0000078, 0xd000007b, l8ui
+    dbreak_test DB1, 0x40000038, 0xd0000078, 0xd000007a, l16ui
+    dbreak_test DB0, 0x40000038, 0xd0000078, 0xd000007c, l32i
 
-    dbreak_test 1, 0x40000030, 0xd0000070, 0xd0000075, l8ui
-    dbreak_test 0, 0x40000030, 0xd0000070, 0xd0000076, l16ui
-    dbreak_test 1, 0x40000030, 0xd0000070, 0xd0000078, l32i
+    dbreak_test DB1, 0x40000030, 0xd0000070, 0xd0000075, l8ui
+    dbreak_test DB0, 0x40000030, 0xd0000070, 0xd0000076, l16ui
+    dbreak_test DB1, 0x40000030, 0xd0000070, 0xd0000078, l32i
 
-    dbreak_test 0, 0x40000020, 0xd0000060, 0xd000006f, l8ui
-    dbreak_test 1, 0x40000020, 0xd0000060, 0xd0000070, l16ui
-    dbreak_test 0, 0x40000020, 0xd0000060, 0xd0000074, l32i
+    dbreak_test DB0, 0x40000020, 0xd0000060, 0xd000006f, l8ui
+    dbreak_test DB1, 0x40000020, 0xd0000060, 0xd0000070, l16ui
+    dbreak_test DB0, 0x40000020, 0xd0000060, 0xd0000074, l32i
 
 
-    dbreak_test 0, 0x8000003f, 0xd000007d, 0xd000007c, s16i
-    dbreak_test 1, 0x8000003f, 0xd000007d, 0xd000007c, s32i
+    dbreak_test DB0, 0x8000003f, 0xd000007d, 0xd000007c, s16i
+    dbreak_test DB1, 0x8000003f, 0xd000007d, 0xd000007c, s32i
 
-    dbreak_test 0, 0x8000003e, 0xd000007e, 0xd000007f, s8i
-    dbreak_test 1, 0x8000003e, 0xd000007e, 0xd000007c, s32i
+    dbreak_test DB0, 0x8000003e, 0xd000007e, 0xd000007f, s8i
+    dbreak_test DB1, 0x8000003e, 0xd000007e, 0xd000007c, s32i
 
-    dbreak_test 0, 0x8000003c, 0xd000007c, 0xd000007d, s8i
-    dbreak_test 1, 0x8000003c, 0xd000007c, 0xd000007c, s16i
+    dbreak_test DB0, 0x8000003c, 0xd000007c, 0xd000007d, s8i
+    dbreak_test DB1, 0x8000003c, 0xd000007c, 0xd000007c, s16i
 
-    dbreak_test 0, 0x80000038, 0xd0000078, 0xd000007b, s8i
-    dbreak_test 1, 0x80000038, 0xd0000078, 0xd000007a, s16i
-    dbreak_test 0, 0x80000038, 0xd0000078, 0xd000007c, s32i
+    dbreak_test DB0, 0x80000038, 0xd0000078, 0xd000007b, s8i
+    dbreak_test DB1, 0x80000038, 0xd0000078, 0xd000007a, s16i
+    dbreak_test DB0, 0x80000038, 0xd0000078, 0xd000007c, s32i
 
-    dbreak_test 1, 0x80000030, 0xd0000070, 0xd0000075, s8i
-    dbreak_test 0, 0x80000030, 0xd0000070, 0xd0000076, s16i
-    dbreak_test 1, 0x80000030, 0xd0000070, 0xd0000078, s32i
+    dbreak_test DB1, 0x80000030, 0xd0000070, 0xd0000075, s8i
+    dbreak_test DB0, 0x80000030, 0xd0000070, 0xd0000076, s16i
+    dbreak_test DB1, 0x80000030, 0xd0000070, 0xd0000078, s32i
 
-    dbreak_test 0, 0x80000020, 0xd0000060, 0xd000006f, s8i
-    dbreak_test 1, 0x80000020, 0xd0000060, 0xd0000070, s16i
-    dbreak_test 0, 0x80000020, 0xd0000060, 0xd0000074, s32i
+    dbreak_test DB0, 0x80000020, 0xd0000060, 0xd000006f, s8i
+    dbreak_test DB1, 0x80000020, 0xd0000060, 0xd0000070, s16i
+    dbreak_test DB0, 0x80000020, 0xd0000060, 0xd0000074, s32i
 test_end
 
-test dbreak_invalid
-    dbreak_test 0, 0x40000030, 0xd0000071, 0xd0000070, l16ui
-    dbreak_test 1, 0x40000035, 0xd0000072, 0xd0000070, l32i
+test DBdbreak_invalid
+    dbreak_test DB0, 0x40000030, 0xd0000071, 0xd0000070, l16ui
+    dbreak_test DB1, 0x40000035, 0xd0000072, 0xd0000070, l32i
 test_end
 #endif
 
