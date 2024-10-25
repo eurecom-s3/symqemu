@@ -194,7 +194,7 @@ static int mips_cpu_mmu_index(CPUState *cs, bool ifunc)
 
 #include "cpu-defs.c.inc"
 
-static void mips_cpu_reset_hold(Object *obj)
+static void mips_cpu_reset_hold(Object *obj, ResetType type)
 {
     CPUState *cs = CPU(obj);
     MIPSCPU *cpu = MIPS_CPU(cs);
@@ -202,7 +202,7 @@ static void mips_cpu_reset_hold(Object *obj)
     CPUMIPSState *env = &cpu->env;
 
     if (mcc->parent_phases.hold) {
-        mcc->parent_phases.hold(obj);
+        mcc->parent_phases.hold(obj, type);
     }
 
     memset(env, 0, offsetof(CPUMIPSState, end_reset_fields));
@@ -566,6 +566,7 @@ static const TCGCPUOps mips_tcg_ops = {
 #if !defined(CONFIG_USER_ONLY)
     .tlb_fill = mips_cpu_tlb_fill,
     .cpu_exec_interrupt = mips_cpu_exec_interrupt,
+    .cpu_exec_halt = mips_cpu_has_work,
     .do_interrupt = mips_cpu_do_interrupt,
     .do_transaction_failed = mips_cpu_do_transaction_failed,
     .do_unaligned_access = mips_cpu_do_unaligned_access,

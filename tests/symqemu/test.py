@@ -4,32 +4,29 @@ import shutil
 import unittest
 import tempfile
 import subprocess
+import os
 
 import util
 
 
 class SymQemuTests(unittest.TestCase):
-    SYMQEMU_OUTPUT_DIR = pathlib.Path(__file__).parent / "symqemu_output"
-
-    def setUp(self):
-        self.SYMQEMU_OUTPUT_DIR.mkdir()
-
-    def tearDown(self):
-        shutil.rmtree(self.SYMQEMU_OUTPUT_DIR)
-
     def run_symqemu_and_assert_correct_result(self, binary_name):
         symqemu_ref_output_dir = util.BINARIES_DIR / binary_name / 'expected_outputs'
+        symqemu_gen_output_dir = util.BINARIES_DIR / binary_name / 'generated_outputs'
 
-        util.run_symqemu_on_test_binary(binary_name=binary_name, generated_test_cases_output_dir=self.SYMQEMU_OUTPUT_DIR)
+        if not symqemu_gen_output_dir.exists():
+            symqemu_gen_output_dir.mkdir()
+
+        util.run_symqemu_on_test_binary(binary_name=binary_name, generated_test_cases_output_dir=symqemu_gen_output_dir)
 
         # `filecmp.dircmp` does a "shallow" comparison, but this is not a problem here because
         # the timestamps should always be different, so the actual content of the files will be compared.
         # See https://docs.python.org/3/library/filecmp.html#filecmp.dircmp
-        expected_vs_actual_output_comparison = filecmp.dircmp(self.SYMQEMU_OUTPUT_DIR, symqemu_ref_output_dir)
+        expected_vs_actual_output_comparison = filecmp.dircmp(symqemu_gen_output_dir, symqemu_ref_output_dir)
 
         for diff_file in expected_vs_actual_output_comparison.diff_files:
             ref_file = symqemu_ref_output_dir / diff_file
-            gen_file = self.SYMQEMU_OUTPUT_DIR / diff_file
+            gen_file = symqemu_gen_output_dir / diff_file
 
             tmp_ref = tempfile.NamedTemporaryFile("w+")
             subprocess.run(["xxd", f"{ref_file}"], stdout=tmp_ref, check=True)

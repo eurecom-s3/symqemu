@@ -21,8 +21,8 @@
 #     backend (e.g. with the chardev=... option) is in open or closed
 #     state (since 2.1)
 #
-# Notes: @filename is encoded using the QEMU command line character
-#     device encoding.  See the QEMU man page for details.
+# .. note:: @filename is encoded using the QEMU command line character
+#    device encoding.  See the QEMU man page for details.
 #
 # Since: 0.14
 ##
@@ -40,7 +40,7 @@
 #
 # Since: 0.14
 #
-# Example:
+# .. qmp-example::
 #
 #     -> { "execute": "query-chardev" }
 #     <- {
@@ -86,7 +86,7 @@
 #
 # Since: 2.0
 #
-# Example:
+# .. qmp-example::
 #
 #     -> { "execute": "query-chardev-backends" }
 #     <- {
@@ -141,7 +141,7 @@
 #
 # Since: 1.4
 #
-# Example:
+# .. qmp-example::
 #
 #     -> { "execute": "ringbuf-write",
 #          "arguments": { "device": "foo",
@@ -177,7 +177,7 @@
 #
 # Since: 1.4
 #
-# Example:
+# .. qmp-example::
 #
 #     -> { "execute": "ringbuf-read",
 #          "arguments": { "device": "foo",
@@ -258,7 +258,7 @@
 # @server: create server socket (default: true)
 #
 # @wait: wait for incoming connection on server sockets (default:
-#     false). Silently ignored with server: false.  This use is
+#     false).  Silently ignored with server: false.  This use is
 #     deprecated.
 #
 # @nodelay: set TCP_NODELAY socket option (default: false)
@@ -388,9 +388,9 @@
 #
 # @rows: console height, in chars
 #
-# Note: the options are only effective when the VNC or SDL graphical
-#     display backend is active.  They are ignored with the GTK,
-#     Spice, VNC and D-Bus display backends.
+# .. note:: The options are only effective when the VNC or SDL
+#    graphical display backend is active.  They are ignored with the
+#    GTK, Spice, VNC and D-Bus display backends.
 #
 # Since: 1.5
 ##
@@ -699,18 +699,22 @@
 #
 # Since: 1.4
 #
-# Examples:
+# .. qmp-example::
 #
 #     -> { "execute" : "chardev-add",
 #          "arguments" : { "id" : "foo",
 #                          "backend" : { "type" : "null", "data" : {} } } }
 #     <- { "return": {} }
 #
+# .. qmp-example::
+#
 #     -> { "execute" : "chardev-add",
 #          "arguments" : { "id" : "bar",
 #                          "backend" : { "type" : "file",
 #                                        "data" : { "out" : "/tmp/bar.log" } } } }
 #     <- { "return": {} }
+#
+# .. qmp-example::
 #
 #     -> { "execute" : "chardev-add",
 #          "arguments" : { "id" : "baz",
@@ -735,12 +739,14 @@
 #
 # Since: 2.10
 #
-# Examples:
+# .. qmp-example::
 #
 #     -> { "execute" : "chardev-change",
 #          "arguments" : { "id" : "baz",
 #                          "backend" : { "type" : "pty", "data" : {} } } }
 #     <- { "return": { "pty" : "/dev/pty/42" } }
+#
+# .. qmp-example::
 #
 #     -> {"execute" : "chardev-change",
 #         "arguments" : {
@@ -772,7 +778,7 @@
 #
 # Since: 1.4
 #
-# Example:
+# .. qmp-example::
 #
 #     -> { "execute": "chardev-remove", "arguments": { "id" : "foo" } }
 #     <- { "return": {} }
@@ -789,7 +795,7 @@
 #
 # Since: 2.10
 #
-# Example:
+# .. qmp-example::
 #
 #     -> { "execute": "chardev-send-break", "arguments": { "id" : "foo" } }
 #     <- { "return": {} }
@@ -806,11 +812,11 @@
 #
 # @open: true if the guest has opened the virtio-serial port
 #
-# Note: This event is rate-limited.
+# .. note:: This event is rate-limited.
 #
 # Since: 2.1
 #
-# Example:
+# .. qmp-example::
 #
 #     <- { "event": "VSERPORT_CHANGE",
 #          "data": { "id": "channel0", "open": true },

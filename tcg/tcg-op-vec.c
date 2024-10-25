@@ -553,7 +553,7 @@ void tcg_gen_eqv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
      * This instruction is not instrumented yet.
      * For now, we make sure that alternative instructions below, which are instrumented, are always used.
      * Directly instrumenting this instruction would improve performance of SymQEMU. */
-    
+
 
     /* if (TCG_TARGET_HAS_eqv_vec) {
         vec_gen_op3(INDEX_op_eqv_vec, 0, r, a, b);
@@ -571,7 +571,7 @@ void tcg_gen_eqv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
  *     TCGArg ai = temp_arg(at);
  *     TCGType type = rt->base_type;
  *     int can;
- * 
+ *
  *     tcg_debug_assert(at->base_type >= type);
  *     tcg_assert_listed_vecop(opc);
  *     can = tcg_can_emit_vec_op(opc, type, vece);
@@ -604,13 +604,13 @@ void tcg_gen_neg_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
     tcg_assert_listed_vecop(INDEX_op_neg_vec);
     hold_list = tcg_swap_vecop_list(NULL);
 
-   
+
     /* TODO (SymQEMU):
      * This instruction is not instrumented yet.
      * For now, we make sure that alternative instructions below, which are instrumented, are always used.
      * Directly instrumenting this instruction would improve performance of SymQEMU.
      */
-    
+
 
     /*if (!TCG_TARGET_HAS_neg_vec || !do_op2(vece, r, a, INDEX_op_neg_vec)) {*/
         tcg_gen_sub_vec(vece, r, tcg_constant_vec_matching(r, vece, 0), a);
@@ -729,9 +729,11 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
     TCGTemp *rt = tcgv_vec_temp(r);
     TCGTemp *at = tcgv_vec_temp(a);
     TCGTemp *bt = tcgv_vec_temp(b);
+    TCGTemp *tt = NULL;
     TCGArg ri = temp_arg(rt);
     TCGArg ai = temp_arg(at);
     TCGArg bi = temp_arg(bt);
+    TCGArg ti;
     TCGType type = rt->base_type;
     int can;
 
@@ -747,6 +749,18 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
     tcg_debug_assert(bt->base_type >= type);
     tcg_assert_listed_vecop(INDEX_op_cmp_vec);
     can = tcg_can_emit_vec_op(INDEX_op_cmp_vec, type, vece);
+
+    if (!TCG_TARGET_HAS_tst_vec && is_tst_cond(cond)) {
+        tt = tcg_temp_new_internal(type, TEMP_EBB);
+        ti = temp_arg(tt);
+        vec_gen_3(INDEX_op_and_vec, type, 0, ti, ai, bi);
+        at = tt;
+        ai = ti;
+        bt = tcg_constant_internal(type, 0);
+        bi = temp_arg(bt);
+        cond = tcg_tst_eqne_cond(cond);
+    }
+
     if (can > 0) {
         vec_gen_4(INDEX_op_cmp_vec, type, vece, ri, ai, bi, cond);
     } else {
@@ -780,6 +794,9 @@ void tcg_gen_cmp_vec(TCGCond cond, unsigned vece,
     gen_helper_free(buffer_address_b);
     gen_helper_free(buffer_address_r);
 
+    if (tt) {
+        tcg_temp_free_internal(tt);
+    }
 }
 
 static bool do_op3(unsigned vece, TCGv_vec r, TCGv_vec a,

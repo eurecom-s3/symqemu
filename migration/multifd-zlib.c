@@ -70,6 +70,10 @@ static int zlib_send_setup(MultiFDSendParams *p, Error **errp)
         goto err_free_zbuff;
     }
     p->compress_data = z;
+
+    /* Needs 2 IOVs, one for packet header and one for compressed data */
+    p->iov = g_new0(struct iovec, 2);
+
     return 0;
 
 err_free_zbuff:
@@ -101,6 +105,9 @@ static void zlib_send_cleanup(MultiFDSendParams *p, Error **errp)
     z->buf = NULL;
     g_free(p->compress_data);
     p->compress_data = NULL;
+
+    g_free(p->iov);
+    p->iov = NULL;
 }
 
 /**
@@ -284,6 +291,7 @@ static int zlib_recv(MultiFDRecvParams *p, Error **errp)
         int flush = Z_NO_FLUSH;
         unsigned long start = zs->total_out;
 
+        ramblock_recv_bitmap_set_offset(p->block, p->normal[i]);
         if (i == p->normal_num - 1) {
             flush = Z_SYNC_FLUSH;
         }

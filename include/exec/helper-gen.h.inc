@@ -8,13 +8,14 @@
 
 #include "tcg/tcg.h"
 #include "tcg/helper-info.h"
-#include "exec/helper-head.h"
+#include "exec/helper-head.h.inc"
 
 #define DEF_HELPER_FLAGS_0(name, flags, ret)                            \
 extern TCGHelperInfo glue(helper_info_, name);                          \
 static inline void glue(gen_helper_, name)(dh_retvar_decl0(ret))        \
 {                                                                       \
-    tcg_gen_call0(&glue(helper_info_, name), dh_retvar(ret));           \
+    tcg_gen_call0(glue(helper_info_,name).func,                         \
+                  &glue(helper_info_,name), dh_retvar(ret));            \
 }
 
 #define DEF_HELPER_FLAGS_1(name, flags, ret, t1)                        \
@@ -22,7 +23,8 @@ extern TCGHelperInfo glue(helper_info_, name);                          \
 static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)          \
     dh_arg_decl(t1, 1))                                                 \
 {                                                                       \
-    tcg_gen_call1(&glue(helper_info_, name), dh_retvar(ret),            \
+    tcg_gen_call1(glue(helper_info_,name).func,                         \
+                  &glue(helper_info_,name), dh_retvar(ret),             \
                   dh_arg(t1, 1));                                       \
 }
 
@@ -31,7 +33,8 @@ extern TCGHelperInfo glue(helper_info_, name);                          \
 static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)          \
     dh_arg_decl(t1, 1), dh_arg_decl(t2, 2))                             \
 {                                                                       \
-    tcg_gen_call2(&glue(helper_info_, name), dh_retvar(ret),            \
+    tcg_gen_call2(glue(helper_info_,name).func,                         \
+                  &glue(helper_info_,name), dh_retvar(ret),             \
                   dh_arg(t1, 1), dh_arg(t2, 2));                        \
 }
 
@@ -40,7 +43,8 @@ extern TCGHelperInfo glue(helper_info_, name);                          \
 static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)          \
     dh_arg_decl(t1, 1), dh_arg_decl(t2, 2), dh_arg_decl(t3, 3))         \
 {                                                                       \
-    tcg_gen_call3(&glue(helper_info_, name), dh_retvar(ret),            \
+    tcg_gen_call3(glue(helper_info_,name).func,                         \
+                  &glue(helper_info_,name), dh_retvar(ret),             \
                   dh_arg(t1, 1), dh_arg(t2, 2), dh_arg(t3, 3));         \
 }
 
@@ -50,7 +54,8 @@ static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)          \
     dh_arg_decl(t1, 1), dh_arg_decl(t2, 2),                             \
     dh_arg_decl(t3, 3), dh_arg_decl(t4, 4))                             \
 {                                                                       \
-    tcg_gen_call4(&glue(helper_info_, name), dh_retvar(ret),            \
+    tcg_gen_call4(glue(helper_info_,name).func,                         \
+                  &glue(helper_info_,name), dh_retvar(ret),             \
                   dh_arg(t1, 1), dh_arg(t2, 2),                         \
                   dh_arg(t3, 3), dh_arg(t4, 4));                        \
 }
@@ -61,7 +66,8 @@ static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)          \
     dh_arg_decl(t1, 1), dh_arg_decl(t2, 2), dh_arg_decl(t3, 3),         \
     dh_arg_decl(t4, 4), dh_arg_decl(t5, 5))                             \
 {                                                                       \
-    tcg_gen_call5(&glue(helper_info_, name), dh_retvar(ret),            \
+    tcg_gen_call5(glue(helper_info_,name).func,                         \
+                  &glue(helper_info_,name), dh_retvar(ret),             \
                   dh_arg(t1, 1), dh_arg(t2, 2), dh_arg(t3, 3),          \
                   dh_arg(t4, 4), dh_arg(t5, 5));                        \
 }
@@ -72,7 +78,8 @@ static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)          \
     dh_arg_decl(t1, 1), dh_arg_decl(t2, 2), dh_arg_decl(t3, 3),         \
     dh_arg_decl(t4, 4), dh_arg_decl(t5, 5), dh_arg_decl(t6, 6))         \
 {                                                                       \
-    tcg_gen_call6(&glue(helper_info_, name), dh_retvar(ret),            \
+    tcg_gen_call6(glue(helper_info_,name).func,                         \
+                  &glue(helper_info_,name), dh_retvar(ret),             \
                   dh_arg(t1, 1), dh_arg(t2, 2), dh_arg(t3, 3),          \
                   dh_arg(t4, 4), dh_arg(t5, 5), dh_arg(t6, 6));         \
 }
@@ -84,7 +91,8 @@ static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)          \
     dh_arg_decl(t4, 4), dh_arg_decl(t5, 5), dh_arg_decl(t6, 6),         \
     dh_arg_decl(t7, 7))                                                 \
 {                                                                       \
-    tcg_gen_call7(&glue(helper_info_, name), dh_retvar(ret),            \
+    tcg_gen_call7(glue(helper_info_,name).func,                         \
+                  &glue(helper_info_,name), dh_retvar(ret),             \
                   dh_arg(t1, 1), dh_arg(t2, 2), dh_arg(t3, 3),          \
                   dh_arg(t4, 4), dh_arg(t5, 5), dh_arg(t6, 6),          \
                   dh_arg(t7, 7));                                       \
@@ -98,7 +106,8 @@ static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)           \
     dh_arg_decl(t4, 4), dh_arg_decl(t5, 5), dh_arg_decl(t6, 6),          \
     dh_arg_decl(t7, 7), dh_arg_decl(t8, 8))                              \
 {                                                                        \
-    tcg_gen_call8(&glue(helper_info_, name), dh_retvar(ret),             \
+    tcg_gen_call8(glue(helper_info_,name).func,                          \
+                  &glue(helper_info_,name), dh_retvar(ret),              \
                   dh_arg(t1, 1), dh_arg(t2, 2), dh_arg(t3, 3),           \
                   dh_arg(t4, 4), dh_arg(t5, 5), dh_arg(t6, 6),           \
                   dh_arg(t7, 7), dh_arg(t8, 8));                         \
@@ -112,7 +121,8 @@ static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)           \
     dh_arg_decl(t4, 4), dh_arg_decl(t5, 5), dh_arg_decl(t6, 6),          \
     dh_arg_decl(t7, 7), dh_arg_decl(t8, 8), dh_arg_decl(t9, 9))          \
 {                                                                        \
-    tcg_gen_call9(&glue(helper_info_, name), dh_retvar(ret),             \
+    tcg_gen_call9(glue(helper_info_,name).func,                          \
+                  &glue(helper_info_,name), dh_retvar(ret),              \
                   dh_arg(t1, 1), dh_arg(t2, 2), dh_arg(t3, 3),           \
                   dh_arg(t4, 4), dh_arg(t5, 5), dh_arg(t6, 6),           \
                   dh_arg(t7, 7), dh_arg(t8, 8), dh_arg(t9, 9));          \
@@ -127,7 +137,8 @@ static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)            \
     dh_arg_decl(t7, 7), dh_arg_decl(t8, 8), dh_arg_decl(t9, 9),           \
     dh_arg_decl(t10, 10))                                                 \
 {                                                                         \
-    tcg_gen_call10(&glue(helper_info_, name), dh_retvar(ret),             \
+    tcg_gen_call10(glue(helper_info_,name).func,                          \
+                  &glue(helper_info_,name), dh_retvar(ret),               \
                   dh_arg(t1, 1), dh_arg(t2, 2), dh_arg(t3, 3),            \
                   dh_arg(t4, 4), dh_arg(t5, 5), dh_arg(t6, 6),            \
                   dh_arg(t7, 7), dh_arg(t8, 8), dh_arg(t9, 9),            \
@@ -143,7 +154,8 @@ static inline void glue(gen_helper_, name)(dh_retvar_decl(ret)            \
     dh_arg_decl(t7, 7), dh_arg_decl(t8, 8), dh_arg_decl(t9, 9),           \
     dh_arg_decl(t10, 10), dh_arg_decl(t11, 11))                           \
 {                                                                         \
-    tcg_gen_call11(&glue(helper_info_, name), dh_retvar(ret),             \
+    tcg_gen_call11(glue(helper_info_,name).func,                          \
+                  &glue(helper_info_,name), dh_retvar(ret),               \
                   dh_arg(t1, 1), dh_arg(t2, 2), dh_arg(t3, 3),            \
                   dh_arg(t4, 4), dh_arg(t5, 5), dh_arg(t6, 6),            \
                   dh_arg(t7, 7), dh_arg(t8, 8), dh_arg(t9, 9),            \
