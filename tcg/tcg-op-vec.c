@@ -590,11 +590,17 @@ void tcg_gen_eqv_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b)
 
 void tcg_gen_not_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
 {
-    if (TCG_TARGET_HAS_not_vec) {
-        vec_gen_op2(INDEX_op_not_vec, 0, r, a);
-    } else {
+    /* TODO (SymQEMU):
+     * This instruction is not instrumented yet.
+     * For now, we make sure that alternative instructions below, which are instrumented, are always used.
+     * Directly instrumenting this instruction would improve performance of SymQEMU.
+     */
+
+    // if (TCG_TARGET_HAS_not_vec) {
+    //     vec_gen_op2(INDEX_op_not_vec, 0, r, a);
+    // } else {
         tcg_gen_xor_vec(0, r, a, tcg_constant_vec_matching(r, 0, -1));
-    }
+    // }
 }
 
 void tcg_gen_neg_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
@@ -611,7 +617,6 @@ void tcg_gen_neg_vec(unsigned vece, TCGv_vec r, TCGv_vec a)
      * Directly instrumenting this instruction would improve performance of SymQEMU.
      */
     
-
     /*if (!TCG_TARGET_HAS_neg_vec || !do_op2(vece, r, a, INDEX_op_neg_vec)) {*/
         tcg_gen_sub_vec(vece, r, tcg_constant_vec_matching(r, vece, 0), a);
     /*}*/
