@@ -7,6 +7,9 @@
 #include <sys/shm.h>
 
 #include "qemu.h"
+#include "user/tswap-target.h"
+#include "exec/page-protection.h"
+#include "user/guest-base.h"
 #include "user-internals.h"
 #include "signal-common.h"
 #include "loader.h"
@@ -966,24 +969,47 @@ const char *elf_hwcap2_str(uint32_t bit)
 #endif /* TARGET_ARM */
 
 #ifdef TARGET_SPARC
-#ifdef TARGET_SPARC64
 
-#define ELF_HWCAP  (HWCAP_SPARC_FLUSH | HWCAP_SPARC_STBAR | HWCAP_SPARC_SWAP \
-                    | HWCAP_SPARC_MULDIV | HWCAP_SPARC_V9)
-#ifndef TARGET_ABI32
-#define elf_check_arch(x) ( (x) == EM_SPARCV9 || (x) == EM_SPARC32PLUS )
+#ifndef TARGET_SPARC64
+# define ELF_CLASS  ELFCLASS32
+# define ELF_ARCH   EM_SPARC
+#elif defined(TARGET_ABI32)
+# define ELF_CLASS  ELFCLASS32
+# define elf_check_arch(x) ((x) == EM_SPARC32PLUS || (x) == EM_SPARC)
 #else
-#define elf_check_arch(x) ( (x) == EM_SPARC32PLUS || (x) == EM_SPARC )
+# define ELF_CLASS  ELFCLASS64
+# define ELF_ARCH   EM_SPARCV9
 #endif
 
-#define ELF_CLASS   ELFCLASS64
-#define ELF_ARCH    EM_SPARCV9
-#else
-#define ELF_HWCAP  (HWCAP_SPARC_FLUSH | HWCAP_SPARC_STBAR | HWCAP_SPARC_SWAP \
-                    | HWCAP_SPARC_MULDIV)
-#define ELF_CLASS   ELFCLASS32
-#define ELF_ARCH    EM_SPARC
-#endif /* TARGET_SPARC64 */
+#include "elf.h"
+
+#define ELF_HWCAP get_elf_hwcap()
+
+static uint32_t get_elf_hwcap(void)
+{
+    /* There are not many sparc32 hwcap bits -- we have all of them. */
+    uint32_t r = HWCAP_SPARC_FLUSH | HWCAP_SPARC_STBAR |
+                 HWCAP_SPARC_SWAP | HWCAP_SPARC_MULDIV;
+
+#ifdef TARGET_SPARC64
+    CPUSPARCState *env = cpu_env(thread_cpu);
+    uint32_t features = env->def.features;
+
+    r |= HWCAP_SPARC_V9 | HWCAP_SPARC_V8PLUS;
+    /* 32x32 multiply and divide are efficient. */
+    r |= HWCAP_SPARC_MUL32 | HWCAP_SPARC_DIV32;
+    /* We don't have an internal feature bit for this. */
+    r |= HWCAP_SPARC_POPC;
+    r |= features & CPU_FEATURE_FSMULD ? HWCAP_SPARC_FSMULD : 0;
+    r |= features & CPU_FEATURE_VIS1 ? HWCAP_SPARC_VIS : 0;
+    r |= features & CPU_FEATURE_VIS2 ? HWCAP_SPARC_VIS2 : 0;
+    r |= features & CPU_FEATURE_FMAF ? HWCAP_SPARC_FMAF : 0;
+    r |= features & CPU_FEATURE_VIS3 ? HWCAP_SPARC_VIS3 : 0;
+    r |= features & CPU_FEATURE_IMA ? HWCAP_SPARC_IMA : 0;
+#endif
+
+    return r;
+}
 
 static inline void init_thread(struct target_pt_regs *regs,
                                struct image_info *infop)
@@ -1505,105 +1531,6 @@ static void elf_core_copy_regs(target_elf_gregset_t *regs, const CPUMBState *env
 
 #endif /* TARGET_MICROBLAZE */
 
-#ifdef TARGET_NIOS2
-
-#define elf_check_arch(x) ((x) == EM_ALTERA_NIOS2)
-
-#define ELF_CLASS   ELFCLASS32
-#define ELF_ARCH    EM_ALTERA_NIOS2
-
-static void init_thread(struct target_pt_regs *regs, struct image_info *infop)
-{
-    regs->ea = infop->entry;
-    regs->sp = infop->start_stack;
-}
-
-#define LO_COMMPAGE  TARGET_PAGE_SIZE
-
-static bool init_guest_commpage(void)
-{
-    static const uint8_t kuser_page[4 + 2 * 64] = {
-        /* __kuser_helper_version */
-        [0x00] = 0x02, 0x00, 0x00, 0x00,
-
-        /* __kuser_cmpxchg */
-        [0x04] = 0x3a, 0x6c, 0x3b, 0x00,  /* trap 16 */
-                 0x3a, 0x28, 0x00, 0xf8,  /* ret */
-
-        /* __kuser_sigtramp */
-        [0x44] = 0xc4, 0x22, 0x80, 0x00,  /* movi r2, __NR_rt_sigreturn */
-                 0x3a, 0x68, 0x3b, 0x00,  /* trap 0 */
-    };
-
-    int host_page_size = qemu_real_host_page_size();
-    void *want, *addr;
-
-    want = g2h_untagged(LO_COMMPAGE & -host_page_size);
-    addr = mmap(want, host_page_size, PROT_READ | PROT_WRITE,
-                MAP_ANONYMOUS | MAP_PRIVATE |
-                (reserved_va ? MAP_FIXED : MAP_FIXED_NOREPLACE),
-                -1, 0);
-    if (addr == MAP_FAILED) {
-        perror("Allocating guest commpage");
-        exit(EXIT_FAILURE);
-    }
-    if (addr != want) {
-        return false;
-    }
-
-    memcpy(g2h_untagged(LO_COMMPAGE), kuser_page, sizeof(kuser_page));
-
-    if (mprotect(addr, host_page_size, PROT_READ)) {
-        perror("Protecting guest commpage");
-        exit(EXIT_FAILURE);
-    }
-
-    page_set_flags(LO_COMMPAGE, LO_COMMPAGE | ~TARGET_PAGE_MASK,
-                   PAGE_READ | PAGE_EXEC | PAGE_VALID);
-    return true;
-}
-
-#define ELF_EXEC_PAGESIZE        4096
-
-#define USE_ELF_CORE_DUMP
-#define ELF_NREG 49
-typedef target_elf_greg_t target_elf_gregset_t[ELF_NREG];
-
-/* See linux kernel: arch/mips/kernel/process.c:elf_dump_regs.  */
-static void elf_core_copy_regs(target_elf_gregset_t *regs,
-                               const CPUNios2State *env)
-{
-    int i;
-
-    (*regs)[0] = -1;
-    for (i = 1; i < 8; i++)    /* r0-r7 */
-        (*regs)[i] = tswapreg(env->regs[i + 7]);
-
-    for (i = 8; i < 16; i++)   /* r8-r15 */
-        (*regs)[i] = tswapreg(env->regs[i - 8]);
-
-    for (i = 16; i < 24; i++)  /* r16-r23 */
-        (*regs)[i] = tswapreg(env->regs[i + 7]);
-    (*regs)[24] = -1;    /* R_ET */
-    (*regs)[25] = -1;    /* R_BT */
-    (*regs)[26] = tswapreg(env->regs[R_GP]);
-    (*regs)[27] = tswapreg(env->regs[R_SP]);
-    (*regs)[28] = tswapreg(env->regs[R_FP]);
-    (*regs)[29] = tswapreg(env->regs[R_EA]);
-    (*regs)[30] = -1;    /* R_SSTATUS */
-    (*regs)[31] = tswapreg(env->regs[R_RA]);
-
-    (*regs)[32] = tswapreg(env->pc);
-
-    (*regs)[33] = -1; /* R_STATUS */
-    (*regs)[34] = tswapreg(env->regs[CR_ESTATUS]);
-
-    for (i = 35; i < 49; i++)    /* ... */
-        (*regs)[i] = -1;
-}
-
-#endif /* TARGET_NIOS2 */
-
 #ifdef TARGET_OPENRISC
 
 #define ELF_ARCH EM_OPENRISC
@@ -1963,8 +1890,8 @@ static inline void init_thread(struct target_pt_regs *regs,
 static inline void init_thread(struct target_pt_regs *regs,
                                struct image_info *infop)
 {
-    regs->iaoq[0] = infop->entry;
-    regs->iaoq[1] = infop->entry + 4;
+    regs->iaoq[0] = infop->entry | PRIV_USER;
+    regs->iaoq[1] = regs->iaoq[0] + 4;
     regs->gr[23] = 0;
     regs->gr[24] = infop->argv;
     regs->gr[25] = infop->argc;
@@ -2458,7 +2385,7 @@ static bool zero_bss(abi_ulong start_bss, abi_ulong end_bss,
     if (start_bss < align_bss) {
         int flags = page_get_flags(start_bss);
 
-        if (!(flags & PAGE_BITS)) {
+        if (!(flags & PAGE_RWX)) {
             /*
              * The whole address space of the executable was reserved
              * at the start, therefore all pages will be VALID.
@@ -3209,11 +3136,11 @@ static bool parse_elf_properties(const ImageSource *src,
     }
 
     /*
-     * The contents of a valid PT_GNU_PROPERTY is a sequence
-     * of uint32_t -- swap them all now.
+     * The contents of a valid PT_GNU_PROPERTY is a sequence of uint32_t.
+     * Swap most of them now, beyond the header and namesz.
      */
 #ifdef BSWAP_NEEDED
-    for (int i = 0; i < n / 4; i++) {
+    for (int i = 4; i < n / 4; i++) {
         bswap32s(note.data + i);
     }
 #endif
@@ -3223,15 +3150,15 @@ static bool parse_elf_properties(const ImageSource *src,
      * immediately follows nhdr and is thus at the 4th word.  Further, all
      * of the inputs to the kernel's round_up are multiples of 4.
      */
-    if (note.nhdr.n_type != NT_GNU_PROPERTY_TYPE_0 ||
-        note.nhdr.n_namesz != NOTE_NAME_SZ ||
+    if (tswap32(note.nhdr.n_type) != NT_GNU_PROPERTY_TYPE_0 ||
+        tswap32(note.nhdr.n_namesz) != NOTE_NAME_SZ ||
         note.data[3] != GNU0_MAGIC) {
         error_setg(errp, "Invalid note in PT_GNU_PROPERTY");
         return false;
     }
     off = sizeof(note.nhdr) + NOTE_NAME_SZ;
 
-    datasz = note.nhdr.n_descsz + off;
+    datasz = tswap32(note.nhdr.n_descsz) + off;
     if (datasz > n) {
         error_setg(errp, "Invalid note size in PT_GNU_PROPERTY");
         return false;
@@ -3671,7 +3598,7 @@ static const char *lookup_symbolxx(struct syminfo *s, uint64_t orig_addr)
     return "";
 }
 
-/* FIXME: This should use elf_ops.h  */
+/* FIXME: This should use elf_ops.h.inc  */
 static int symcmp(const void *s0, const void *s1)
 {
     struct elf_sym *sym0 = (struct elf_sym *)s0;
@@ -4175,8 +4102,7 @@ static void fill_elf_note_phdr(struct elf_phdr *phdr, size_t sz, off_t offset)
     bswap_phdr(phdr, 1);
 }
 
-static void fill_prstatus_note(void *data, const TaskState *ts,
-                               CPUState *cpu, int signr)
+static void fill_prstatus_note(void *data, CPUState *cpu, int signr)
 {
     /*
      * Because note memory is only aligned to 4, and target_elf_prstatus
@@ -4186,7 +4112,7 @@ static void fill_prstatus_note(void *data, const TaskState *ts,
     struct target_elf_prstatus prstatus = {
         .pr_info.si_signo = signr,
         .pr_cursig = signr,
-        .pr_pid = ts->ts_tid,
+        .pr_pid = get_task_state(cpu)->ts_tid,
         .pr_ppid = getppid(),
         .pr_pgrp = getpgrp(),
         .pr_sid = getsid(0),
@@ -4501,8 +4427,7 @@ static int elf_core_dump(int signr, const CPUArchState *env)
         CPU_FOREACH(cpu_iter) {
             dptr = fill_note(&hptr, NT_PRSTATUS, "CORE",
                              sizeof(struct target_elf_prstatus));
-            fill_prstatus_note(dptr, ts, cpu_iter,
-                               cpu_iter == cpu ? signr : 0);
+            fill_prstatus_note(dptr, cpu_iter, cpu_iter == cpu ? signr : 0);
         }
 
         if (dump_write(fd, header, data_offset) < 0) {

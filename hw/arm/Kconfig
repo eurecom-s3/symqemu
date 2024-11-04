@@ -1,5 +1,7 @@
 config ARM_VIRT
     bool
+    default y
+    depends on ARM
     imply PCI_DEVICES
     imply TEST_DEVICES
     imply VFIO_AMD_XGBE
@@ -13,6 +15,7 @@ config ARM_VIRT
     select ACPI
     select ARM_SMMUV3
     select GPIO_KEY
+    select DEVICE_TREE
     select FW_CFG_DMA
     select PCI_EXPRESS
     select PCI_EXPRESS_GENERIC_BRIDGE
@@ -263,6 +266,7 @@ config SBSA_REF
     default y
     depends on TCG && AARCH64
     imply PCI_DEVICES
+    select DEVICE_TREE
     select AHCI
     select ARM_SMMUV3
     select GPIO_KEY
@@ -345,6 +349,7 @@ config VEXPRESS
     bool
     default y
     depends on TCG && ARM
+    select DEVICE_TREE
     select A9MPCORE
     select A15MPCORE
     select ARM_MPTIMER
@@ -365,6 +370,7 @@ config ZYNQ
     select A9MPCORE
     select CADENCE # UART
     select PFLASH_CFI02
+    select PL310 # cache controller
     select PL330
     select SDHCI
     select SSI_M25P80
@@ -468,6 +474,7 @@ config B_L475E_IOT01A
     default y
     depends on TCG && ARM
     select STM32L4X5_SOC
+    imply DM163
 
 config STM32L4X5_SOC
     bool
@@ -477,6 +484,7 @@ config STM32L4X5_SOC
     select STM32L4X5_SYSCFG
     select STM32L4X5_RCC
     select STM32L4X5_GPIO
+    select STM32L4X5_USART
 
 config XLNX_ZYNQMP_ARM
     bool
@@ -485,8 +493,10 @@ config XLNX_ZYNQMP_ARM
     select AHCI
     select ARM_GIC
     select CADENCE
+    select CPU_CLUSTER
     select DDC
     select DPCD
+    select DEVICE_TREE
     select SDHCI
     select SSI
     select SSI_M25P80
@@ -503,6 +513,8 @@ config XLNX_VERSAL
     default y
     depends on TCG && AARCH64
     select ARM_GIC
+    select CPU_CLUSTER
+    select DEVICE_TREE
     select PL011
     select CADENCE
     select VIRTIO_MMIO
@@ -678,21 +690,6 @@ config ZAURUS
     select NAND
     select ECC
 
-config A9MPCORE
-    bool
-    select A9_GTIMER
-    select A9SCU       # snoop control unit
-    select ARM_GIC
-    select ARM_MPTIMER
-
-config A15MPCORE
-    bool
-    select ARM_GIC
-
-config ARM11MPCORE
-    bool
-    select ARM11SCU
-
 config ARMSSE
     bool
     select ARM_V7M
@@ -703,6 +700,7 @@ config ARMSSE
     select CMSDK_APB_DUALTIMER
     select CMSDK_APB_UART
     select CMSDK_APB_WATCHDOG
+    select CPU_CLUSTER
     select IOTKIT_SECCTL
     select IOTKIT_SYSCTL
     select IOTKIT_SYSINFO

@@ -18,7 +18,6 @@ tests = {
   'test-forward-visitor': [testqapi],
   'test-string-input-visitor': [testqapi],
   'test-string-output-visitor': [testqapi],
-  'test-opts-visitor': [testqapi],
   'test-visitor-serialization': [testqapi],
   'test-bitmap': [],
   'test-resv-mem': [],
@@ -46,12 +45,8 @@ tests = {
   'test-qemu-opts': [],
   'test-keyval': [testqapi],
   'test-logging': [],
-  'test-uuid': [],
-  'ptimer-test': ['ptimer-test-stubs.c', meson.project_source_root() / 'hw/core/ptimer.c'],
   'test-qapi-util': [],
   'test-interval-tree': [],
-  'test-xs-node': [qom],
-  'test-virtio-dmabuf': [meson.project_source_root() / 'hw/display/virtio-dmabuf.c'],
   'check-sym-runtime' : [qemuutil, qom, hwcore],
 }
 
@@ -98,16 +93,18 @@ if have_block
     'test-crypto-ivgen': [io],
     'test-crypto-afsplit': [io],
     'test-crypto-block': [io],
+    'test-timed-average': [],
+    'test-uuid': [],
   }
   if gnutls.found() and \
      tasn1.found() and \
      host_os != 'windows'
     tests += {
-      'test-crypto-tlscredsx509': ['crypto-tls-x509-helpers.c', 'pkix_asn1_tab.c',
+      'test-crypto-tlscredsx509': ['crypto-tls-x509-helpers.c',
                                    tasn1, crypto, gnutls],
-      'test-crypto-tlssession': ['crypto-tls-x509-helpers.c', 'pkix_asn1_tab.c', 'crypto-tls-psk-helpers.c',
+      'test-crypto-tlssession': ['crypto-tls-x509-helpers.c', 'crypto-tls-psk-helpers.c',
                                  tasn1, crypto, gnutls],
-      'test-io-channel-tls': ['io-channel-helpers.c', 'crypto-tls-x509-helpers.c', 'pkix_asn1_tab.c',
+      'test-io-channel-tls': ['io-channel-helpers.c', 'crypto-tls-x509-helpers.c',
                               tasn1, io, crypto, gnutls]}
   endif
   if pam.found()
@@ -132,10 +129,13 @@ endif
 
 if have_system
   tests += {
+    'ptimer-test': ['ptimer-test-stubs.c', meson.project_source_root() / 'hw/core/ptimer.c'],
     'test-iov': [],
+    'test-opts-visitor': [testqapi],
+    'test-xs-node': [qom],
+    'test-virtio-dmabuf': [meson.project_source_root() / 'hw/display/virtio-dmabuf.c'],
     'test-qmp-cmds': [testqapi],
     'test-xbzrle': [migration],
-    'test-timed-average': [],
     'test-util-sockets': ['socket-helpers.c'],
     'test-base64': [],
     'test-bufferiszero': [],
@@ -201,9 +201,10 @@ foreach test_name, extra: tests
     # embeds most of qemu objects, including SymQEMU
     lwith += [lib]
     args +=  ['-I../target/i386/',
-	      '-DCONFIG_TARGET="x86_64-linux-user-config-target.h"',
-	      '-DNEED_CPU_H',
-	      '-Ix86_64-linux-user']
+         '-DCOMPILING_PER_TARGET',
+	     '-DCONFIG_TARGET="x86_64-linux-user-config-target.h"',
+ 	     '-DNEED_CPU_H',
+ 	     '-Ix86_64-linux-user']
 
     # Create the output file for symcc results
     symcc_output=meson.current_build_dir() / 'symcc-tests-output'

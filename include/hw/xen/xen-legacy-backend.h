@@ -40,7 +40,7 @@ void xen_be_check_state(struct XenLegacyDevice *xendev);
 
 /* xen backend driver bits */
 void xen_be_init(void);
-int xen_be_register(const char *type, struct XenDevOps *ops);
+int xen_be_register(const char *type, const struct XenDevOps *ops);
 int xen_be_set_state(struct XenLegacyDevice *xendev, enum xenbus_state state);
 int xen_be_bind_evtchn(struct XenLegacyDevice *xendev);
 void xen_be_set_max_grant_refs(struct XenLegacyDevice *xendev,
@@ -65,19 +65,6 @@ static inline void xen_be_unmap_grant_ref(struct XenLegacyDevice *xendev,
 {
     return xen_be_unmap_grant_refs(xendev, ptr, &ref, 1);
 }
-
-/* actual backend drivers */
-extern struct XenDevOps xen_console_ops;      /* xen_console.c     */
-extern struct XenDevOps xen_kbdmouse_ops;     /* xen_framebuffer.c */
-extern struct XenDevOps xen_framebuffer_ops;  /* xen_framebuffer.c */
-extern struct XenDevOps xen_blkdev_ops;       /* xen_disk.c        */
-#ifdef CONFIG_VIRTFS
-extern struct XenDevOps xen_9pfs_ops;       /* xen-9p-backend.c        */
-#endif
-extern struct XenDevOps xen_netdev_ops;       /* xen_nic.c         */
-#ifdef CONFIG_USB_LIBUSB
-extern struct XenDevOps xen_usb_ops;          /* xen-usb.c         */
-#endif
 
 /* configuration (aka xenbus setup) */
 void xen_config_cleanup(void);

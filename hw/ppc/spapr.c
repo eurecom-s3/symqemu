@@ -75,6 +75,7 @@
 #include "hw/virtio/vhost-scsi-common.h"
 
 #include "exec/ram_addr.h"
+#include "exec/confidential-guest-support.h"
 #include "hw/usb.h"
 #include "qemu/config-file.h"
 #include "qemu/error-report.h"
@@ -87,9 +88,6 @@
 #include "hw/ppc/spapr_tpm_proxy.h"
 #include "hw/ppc/spapr_nvdimm.h"
 #include "hw/ppc/spapr_numa.h"
-#include "hw/ppc/pef.h"
-
-#include "monitor/monitor.h"
 
 #include <libfdt.h>
 
@@ -351,6 +349,32 @@ static void spapr_dt_pa_features(SpaprMachineState *spapr,
     }
 
     _FDT((fdt_setprop(fdt, offset, "ibm,pa-features", pa_features, pa_size)));
+}
+
+static void spapr_dt_pi_features(SpaprMachineState *spapr,
+                                 PowerPCCPU *cpu,
+                                 void *fdt, int offset)
+{
+    uint8_t pi_features[] = { 1, 0,
+        0x00 };
+
+    if (kvm_enabled() && ppc_check_compat(cpu, CPU_POWERPC_LOGICAL_3_00,
+                                          0, cpu->compat_pvr)) {
+        /*
+         * POWER9 and later CPUs with KVM run in LPAR-per-thread mode where
+         * all threads are essentially independent CPUs, and msgsndp does not
+         * work (because it is physically-addressed) and therefore is
+         * emulated by KVM, so disable it here to ensure XIVE will be used.
+         * This is both KVM and CPU implementation-specific behaviour so a KVM
+         * cap would be cleanest, but for now this works. If KVM ever permits
+         * native msgsndp execution by guests, a cap could be added at that
+         * time.
+         */
+        pi_features[2] |= 0x08; /* 4: No msgsndp */
+    }
+
+    _FDT((fdt_setprop(fdt, offset, "ibm,pi-features", pi_features,
+                      sizeof(pi_features))));
 }
 
 static hwaddr spapr_node0_size(MachineState *machine)
@@ -814,6 +838,8 @@ static void spapr_dt_cpu(CPUState *cs, void *fdt, int offset,
     }
 
     spapr_dt_pa_features(spapr, cpu, fdt, offset);
+
+    spapr_dt_pi_features(spapr, cpu, fdt, offset);
 
     _FDT((fdt_setprop_cell(fdt, offset, "ibm,chip-id",
                            cs->cpu_index / vcpus_per_socket)));
@@ -1715,7 +1741,9 @@ static void spapr_machine_reset(MachineState *machine, ShutdownCause reason)
         qemu_guest_getrandom_nofail(spapr->fdt_rng_seed, 32);
     }
 
-    pef_kvm_reset(machine->cgs, &error_fatal);
+    if (machine->cgs) {
+        confidential_guest_kvm_reset(machine->cgs, &error_fatal);
+    }
     spapr_caps_apply(spapr);
     spapr_nested_reset(spapr);
 
@@ -2167,12 +2195,13 @@ static const VMStateDescription vmstate_spapr = {
         &vmstate_spapr_cap_fwnmi,
         &vmstate_spapr_fwnmi,
         &vmstate_spapr_cap_rpt_invalidate,
+        &vmstate_spapr_cap_ail_mode_3,
         &vmstate_spapr_cap_nested_papr,
         NULL
     }
 };
 
-static int htab_save_setup(QEMUFile *f, void *opaque)
+static int htab_save_setup(QEMUFile *f, void *opaque, Error **errp)
 {
     SpaprMachineState *spapr = opaque;
 
@@ -2841,7 +2870,9 @@ static void spapr_machine_init(MachineState *machine)
     /*
      * if Secure VM (PEF) support is configured, then initialize it
      */
-    pef_kvm_init(machine->cgs, &error_fatal);
+    if (machine->cgs) {
+        confidential_guest_kvm_init(machine->cgs, &error_fatal);
+    }
 
     msi_nonbroken = true;
 
@@ -3668,7 +3699,7 @@ static void spapr_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
         return;
     }
 
-    pc_dimm_pre_plug(dimm, MACHINE(hotplug_dev), NULL, errp);
+    pc_dimm_pre_plug(dimm, MACHINE(hotplug_dev), errp);
 }
 
 struct SpaprDimmState {
@@ -3754,7 +3785,6 @@ void spapr_memory_unplug_rollback(SpaprMachineState *spapr, DeviceState *dev)
     SpaprDrc *drc;
     uint32_t nr_lmbs;
     uint64_t size, addr_start, addr;
-    g_autofree char *qapi_error = NULL;
     int i;
 
     if (!dev) {
@@ -3791,16 +3821,8 @@ void spapr_memory_unplug_rollback(SpaprMachineState *spapr, DeviceState *dev)
 
     /*
      * Tell QAPI that something happened and the memory
-     * hotunplug wasn't successful. Keep sending
-     * MEM_UNPLUG_ERROR even while sending
-     * DEVICE_UNPLUG_GUEST_ERROR until the deprecation of
-     * MEM_UNPLUG_ERROR is due.
+     * hotunplug wasn't successful.
      */
-    qapi_error = g_strdup_printf("Memory hotunplug rejected by the guest "
-                                 "for device %s", dev->id);
-
-    qapi_event_send_mem_unplug_error(dev->id ? : "", qapi_error);
-
     qapi_event_send_device_unplug_guest_error(dev->id,
                                               dev->canonical_path);
 }
@@ -4503,14 +4525,13 @@ static ICPState *spapr_icp_get(XICSFabric *xi, int vcpu_id)
     return cpu ? spapr_cpu_state(cpu)->icp : NULL;
 }
 
-static void spapr_pic_print_info(InterruptStatsProvider *obj,
-                                 Monitor *mon)
+static void spapr_pic_print_info(InterruptStatsProvider *obj, GString *buf)
 {
     SpaprMachineState *spapr = SPAPR_MACHINE(obj);
 
-    spapr_irq_print_info(spapr, mon);
-    monitor_printf(mon, "irqchip: %s\n",
-                   kvm_irqchip_in_kernel() ? "in-kernel" : "emulated");
+    spapr_irq_print_info(spapr, buf);
+    g_string_append_printf(buf, "irqchip: %s\n",
+                           kvm_irqchip_in_kernel() ? "in-kernel" : "emulated");
 }
 
 /*
@@ -4784,36 +4805,58 @@ static void spapr_machine_latest_class_options(MachineClass *mc)
     mc->is_default = true;
 }
 
-#define DEFINE_SPAPR_MACHINE(suffix, verstr, latest)                 \
-    static void spapr_machine_##suffix##_class_init(ObjectClass *oc, \
-                                                    void *data)      \
+#define DEFINE_SPAPR_MACHINE_IMPL(latest, ...)                       \
+    static void MACHINE_VER_SYM(class_init, spapr, __VA_ARGS__)(     \
+        ObjectClass *oc,                                             \
+        void *data)                                                  \
     {                                                                \
         MachineClass *mc = MACHINE_CLASS(oc);                        \
-        spapr_machine_##suffix##_class_options(mc);                  \
+        MACHINE_VER_SYM(class_options, spapr, __VA_ARGS__)(mc);      \
+        MACHINE_VER_DEPRECATION(__VA_ARGS__);                        \
         if (latest) {                                                \
             spapr_machine_latest_class_options(mc);                  \
         }                                                            \
     }                                                                \
-    static const TypeInfo spapr_machine_##suffix##_info = {          \
-        .name = MACHINE_TYPE_NAME("pseries-" verstr),                \
-        .parent = TYPE_SPAPR_MACHINE,                                \
-        .class_init = spapr_machine_##suffix##_class_init,           \
-    };                                                               \
-    static void spapr_machine_register_##suffix(void)                \
+    static const TypeInfo MACHINE_VER_SYM(info, spapr, __VA_ARGS__) = \
     {                                                                \
-        type_register(&spapr_machine_##suffix##_info);               \
+        .name = MACHINE_VER_TYPE_NAME("pseries", __VA_ARGS__),       \
+        .parent = TYPE_SPAPR_MACHINE,                                \
+        .class_init = MACHINE_VER_SYM(class_init, spapr, __VA_ARGS__), \
+    };                                                               \
+    static void MACHINE_VER_SYM(register, spapr, __VA_ARGS__)(void)  \
+    {                                                                \
+        MACHINE_VER_DELETION(__VA_ARGS__);                           \
+        type_register(&MACHINE_VER_SYM(info, spapr, __VA_ARGS__));   \
     }                                                                \
-    type_init(spapr_machine_register_##suffix)
+    type_init(MACHINE_VER_SYM(register, spapr, __VA_ARGS__))
+
+#define DEFINE_SPAPR_MACHINE_AS_LATEST(major, minor) \
+    DEFINE_SPAPR_MACHINE_IMPL(true, major, minor)
+#define DEFINE_SPAPR_MACHINE(major, minor) \
+    DEFINE_SPAPR_MACHINE_IMPL(false, major, minor)
+#define DEFINE_SPAPR_MACHINE_TAGGED(major, minor, tag) \
+    DEFINE_SPAPR_MACHINE_IMPL(false, major, minor, _, tag)
+
+/*
+ * pseries-9.1
+ */
+static void spapr_machine_9_1_class_options(MachineClass *mc)
+{
+    /* Defaults for the latest behaviour inherited from the base class */
+}
+
+DEFINE_SPAPR_MACHINE_AS_LATEST(9, 1);
 
 /*
  * pseries-9.0
  */
 static void spapr_machine_9_0_class_options(MachineClass *mc)
 {
-    /* Defaults for the latest behaviour inherited from the base class */
+    spapr_machine_9_1_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_9_0, hw_compat_9_0_len);
 }
 
-DEFINE_SPAPR_MACHINE(9_0, "9.0", true);
+DEFINE_SPAPR_MACHINE(9, 0);
 
 /*
  * pseries-8.2
@@ -4824,7 +4867,7 @@ static void spapr_machine_8_2_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_8_2, hw_compat_8_2_len);
 }
 
-DEFINE_SPAPR_MACHINE(8_2, "8.2", false);
+DEFINE_SPAPR_MACHINE(8, 2);
 
 /*
  * pseries-8.1
@@ -4835,7 +4878,7 @@ static void spapr_machine_8_1_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_8_1, hw_compat_8_1_len);
 }
 
-DEFINE_SPAPR_MACHINE(8_1, "8.1", false);
+DEFINE_SPAPR_MACHINE(8, 1);
 
 /*
  * pseries-8.0
@@ -4846,7 +4889,7 @@ static void spapr_machine_8_0_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_8_0, hw_compat_8_0_len);
 }
 
-DEFINE_SPAPR_MACHINE(8_0, "8.0", false);
+DEFINE_SPAPR_MACHINE(8, 0);
 
 /*
  * pseries-7.2
@@ -4857,7 +4900,7 @@ static void spapr_machine_7_2_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_7_2, hw_compat_7_2_len);
 }
 
-DEFINE_SPAPR_MACHINE(7_2, "7.2", false);
+DEFINE_SPAPR_MACHINE(7, 2);
 
 /*
  * pseries-7.1
@@ -4868,7 +4911,7 @@ static void spapr_machine_7_1_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_7_1, hw_compat_7_1_len);
 }
 
-DEFINE_SPAPR_MACHINE(7_1, "7.1", false);
+DEFINE_SPAPR_MACHINE(7, 1);
 
 /*
  * pseries-7.0
@@ -4879,7 +4922,7 @@ static void spapr_machine_7_0_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_7_0, hw_compat_7_0_len);
 }
 
-DEFINE_SPAPR_MACHINE(7_0, "7.0", false);
+DEFINE_SPAPR_MACHINE(7, 0);
 
 /*
  * pseries-6.2
@@ -4890,7 +4933,7 @@ static void spapr_machine_6_2_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_6_2, hw_compat_6_2_len);
 }
 
-DEFINE_SPAPR_MACHINE(6_2, "6.2", false);
+DEFINE_SPAPR_MACHINE(6, 2);
 
 /*
  * pseries-6.1
@@ -4905,7 +4948,7 @@ static void spapr_machine_6_1_class_options(MachineClass *mc)
     mc->smp_props.prefer_sockets = true;
 }
 
-DEFINE_SPAPR_MACHINE(6_1, "6.1", false);
+DEFINE_SPAPR_MACHINE(6, 1);
 
 /*
  * pseries-6.0
@@ -4916,7 +4959,7 @@ static void spapr_machine_6_0_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_6_0, hw_compat_6_0_len);
 }
 
-DEFINE_SPAPR_MACHINE(6_0, "6.0", false);
+DEFINE_SPAPR_MACHINE(6, 0);
 
 /*
  * pseries-5.2
@@ -4927,7 +4970,7 @@ static void spapr_machine_5_2_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_5_2, hw_compat_5_2_len);
 }
 
-DEFINE_SPAPR_MACHINE(5_2, "5.2", false);
+DEFINE_SPAPR_MACHINE(5, 2);
 
 /*
  * pseries-5.1
@@ -4941,7 +4984,7 @@ static void spapr_machine_5_1_class_options(MachineClass *mc)
     smc->pre_5_2_numa_associativity = true;
 }
 
-DEFINE_SPAPR_MACHINE(5_1, "5.1", false);
+DEFINE_SPAPR_MACHINE(5, 1);
 
 /*
  * pseries-5.0
@@ -4960,7 +5003,7 @@ static void spapr_machine_5_0_class_options(MachineClass *mc)
     smc->pre_5_1_assoc_refpoints = true;
 }
 
-DEFINE_SPAPR_MACHINE(5_0, "5.0", false);
+DEFINE_SPAPR_MACHINE(5, 0);
 
 /*
  * pseries-4.2
@@ -4977,7 +5020,7 @@ static void spapr_machine_4_2_class_options(MachineClass *mc)
     mc->nvdimm_supported = false;
 }
 
-DEFINE_SPAPR_MACHINE(4_2, "4.2", false);
+DEFINE_SPAPR_MACHINE(4, 2);
 
 /*
  * pseries-4.1
@@ -4997,7 +5040,7 @@ static void spapr_machine_4_1_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, compat, G_N_ELEMENTS(compat));
 }
 
-DEFINE_SPAPR_MACHINE(4_1, "4.1", false);
+DEFINE_SPAPR_MACHINE(4, 1);
 
 /*
  * pseries-4.0
@@ -5024,7 +5067,7 @@ static void spapr_machine_4_0_class_options(MachineClass *mc)
     smc->pre_4_1_migration = true;
 }
 
-DEFINE_SPAPR_MACHINE(4_0, "4.0", false);
+DEFINE_SPAPR_MACHINE(4, 0);
 
 /*
  * pseries-3.1
@@ -5046,7 +5089,7 @@ static void spapr_machine_3_1_class_options(MachineClass *mc)
     smc->default_caps.caps[SPAPR_CAP_LARGE_DECREMENTER] = SPAPR_CAP_OFF;
 }
 
-DEFINE_SPAPR_MACHINE(3_1, "3.1", false);
+DEFINE_SPAPR_MACHINE(3, 1);
 
 /*
  * pseries-3.0
@@ -5064,7 +5107,7 @@ static void spapr_machine_3_0_class_options(MachineClass *mc)
     smc->irq = &spapr_irq_xics_legacy;
 }
 
-DEFINE_SPAPR_MACHINE(3_0, "3.0", false);
+DEFINE_SPAPR_MACHINE(3, 0);
 
 /*
  * pseries-2.12
@@ -5089,7 +5132,7 @@ static void spapr_machine_2_12_class_options(MachineClass *mc)
     smc->default_caps.caps[SPAPR_CAP_HPT_MAXPAGESIZE] = 0;
 }
 
-DEFINE_SPAPR_MACHINE(2_12, "2.12", false);
+DEFINE_SPAPR_MACHINE(2, 12);
 
 static void spapr_machine_2_12_sxxm_class_options(MachineClass *mc)
 {
@@ -5101,7 +5144,7 @@ static void spapr_machine_2_12_sxxm_class_options(MachineClass *mc)
     smc->default_caps.caps[SPAPR_CAP_IBS] = SPAPR_CAP_FIXED_CCD;
 }
 
-DEFINE_SPAPR_MACHINE(2_12_sxxm, "2.12-sxxm", false);
+DEFINE_SPAPR_MACHINE_TAGGED(2, 12, sxxm);
 
 /*
  * pseries-2.11
@@ -5114,10 +5157,9 @@ static void spapr_machine_2_11_class_options(MachineClass *mc)
     spapr_machine_2_12_class_options(mc);
     smc->default_caps.caps[SPAPR_CAP_HTM] = SPAPR_CAP_ON;
     compat_props_add(mc->compat_props, hw_compat_2_11, hw_compat_2_11_len);
-    mc->deprecation_reason = "old and not maintained - use a 2.12+ version";
 }
 
-DEFINE_SPAPR_MACHINE(2_11, "2.11", false);
+DEFINE_SPAPR_MACHINE(2, 11);
 
 /*
  * pseries-2.10
@@ -5129,7 +5171,7 @@ static void spapr_machine_2_10_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_2_10, hw_compat_2_10_len);
 }
 
-DEFINE_SPAPR_MACHINE(2_10, "2.10", false);
+DEFINE_SPAPR_MACHINE(2, 10);
 
 /*
  * pseries-2.9
@@ -5149,7 +5191,7 @@ static void spapr_machine_2_9_class_options(MachineClass *mc)
     smc->resize_hpt_default = SPAPR_RESIZE_HPT_DISABLED;
 }
 
-DEFINE_SPAPR_MACHINE(2_9, "2.9", false);
+DEFINE_SPAPR_MACHINE(2, 9);
 
 /*
  * pseries-2.8
@@ -5167,7 +5209,7 @@ static void spapr_machine_2_8_class_options(MachineClass *mc)
     mc->numa_mem_align_shift = 23;
 }
 
-DEFINE_SPAPR_MACHINE(2_8, "2.8", false);
+DEFINE_SPAPR_MACHINE(2, 8);
 
 /*
  * pseries-2.7
@@ -5242,7 +5284,7 @@ static void spapr_machine_2_7_class_options(MachineClass *mc)
     smc->phb_placement = phb_placement_2_7;
 }
 
-DEFINE_SPAPR_MACHINE(2_7, "2.7", false);
+DEFINE_SPAPR_MACHINE(2, 7);
 
 /*
  * pseries-2.6
@@ -5260,7 +5302,7 @@ static void spapr_machine_2_6_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, compat, G_N_ELEMENTS(compat));
 }
 
-DEFINE_SPAPR_MACHINE(2_6, "2.6", false);
+DEFINE_SPAPR_MACHINE(2, 6);
 
 /*
  * pseries-2.5
@@ -5279,7 +5321,7 @@ static void spapr_machine_2_5_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, compat, G_N_ELEMENTS(compat));
 }
 
-DEFINE_SPAPR_MACHINE(2_5, "2.5", false);
+DEFINE_SPAPR_MACHINE(2, 5);
 
 /*
  * pseries-2.4
@@ -5294,7 +5336,7 @@ static void spapr_machine_2_4_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_2_4, hw_compat_2_4_len);
 }
 
-DEFINE_SPAPR_MACHINE(2_4, "2.4", false);
+DEFINE_SPAPR_MACHINE(2, 4);
 
 /*
  * pseries-2.3
@@ -5309,7 +5351,7 @@ static void spapr_machine_2_3_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, hw_compat_2_3, hw_compat_2_3_len);
     compat_props_add(mc->compat_props, compat, G_N_ELEMENTS(compat));
 }
-DEFINE_SPAPR_MACHINE(2_3, "2.3", false);
+DEFINE_SPAPR_MACHINE(2, 3);
 
 /*
  * pseries-2.2
@@ -5326,7 +5368,7 @@ static void spapr_machine_2_2_class_options(MachineClass *mc)
     compat_props_add(mc->compat_props, compat, G_N_ELEMENTS(compat));
     mc->default_machine_opts = "modern-hotplug-events=off,suppress-vmdesc=on";
 }
-DEFINE_SPAPR_MACHINE(2_2, "2.2", false);
+DEFINE_SPAPR_MACHINE(2, 2);
 
 /*
  * pseries-2.1
@@ -5337,7 +5379,7 @@ static void spapr_machine_2_1_class_options(MachineClass *mc)
     spapr_machine_2_2_class_options(mc);
     compat_props_add(mc->compat_props, hw_compat_2_1, hw_compat_2_1_len);
 }
-DEFINE_SPAPR_MACHINE(2_1, "2.1", false);
+DEFINE_SPAPR_MACHINE(2, 1);
 
 static void spapr_machine_register_types(void)
 {

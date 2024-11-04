@@ -38,6 +38,7 @@
 #include "qemu/help_option.h"
 #include "qemu/module.h"
 #include "qemu/plugin.h"
+#include "user/guest-base.h"
 #include "exec/exec-all.h"
 #include "exec/gdbstub.h"
 #include "gdbstub/user.h"
@@ -760,8 +761,9 @@ int main(int argc, char **argv, char **envp)
     /*
      * Manage binfmt-misc open-binary flag
      */
+    errno = 0;
     execfd = qemu_getauxval(AT_EXECFD);
-    if (execfd == 0) {
+    if (errno != 0) {
         execfd = open(exec_path, O_RDONLY);
         if (execfd < 0) {
             printf("Error while loading %s: %s\n", exec_path, strerror(errno));
@@ -819,10 +821,10 @@ int main(int argc, char **argv, char **envp)
     thread_cpu = cpu;
 
     /*
-     * Reserving too much vm space via mmap can run into problems
-     * with rlimits, oom due to page table creation, etc.  We will
-     * still try it, if directed by the command-line option, but
-     * not by default.
+     * Reserving too much vm space via mmap can run into problems with rlimits,
+     * oom due to page table creation, etc.  We will still try it, if directed
+     * by the command-line option, but not by default. Unless we're running a
+     * target address space of 32 or fewer bits on a host with 64 bits.
      */
     max_reserved_va = MAX_RESERVED_VA(cpu);
     if (reserved_va != 0) {
@@ -848,6 +850,7 @@ int main(int argc, char **argv, char **envp)
      */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wtype-limits"
+#pragma GCC diagnostic ignored "-Wtautological-compare"
 
     /*
      * Select an initial value for task_unmapped_base that is in range.

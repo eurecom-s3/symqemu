@@ -325,9 +325,11 @@ static bool tcg_target_const_match(int64_t sval, int ct,
             if ((uval & ~0xffff) == 0 || (uval & ~0xffff0000ull) == 0) {
                 return 1;
             }
-            if (TCG_TARGET_REG_BITS == 32 || type == TCG_TYPE_I32
-                ? mask_operand(uval, &mb, &me)
-                : mask64_operand(uval << clz64(uval), &mb, &me)) {
+            if (uval == (uint32_t)uval && mask_operand(uval, &mb, &me)) {
+                return 1;
+            }
+            if (TCG_TARGET_REG_BITS == 64 &&
+                mask64_operand(uval << clz64(uval), &mb, &me)) {
                 return 1;
             }
             return 0;
@@ -1749,8 +1751,6 @@ static void tcg_out_test(TCGContext *s, TCGReg dest, TCGReg arg1, TCGArg arg2,
 
     if (type == TCG_TYPE_I32) {
         arg2 = (uint32_t)arg2;
-    } else if (arg2 == (uint32_t)arg2) {
-        type = TCG_TYPE_I32;
     }
 
     if ((arg2 & ~0xffff) == 0) {
@@ -1761,12 +1761,11 @@ static void tcg_out_test(TCGContext *s, TCGReg dest, TCGReg arg1, TCGArg arg2,
         tcg_out32(s, ANDIS | SAI(arg1, dest, arg2 >> 16));
         return;
     }
-    if (TCG_TARGET_REG_BITS == 32 || type == TCG_TYPE_I32) {
-        if (mask_operand(arg2, &mb, &me)) {
-            tcg_out_rlw_rc(s, RLWINM, dest, arg1, 0, mb, me, rc);
-            return;
-        }
-    } else {
+    if (arg2 == (uint32_t)arg2 && mask_operand(arg2, &mb, &me)) {
+        tcg_out_rlw_rc(s, RLWINM, dest, arg1, 0, mb, me, rc);
+        return;
+    }
+    if (TCG_TARGET_REG_BITS == 64) {
         int sh = clz64(arg2);
         if (mask64_operand(arg2 << sh, &mb, &me)) {
             tcg_out_rld_rc(s, RLDICR, dest, arg1, sh, me, rc);
@@ -2618,8 +2617,8 @@ static TCGLabelQemuLdst *prepare_host_addr(TCGContext *s, HostAddress *h,
 
     if (TCG_TARGET_REG_BITS == 64 && addr_type == TCG_TYPE_I32) {
         /* Zero-extend the guest address for use in the host address. */
-        tcg_out_ext32u(s, TCG_REG_R0, addrlo);
-        h->index = TCG_REG_R0;
+        tcg_out_ext32u(s, TCG_REG_TMP2, addrlo);
+        h->index = TCG_REG_TMP2;
     } else {
         h->index = addrlo;
     }
@@ -2705,9 +2704,9 @@ static void tcg_out_qemu_st(TCGContext *s, TCGReg datalo, TCGReg datahi,
         uint32_t insn = qemu_stx_opc[opc & (MO_BSWAP | MO_SIZE)];
         if (!have_isa_2_06 && insn == STDBRX) {
             tcg_out32(s, STWBRX | SAB(datalo, h.base, h.index));
-            tcg_out32(s, ADDI | TAI(TCG_REG_TMP1, h.index, 4));
+            tcg_out32(s, ADDI | TAI(TCG_REG_TMP2, h.index, 4));
             tcg_out_shri64(s, TCG_REG_R0, datalo, 32);
-            tcg_out32(s, STWBRX | SAB(TCG_REG_R0, h.base, TCG_REG_TMP1));
+            tcg_out32(s, STWBRX | SAB(TCG_REG_R0, h.base, TCG_REG_TMP2));
         } else {
             tcg_out32(s, insn | SAB(datalo, h.base, h.index));
         }

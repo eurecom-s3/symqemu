@@ -17,6 +17,7 @@
 #include "hw/loader.h"
 #include "qapi/error.h"
 #include "qapi/qapi-visit-machine.h"
+#include "qemu/madvise.h"
 #include "qom/object_interfaces.h"
 #include "sysemu/cpus.h"
 #include "sysemu/sysemu.h"
@@ -32,6 +33,16 @@
 #include "hw/virtio/virtio-net.h"
 #include "hw/virtio/virtio-iommu.h"
 #include "audio/audio.h"
+
+GlobalProperty hw_compat_9_0[] = {
+    {"arm-cpu", "backcompat-cntfrq", "true" },
+    { "scsi-hd", "migrate-emulated-scsi-request", "false" },
+    { "scsi-cd", "migrate-emulated-scsi-request", "false" },
+    {"vfio-pci", "skip-vsc-check", "false" },
+    { "virtio-pci", "x-pcie-pm-no-soft-reset", "off" },
+    {"sd-card", "spec_version", "2" },
+};
+const size_t hw_compat_9_0_len = G_N_ELEMENTS(hw_compat_9_0);
 
 GlobalProperty hw_compat_8_2[] = {
     { "migration", "zero-page-detection", "legacy"},
@@ -188,7 +199,6 @@ GlobalProperty hw_compat_3_0[] = {};
 const size_t hw_compat_3_0_len = G_N_ELEMENTS(hw_compat_3_0);
 
 GlobalProperty hw_compat_2_12[] = {
-    { "migration", "decompress-error-check", "off" },
     { "hda-audio", "use-timer", "false" },
     { "cirrus-vga", "global-vmstate", "true" },
     { "VGA", "global-vmstate", "true" },
@@ -260,8 +270,6 @@ GlobalProperty hw_compat_2_5[] = {
 const size_t hw_compat_2_5_len = G_N_ELEMENTS(hw_compat_2_5);
 
 GlobalProperty hw_compat_2_4[] = {
-    /* Optional because the 'scsi' property is Linux-only */
-    { "virtio-blk-device", "scsi", "true", .optional = true },
     { "e1000", "extra_mac_registers", "off" },
     { "virtio-pci", "x-disable-pcie", "on" },
     { "virtio-pci", "migrate-extra", "off" },
@@ -424,6 +432,10 @@ static void machine_set_dump_guest_core(Object *obj, bool value, Error **errp)
 {
     MachineState *ms = MACHINE(obj);
 
+    if (!value && QEMU_MADV_DONTDUMP == QEMU_MADV_INVALID) {
+        error_setg(errp, "Dumping guest memory cannot be disabled on this host");
+        return;
+    }
     ms->dump_guest_core = value;
 }
 
@@ -438,6 +450,10 @@ static void machine_set_mem_merge(Object *obj, bool value, Error **errp)
 {
     MachineState *ms = MACHINE(obj);
 
+    if (value && QEMU_MADV_MERGEABLE == QEMU_MADV_INVALID) {
+        error_setg(errp, "Memory merging is not supported on this host");
+        return;
+    }
     ms->mem_merge = value;
 }
 
@@ -798,6 +814,11 @@ void machine_set_cpu_numa_node(MachineState *machine,
             return;
         }
 
+        if (props->has_module_id && !slot->props.has_module_id) {
+            error_setg(errp, "module-id is not supported");
+            return;
+        }
+
         if (props->has_cluster_id && !slot->props.has_cluster_id) {
             error_setg(errp, "cluster-id is not supported");
             return;
@@ -819,6 +840,11 @@ void machine_set_cpu_numa_node(MachineState *machine,
         }
 
         if (props->has_core_id && props->core_id != slot->props.core_id) {
+                continue;
+        }
+
+        if (props->has_module_id &&
+            props->module_id != slot->props.module_id) {
                 continue;
         }
 
@@ -879,6 +905,7 @@ static void machine_get_smp(Object *obj, Visitor *v, const char *name,
         .has_sockets = true, .sockets = ms->smp.sockets,
         .has_dies = true, .dies = ms->smp.dies,
         .has_clusters = true, .clusters = ms->smp.clusters,
+        .has_modules = true, .modules = ms->smp.modules,
         .has_cores = true, .cores = ms->smp.cores,
         .has_threads = true, .threads = ms->smp.threads,
         .has_maxcpus = true, .maxcpus = ms->smp.max_cpus,
@@ -978,6 +1005,12 @@ static void machine_class_init(ObjectClass *oc, void *data)
     /* Default 128 MB as guest ram size */
     mc->default_ram_size = 128 * MiB;
     mc->rom_file_has_mr = true;
+    /*
+     * SMBIOS 3.1.0 7.18.5 Memory Device — Extended Size
+     * use max possible value that could be encoded into
+     * 'Extended Size' field (2047Tb).
+     */
+    mc->smbios_memory_device_size = 2047 * TiB;
 
     /* numa node memory size aligned on 8MB by default.
      * On Linux, each node's border has to be 8MB aligned
@@ -1115,7 +1148,7 @@ static void machine_initfn(Object *obj)
     container_get(obj, "/peripheral-anon");
 
     ms->dump_guest_core = true;
-    ms->mem_merge = true;
+    ms->mem_merge = (QEMU_MADV_MERGEABLE != QEMU_MADV_INVALID);
     ms->enable_graphics = true;
     ms->kernel_cmdline = g_strdup("");
     ms->ram_size = mc->default_ram_size;
@@ -1155,6 +1188,7 @@ static void machine_initfn(Object *obj)
     ms->smp.sockets = 1;
     ms->smp.dies = 1;
     ms->smp.clusters = 1;
+    ms->smp.modules = 1;
     ms->smp.cores = 1;
     ms->smp.threads = 1;
 
@@ -1199,6 +1233,11 @@ bool machine_mem_merge(MachineState *machine)
     return machine->mem_merge;
 }
 
+bool machine_require_guest_memfd(MachineState *machine)
+{
+    return machine->cgs && machine->cgs->require_guest_memfd;
+}
+
 static char *cpu_slot_to_string(const CPUArchId *cpu)
 {
     GString *s = g_string_new(NULL);
@@ -1216,6 +1255,12 @@ static char *cpu_slot_to_string(const CPUArchId *cpu)
             g_string_append_printf(s, ", ");
         }
         g_string_append_printf(s, "cluster-id: %"PRId64, cpu->props.cluster_id);
+    }
+    if (cpu->props.has_module_id) {
+        if (s->len) {
+            g_string_append_printf(s, ", ");
+        }
+        g_string_append_printf(s, "module-id: %"PRId64, cpu->props.module_id);
     }
     if (cpu->props.has_core_id) {
         if (s->len) {

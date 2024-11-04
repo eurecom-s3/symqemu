@@ -981,7 +981,7 @@ int vnc_send_framebuffer_update(VncState *vs, int x, int y, int w, int h)
 }
 
 static void vnc_mouse_set(DisplayChangeListener *dcl,
-                          int x, int y, int visible)
+                          int x, int y, bool visible)
 {
     /* can we ask the client(s) to move the pointer ??? */
 }
@@ -1935,7 +1935,7 @@ static void do_key_event(VncState *vs, int down, int keycode, int sym)
     }
 
     qkbd_state_key_event(vs->vd->kbd, qcode, down);
-    if (!qemu_console_is_graphic(vs->vd->dcl.con)) {
+    if (QEMU_IS_TEXT_CONSOLE(vs->vd->dcl.con)) {
         QemuTextConsole *con = QEMU_TEXT_CONSOLE(vs->vd->dcl.con);
         bool numlock = qkbd_state_modifier_get(vs->vd->kbd, QKBD_MOD_NUMLOCK);
         bool control = qkbd_state_modifier_get(vs->vd->kbd, QKBD_MOD_CTRL);
@@ -3733,11 +3733,6 @@ static int vnc_display_get_address(const char *addrstr,
     if (strncmp(addrstr, "unix:", 5) == 0) {
         addr->type = SOCKET_ADDRESS_TYPE_UNIX;
         addr->u.q_unix.path = g_strdup(addrstr + 5);
-
-        if (websocket) {
-            error_setg(errp, "UNIX sockets not supported with websock");
-            goto cleanup;
-        }
 
         if (to) {
             error_setg(errp, "Port range not support with UNIX socket");

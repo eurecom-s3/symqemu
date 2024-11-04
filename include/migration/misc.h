@@ -45,12 +45,6 @@ bool migrate_ram_is_ignored(RAMBlock *block);
 
 /* migration/block.c */
 
-#ifdef CONFIG_LIVE_BLOCK_MIGRATION
-void blk_mig_init(void);
-#else
-static inline void blk_mig_init(void) {}
-#endif
-
 AnnounceParameters *migrate_announce_params(void);
 /* migration/savevm.c */
 
@@ -103,7 +97,7 @@ void migration_add_notifier_mode(NotifierWithReturn *notify,
 
 void migration_remove_notifier(NotifierWithReturn *notify);
 bool migration_is_running(void);
-void migration_file_set_error(int err);
+void migration_file_set_error(int ret, Error *err);
 
 /* True if incoming migration entered POSTCOPY_INCOMING_DISCARD */
 bool migration_in_incoming_postcopy(void);

@@ -152,7 +152,7 @@ static void parts64_default_nan(FloatParts64 *p, float_status *status)
     /*
      * This case is true for Alpha, ARM, MIPS, OpenRISC, PPC, RISC-V,
      * S390, SH4, TriCore, and Xtensa.  Our other supported targets,
-     * CRIS and Nios2, do not have floating-point.
+     * such CRIS, do not have floating-point.
      */
     if (snan_bit_is_one(status)) {
         /* set all bits other than msb */
@@ -447,6 +447,17 @@ static int pickNaN(FloatClass a_cls, FloatClass b_cls,
     } else {
         return 1;
     }
+#elif defined(TARGET_SPARC)
+    /* Prefer SNaN over QNaN, order B then A. */
+    if (is_snan(b_cls)) {
+        return 1;
+    } else if (is_snan(a_cls)) {
+        return 0;
+    } else if (is_qnan(b_cls)) {
+        return 1;
+    } else {
+        return 0;
+    }
 #elif defined(TARGET_XTENSA)
     /*
      * Xtensa has two NaN propagation modes.
@@ -624,6 +635,26 @@ static int pickNaNMulAdd(FloatClass a_cls, FloatClass b_cls, FloatClass c_cls,
         float_raise(float_flag_invalid | float_flag_invalid_imz, status);
     }
     return 3; /* default NaN */
+#elif defined(TARGET_SPARC)
+    /* For (inf,0,nan) return c. */
+    if (infzero) {
+        float_raise(float_flag_invalid | float_flag_invalid_imz, status);
+        return 2;
+    }
+    /* Prefer SNaN over QNaN, order C, B, A. */
+    if (is_snan(c_cls)) {
+        return 2;
+    } else if (is_snan(b_cls)) {
+        return 1;
+    } else if (is_snan(a_cls)) {
+        return 0;
+    } else if (is_qnan(c_cls)) {
+        return 2;
+    } else if (is_qnan(b_cls)) {
+        return 1;
+    } else {
+        return 0;
+    }
 #elif defined(TARGET_XTENSA)
     /*
      * For Xtensa, the (inf,zero,nan) case sets InvalidOp and returns

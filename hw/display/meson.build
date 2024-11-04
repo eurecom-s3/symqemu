@@ -3,7 +3,7 @@ hw_display_modules = {}
 system_ss.add(when: 'CONFIG_DDC', if_true: files('i2c-ddc.c'))
 system_ss.add(when: 'CONFIG_EDID', if_true: files('edid-generate.c', 'edid-region.c'))
 
-system_ss.add(when: 'CONFIG_FW_CFG_DMA', if_true: files('ramfb.c'))
+system_ss.add(when: 'CONFIG_FW_CFG_DMA', if_true: files('ramfb.c'), if_false: files('ramfb-stubs.c'))
 system_ss.add(when: 'CONFIG_FW_CFG_DMA', if_true: files('ramfb-standalone.c'))
 
 system_ss.add(when: 'CONFIG_VGA_CIRRUS', if_true: files('cirrus_vga.c'))
@@ -38,6 +38,7 @@ system_ss.add(when: 'CONFIG_NEXTCUBE', if_true: files('next-fb.c'))
 
 system_ss.add(when: 'CONFIG_VGA', if_true: files('vga.c'))
 system_ss.add(when: 'CONFIG_VIRTIO', if_true: files('virtio-dmabuf.c'))
+system_ss.add(when: 'CONFIG_DM163', if_true: files('dm163.c'))
 
 if (config_all_devices.has_key('CONFIG_VGA_CIRRUS') or
     config_all_devices.has_key('CONFIG_VGA_PCI') or
@@ -124,12 +125,14 @@ if config_all_devices.has_key('CONFIG_VIRTIO_VGA')
                                          if_false: files('acpi-vga-stub.c'))
   hw_display_modules += {'virtio-vga': virtio_vga_ss}
 
-  virtio_vga_gl_ss = ss.source_set()
-  virtio_vga_gl_ss.add(when: ['CONFIG_VIRTIO_VGA', virgl, opengl],
-                       if_true: [files('virtio-vga-gl.c'), pixman])
-  virtio_vga_gl_ss.add(when: 'CONFIG_ACPI', if_true: files('acpi-vga.c'),
-                                            if_false: files('acpi-vga-stub.c'))
-  hw_display_modules += {'virtio-vga-gl': virtio_vga_gl_ss}
+  if virgl.found() and opengl.found()
+    virtio_vga_gl_ss = ss.source_set()
+    virtio_vga_gl_ss.add(when: ['CONFIG_VIRTIO_VGA', virgl, opengl],
+                         if_true: [files('virtio-vga-gl.c'), pixman])
+    virtio_vga_gl_ss.add(when: 'CONFIG_ACPI', if_true: files('acpi-vga.c'),
+                                              if_false: files('acpi-vga-stub.c'))
+    hw_display_modules += {'virtio-vga-gl': virtio_vga_gl_ss}
+  endif
 
   if rutabaga.found()
     virtio_vga_rutabaga_ss = ss.source_set()

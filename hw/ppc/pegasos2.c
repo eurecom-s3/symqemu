@@ -195,8 +195,8 @@ static void pegasos2_init(MachineState *machine)
     object_property_add_alias(OBJECT(machine), "rtc-time",
                               object_resolve_path_component(via, "rtc"),
                               "date");
-    qdev_connect_gpio_out(DEVICE(via), 0,
-                          qdev_get_gpio_in_named(pm->mv, "gpp", 31));
+    qdev_connect_gpio_out_named(DEVICE(via), "intr", 0,
+                                qdev_get_gpio_in_named(pm->mv, "gpp", 31));
 
     dev = PCI_DEVICE(object_resolve_path_component(via, "ide"));
     pci_ide_create_devs(dev);
@@ -400,6 +400,7 @@ static void pegasos2_machine_reset(MachineState *machine, ShutdownCause reason)
     machine->fdt = fdt;
 
     pm->cpu->vhyp = PPC_VIRTUAL_HYPERVISOR(machine);
+    pm->cpu->vhyp_class = PPC_VIRTUAL_HYPERVISOR_GET_CLASS(pm->cpu->vhyp);
 }
 
 enum pegasos2_rtas_tokens {
@@ -984,7 +985,7 @@ static void *build_fdt(MachineState *machine, int *fdt_size)
                           cpu->env.icache_line_size);
     qemu_fdt_setprop_cell(fdt, cp, "i-cache-line-size",
                           cpu->env.icache_line_size);
-    if (cpu->env.id_tlbs) {
+    if (ppc_is_split_tlb(cpu)) {
         qemu_fdt_setprop_cell(fdt, cp, "i-tlb-sets", cpu->env.nb_ways);
         qemu_fdt_setprop_cell(fdt, cp, "i-tlb-size", cpu->env.tlb_per_way);
         qemu_fdt_setprop_cell(fdt, cp, "d-tlb-sets", cpu->env.nb_ways);

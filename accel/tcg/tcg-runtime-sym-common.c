@@ -13,6 +13,24 @@
 #define SymExpr void*
 #include "RuntimeCommon.h"
 
+static SymExpr _sym_build_tsteq(SymExpr a, SymExpr b) {
+    size_t bits_a = _sym_bits_helper(a);
+    size_t bits_b = _sym_bits_helper(a);
+
+    assert(bits_a == bits_b);
+
+    return _sym_build_equal(_sym_build_and(a, b), _sym_build_integer(0, bits_a));
+}
+
+static SymExpr _sym_build_tstne(SymExpr a, SymExpr b) {
+    size_t bits_a = _sym_bits_helper(a);
+    size_t bits_b = _sym_bits_helper(a);
+
+    assert(bits_a == bits_b);
+
+    return _sym_build_not_equal(_sym_build_and(a, b), _sym_build_integer(0, bits_a));
+}
+
 void *build_and_push_path_constraint(CPUArchState *env, void *arg1_expr, void *arg2_expr, uint32_t comparison_operator, uint8_t is_taken){
     void *(*handler)(void *, void*);
     switch (comparison_operator) {
@@ -22,31 +40,42 @@ void *build_and_push_path_constraint(CPUArchState *env, void *arg1_expr, void *a
         case TCG_COND_NE:
             handler = _sym_build_not_equal;
             break;
+
+        case TCG_COND_TSTEQ:
+            handler = _sym_build_tsteq;
+            break;
+        case TCG_COND_TSTNE:
+            handler = _sym_build_tstne;
+            break;
+
         case TCG_COND_LT:
             handler = _sym_build_signed_less_than;
             break;
         case TCG_COND_GE:
             handler = _sym_build_signed_greater_equal;
             break;
-        case TCG_COND_LE:
-            handler = _sym_build_signed_less_equal;
-            break;
         case TCG_COND_GT:
             handler = _sym_build_signed_greater_than;
             break;
+        case TCG_COND_LE:
+            handler = _sym_build_signed_less_equal;
+            break;
+
         case TCG_COND_LTU:
             handler = _sym_build_unsigned_less_than;
             break;
         case TCG_COND_GEU:
             handler = _sym_build_unsigned_greater_equal;
             break;
-        case TCG_COND_LEU:
-            handler = _sym_build_unsigned_less_equal;
-            break;
         case TCG_COND_GTU:
             handler = _sym_build_unsigned_greater_than;
             break;
+        case TCG_COND_LEU:
+            handler = _sym_build_unsigned_less_equal;
+            break;
+
         default:
+            fprintf(stderr, "Unknown comparison operator 0x%x\n", comparison_operator);
             g_assert_not_reached();
     }
 
