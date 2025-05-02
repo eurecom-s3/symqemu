@@ -28,6 +28,7 @@
 #include "trace.h"
 
 static bool cap_has_mp_state;
+static unsigned int brk_insn;
 const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
     KVM_CAP_LAST_INFO
 };
@@ -593,6 +594,11 @@ int kvm_arch_get_registers(CPUState *cs)
         return ret;
     }
 
+    ret = kvm_loongarch_get_cpucfg(cs);
+    if (ret) {
+        return ret;
+    }
+
     ret = kvm_loongarch_get_csr(cs);
     if (ret) {
         return ret;
@@ -604,11 +610,6 @@ int kvm_arch_get_registers(CPUState *cs)
     }
 
     ret = kvm_loongarch_get_mpstate(cs);
-    if (ret) {
-        return ret;
-    }
-
-    ret = kvm_loongarch_get_cpucfg(cs);
     return ret;
 }
 
@@ -617,6 +618,11 @@ int kvm_arch_put_registers(CPUState *cs, int level)
     int ret;
 
     ret = kvm_loongarch_put_regs_core(cs);
+    if (ret) {
+        return ret;
+    }
+
+    ret = kvm_loongarch_put_cpucfg(cs);
     if (ret) {
         return ret;
     }
@@ -632,11 +638,6 @@ int kvm_arch_put_registers(CPUState *cs, int level)
     }
 
     ret = kvm_loongarch_put_mpstate(cs);
-    if (ret) {
-        return ret;
-    }
-
-    ret = kvm_loongarch_put_cpucfg(cs);
     return ret;
 }
 
@@ -664,7 +665,14 @@ static void kvm_loongarch_vm_stage_change(void *opaque, bool running,
 
 int kvm_arch_init_vcpu(CPUState *cs)
 {
+    uint64_t val;
+
     qemu_add_vm_change_state_handler(kvm_loongarch_vm_stage_change, cs);
+
+    if (!kvm_get_one_reg(cs, KVM_REG_LOONGARCH_DEBUG_INST, &val)) {
+        brk_insn = val;
+    }
+
     return 0;
 }
 
@@ -739,9 +747,65 @@ bool kvm_arch_stop_on_emulation_error(CPUState *cs)
     return true;
 }
 
-bool kvm_arch_cpu_check_are_resettable(void)
+void kvm_arch_update_guest_debug(CPUState *cpu, struct kvm_guest_debug *dbg)
 {
-    return true;
+    if (kvm_sw_breakpoints_active(cpu)) {
+        dbg->control |= KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP;
+    }
+}
+
+int kvm_arch_insert_sw_breakpoint(CPUState *cs, struct kvm_sw_breakpoint *bp)
+{
+    if (cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&bp->saved_insn, 4, 0) ||
+        cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&brk_insn, 4, 1)) {
+        error_report("%s failed", __func__);
+        return -EINVAL;
+    }
+    return 0;
+}
+
+int kvm_arch_remove_sw_breakpoint(CPUState *cs, struct kvm_sw_breakpoint *bp)
+{
+    static uint32_t brk;
+
+    if (cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&brk, 4, 0) ||
+        brk != brk_insn ||
+        cpu_memory_rw_debug(cs, bp->pc, (uint8_t *)&bp->saved_insn, 4, 1)) {
+        error_report("%s failed", __func__);
+        return -EINVAL;
+    }
+    return 0;
+}
+
+int kvm_arch_insert_hw_breakpoint(vaddr addr, vaddr len, int type)
+{
+    return -ENOSYS;
+}
+
+int kvm_arch_remove_hw_breakpoint(vaddr addr, vaddr len, int type)
+{
+    return -ENOSYS;
+}
+
+void kvm_arch_remove_all_hw_breakpoints(void)
+{
+}
+
+static bool kvm_loongarch_handle_debug(CPUState *cs, struct kvm_run *run)
+{
+    LoongArchCPU *cpu = LOONGARCH_CPU(cs);
+    CPULoongArchState *env = &cpu->env;
+
+    kvm_cpu_synchronize_state(cs);
+    if (cs->singlestep_enabled) {
+        return true;
+    }
+
+    if (kvm_find_sw_breakpoint(cs, env->pc)) {
+        return true;
+    }
+
+    return false;
 }
 
 int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
@@ -762,6 +826,13 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
                          run->iocsr_io.len,
                          run->iocsr_io.is_write);
         break;
+
+    case KVM_EXIT_DEBUG:
+        if (kvm_loongarch_handle_debug(cs, run)) {
+            ret = EXCP_DEBUG;
+        }
+        break;
+
     default:
         ret = -1;
         warn_report("KVM: unknown exit reason %d", run->exit_reason);

@@ -73,7 +73,7 @@
 #if defined(TARGET_I386) || defined(TARGET_ARM) || defined(TARGET_SH4)  \
     || defined(TARGET_M68K) || defined(TARGET_CRIS)                     \
     || defined(TARGET_S390X) || defined(TARGET_OPENRISC)                \
-    || defined(TARGET_NIOS2) || defined(TARGET_RISCV)                   \
+    || defined(TARGET_RISCV)                                            \
     || defined(TARGET_XTENSA) || defined(TARGET_LOONGARCH64)
 
 #define TARGET_IOC_SIZEBITS     14
@@ -945,6 +945,7 @@ struct target_rtc_pll_info {
 
 #define TARGET_FIFREEZE    TARGET_IOWR('X', 119, abi_int)
 #define TARGET_FITHAW    TARGET_IOWR('X', 120, abi_int)
+#define TARGET_FITRIM    TARGET_IOWR('X', 121, struct fstrim_range)
 
 /*
  * Note that the ioctl numbers for FS_IOC_<GET|SET><FLAGS|VERSION>
@@ -1974,7 +1975,7 @@ struct target_stat64  {
     abi_ulong __unused5;
 };
 
-#elif defined(TARGET_OPENRISC) || defined(TARGET_NIOS2) \
+#elif defined(TARGET_OPENRISC) \
     || defined(TARGET_RISCV) || defined(TARGET_HEXAGON)
 
 /* These are the asm-generic versions of the stat and stat64 structures */

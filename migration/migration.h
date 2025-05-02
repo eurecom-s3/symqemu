@@ -19,7 +19,7 @@
 #include "qapi/qapi-types-migration.h"
 #include "qapi/qmp/json-writer.h"
 #include "qemu/thread.h"
-#include "qemu/coroutine_int.h"
+#include "qemu/coroutine.h"
 #include "io/channel.h"
 #include "io/channel-buffer.h"
 #include "net/announce.h"
@@ -160,7 +160,7 @@ struct MigrationIncomingState {
     /* PostCopyFD's for external userfaultfds & handlers of shared memory */
     GArray   *postcopy_remote_fds;
 
-    int state;
+    MigrationStatus state;
 
     /*
      * The incoming migration coroutine, non-NULL during qemu_loadvm_state().
@@ -227,6 +227,9 @@ struct MigrationIncomingState {
      * is needed as this field is updated serially.
      */
     unsigned int switchover_ack_pending_num;
+
+    /* Do exit on incoming migration failure */
+    bool exit_on_error;
 };
 
 MigrationIncomingState *migration_incoming_get_current(void);
@@ -298,7 +301,7 @@ struct MigrationState {
     /* params from 'migrate-set-parameters' */
     MigrationParameters parameters;
 
-    int state;
+    MigrationStatus state;
 
     /* State related to return path */
     struct {
@@ -376,10 +379,6 @@ struct MigrationState {
     /* mutex to protect errp */
     QemuMutex error_mutex;
 
-    /* Do we have to clean up -b/-i from old migrate parameters */
-    /* This feature is deprecated and will be removed */
-    bool must_remove_block_options;
-
     /*
      * Global switch on whether we need to store the global state
      * during migration.
@@ -393,13 +392,6 @@ struct MigrationState {
 
     /* Needed by postcopy-pause state */
     QemuSemaphore postcopy_pause_sem;
-    /*
-     * Whether we abort the migration if decompression errors are
-     * detected at the destination. It is left at false for qemu
-     * older than 3.0, since only newer qemu sends streams that
-     * do not trigger spurious decompression errors.
-     */
-    bool decompress_error_check;
     /*
      * This variable only affects behavior when postcopy preempt mode is
      * enabled.
@@ -467,7 +459,8 @@ struct MigrationState {
     bool rdma_migration;
 };
 
-void migrate_set_state(int *state, int old_state, int new_state);
+void migrate_set_state(MigrationStatus *state, MigrationStatus old_state,
+                       MigrationStatus new_state);
 
 void migration_fd_process_incoming(QEMUFile *f);
 void migration_ioc_process_incoming(QIOChannel *ioc, Error **errp);
@@ -487,7 +480,7 @@ int migrate_init(MigrationState *s, Error **errp);
 bool migration_is_blocked(Error **errp);
 /* True if outgoing migration has entered postcopy phase */
 bool migration_in_postcopy(void);
-bool migration_postcopy_is_alive(int state);
+bool migration_postcopy_is_alive(MigrationStatus state);
 MigrationState *migrate_get_current(void);
 bool migration_has_failed(MigrationState *);
 bool migrate_mode_is_cpr(MigrationState *);

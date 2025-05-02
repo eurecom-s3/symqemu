@@ -21,7 +21,7 @@ RUN apt update && apt install -y \
     xxd \
     wdiff
 
-RUN pip install --user meson
+RUN pip install --user meson tomli
 
 # This is passed along to symcc and qsym backend
 arg LLVM_VERSION=15
@@ -67,8 +67,3 @@ WORKDIR /symqemu_source
 RUN mkdir build && cd build && /configure_symqemu.sh
 
 RUN cd build && make -j
-
-RUN cd build && make check
-
-WORKDIR /symqemu_source/tests/symqemu
-RUN python3 -m unittest test.py

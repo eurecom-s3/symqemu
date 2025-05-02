@@ -10,7 +10,19 @@
 #include "hw/boards.h"
 #include "hw/xen/arch_hvm.h"
 
-MemoryRegion xen_memory;
+MemoryRegion xen_memory, xen_grants;
+
+/* Check for any kind of xen memory, foreign mappings or grants.  */
+bool xen_mr_is_memory(MemoryRegion *mr)
+{
+    return mr == &xen_memory || mr == &xen_grants;
+}
+
+/* Check specifically for grants.  */
+bool xen_mr_is_grants(MemoryRegion *mr)
+{
+    return mr == &xen_grants;
+}
 
 void xen_ram_alloc(ram_addr_t ram_addr, ram_addr_t size, MemoryRegion *mr,
                    Error **errp)
@@ -28,7 +40,7 @@ void xen_ram_alloc(ram_addr_t ram_addr, ram_addr_t size, MemoryRegion *mr,
         return;
     }
 
-    if (mr == &xen_memory) {
+    if (xen_mr_is_memory(mr)) {
         return;
     }
 
@@ -55,7 +67,7 @@ static void xen_set_memory(struct MemoryListener *listener,
 {
     XenIOState *state = container_of(listener, XenIOState, memory_listener);
 
-    if (section->mr == &xen_memory) {
+    if (xen_mr_is_memory(section->mr)) {
         return;
     } else {
         if (add) {
@@ -463,11 +475,11 @@ static void handle_ioreq(XenIOState *state, ioreq_t *req)
     }
 }
 
-static bool handle_buffered_iopage(XenIOState *state)
+static unsigned int handle_buffered_iopage(XenIOState *state)
 {
     buffered_iopage_t *buf_page = state->buffered_io_page;
     buf_ioreq_t *buf_req = NULL;
-    bool handled_ioreq = false;
+    unsigned int handled = 0;
     ioreq_t req;
     int qw;
 
@@ -480,7 +492,7 @@ static bool handle_buffered_iopage(XenIOState *state)
     req.count = 1;
     req.dir = IOREQ_WRITE;
 
-    for (;;) {
+    do {
         uint32_t rdptr = buf_page->read_pointer, wrptr;
 
         xen_rmb();
@@ -521,22 +533,30 @@ static bool handle_buffered_iopage(XenIOState *state)
         assert(!req.data_is_ptr);
 
         qatomic_add(&buf_page->read_pointer, qw + 1);
-        handled_ioreq = true;
-    }
+        handled += qw + 1;
+    } while (handled < IOREQ_BUFFER_SLOT_NUM);
 
-    return handled_ioreq;
+    return handled;
 }
 
 static void handle_buffered_io(void *opaque)
 {
+    unsigned int handled;
     XenIOState *state = opaque;
 
-    if (handle_buffered_iopage(state)) {
+    handled = handle_buffered_iopage(state);
+    if (handled >= IOREQ_BUFFER_SLOT_NUM) {
+        /* We handled a full page of ioreqs. Schedule a timer to continue
+         * processing while giving other stuff a chance to run.
+         */
         timer_mod(state->buffered_io_timer,
-                BUFFER_IO_MAX_DELAY + qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
-    } else {
+                qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
+    } else if (handled == 0) {
         timer_del(state->buffered_io_timer);
         qemu_xen_evtchn_unmask(state->xce_handle, state->bufioreq_local_port);
+    } else {
+        timer_mod(state->buffered_io_timer,
+                BUFFER_IO_MAX_DELAY + qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
     }
 }
 
@@ -871,8 +891,6 @@ void xen_register_ioreq(XenIOState *state, unsigned int max_cpus,
     }
 
     xen_bus_init();
-
-    xen_be_init();
 
     return;
 

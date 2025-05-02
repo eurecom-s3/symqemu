@@ -2,13 +2,21 @@ on:
   workflow_dispatch:
   push:
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        llvm_versions: [14, 15]
     steps:
     - uses: actions/checkout@v4
     - run: git submodule update --init --recursive subprojects/symcc-rt
-    # build and test with default LLVM version 15
-    - run: docker build -t symqemu .
-    # LLVM version 14
-    - run: docker build --build-arg LLVM_VERSION=14 -t symqemu .
+    # build and test with multiple LLVM versions
+    - run: docker build --build-arg LLVM_VERSION=${{ matrix.llvm_versions }} -t symqemu .
+    - run: docker run -t symqemu make -C build check
+    - run: docker run -t symqemu sh -c "cd tests/symqemu && python3 -m unittest test.py"

@@ -68,6 +68,8 @@ QTestState *qtest_init(const char *extra_args);
  */
 QTestState *qtest_init_with_env(const char *var, const char *extra_args);
 
+QTestState *qtest_init_with_env_no_handshake(const char *var,
+                                             const char *extra_args);
 /**
  * qtest_init_without_qmp_handshake:
  * @extra_args: other arguments to pass to QEMU.  CAUTION: these
@@ -948,6 +950,14 @@ bool qtest_has_machine(const char *machine);
  * Returns: true if the machine is available in the specified binary.
  */
 bool qtest_has_machine_with_env(const char *var, const char *machine);
+
+/**
+ * qtest_has_cpu_model:
+ * @cpu: The cpu to look for
+ *
+ * Returns: true if the cpu is available in the target binary.
+ */
+bool qtest_has_cpu_model(const char *cpu);
 
 /**
  * qtest_has_device:
