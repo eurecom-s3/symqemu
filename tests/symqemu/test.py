@@ -19,18 +19,28 @@ class SymQemuTests(unittest.TestCase):
 
         util.run_symqemu_on_test_binary(binary_name=binary_name, generated_test_cases_output_dir=symqemu_gen_output_dir)
 
-        expected_hashes = set()
+        expected_hashes = {}
         for ref_file in symqemu_ref_output_dir.iterdir():
             with open(ref_file, 'rb', buffering=0) as f:
-                expected_hashes.add(hashlib.file_digest(f, "sha256").hexdigest())
+                f_hash = hashlib.file_digest(f, "sha256").hexdigest()
+                expected_hashes[f_hash] = [False, ref_file]
 
         testcase_not_found = False
         for gen_file in symqemu_gen_output_dir.iterdir():
             with open(gen_file, 'rb', buffering=0) as f:
                 f_hash = hashlib.file_digest(f, "sha256").hexdigest()
-                if not f_hash in expected_hashes:
+                ret = expected_hashes.get(f_hash)
+                if ret is not None:
+                    ret[0] = True
+                    expected_hashes[f_hash] = ret
+                else:
                     print(f"Error: content of file {gen_file} not found in expected testcases.");
                     testcase_not_found = True
+
+        for (is_found, fname) in expected_hashes.values():
+            # (is_found, fname) = tuple(ret)
+            if not is_found:
+                print(f"Warning: expected testcase {fname} has not been generated.")
 
         self.assertFalse(testcase_not_found)
 
