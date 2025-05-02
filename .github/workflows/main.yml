@@ -19,4 +19,4 @@ jobs:
     # build and test with multiple LLVM versions
     - run: docker build --build-arg LLVM_VERSION=${{ matrix.llvm_versions }} -t symqemu .
     - run: docker run -t symqemu make -C build check
-    - run: docker run -t symqemu sh -c "cd tests/symqemu && python3 -m unittest test.py"
+    - run: docker run -t symqemu sh -c "cd tests/symqemu && python3.11 -m unittest test.py"
