@@ -3240,7 +3240,7 @@ void tcg_gen_sextract_i64(TCGv_i64 ret, TCGv_i64 arg,
 
     if (TCG_TARGET_HAS_sextract_i64
         && TCG_TARGET_extract_i64_valid(ofs, len)) {
-        gen_helper_sym_extract_i64(
+        gen_helper_sym_sextract_i64(
             tcgv_i64_expr(ret), tcgv_i64_expr(arg), tcg_constant_i64(ofs), tcg_constant_i64(len));
         tcg_gen_op4ii_i64(INDEX_op_sextract_i64, ret, arg, ofs, len);
         return;
