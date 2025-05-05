@@ -6,7 +6,7 @@ RUN apt update && apt install -y \
     libglib2.0-dev \
     llvm \
     git \
-    python3 \
+    python3.11 \
     python3-pip \
     cmake \
     wget \
