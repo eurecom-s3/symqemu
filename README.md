@@ -55,11 +55,11 @@ Several compilation options are available:
 ## Running SymQEMU
 
 If you built SymQEMU as described above, the binary will be in
-`x86_64-linux-user/symqemu-x86_64`. For a quick test, try the following:
+`build/qemu-x86_64`. For a quick test, try the following:
 
 ``` shell
 $ mkdir /tmp/output
-$ echo test | x86_64-linux-user/qemu-x86_64 /bin/cat -t -
+$ echo test | build/qemu-x86_64 /bin/cat -t -
 This is SymCC running with the QSYM backend
 [STAT] SMT: { "solving_time": 0, "total_time": 51010 }
 [STAT] SMT: { "solving_time": 523 }
@@ -84,7 +84,7 @@ same
 [settings](https://github.com/eurecom-s3/symcc/blob/master/docs/Configuration.txt),
 and you can even run SymQEMU with `symcc_fuzzing_helper` for [hybrid
 fuzzing](https://github.com/eurecom-s3/symcc/blob/master/docs/Fuzzing.txt): just
-prefix the target command with `x86_64-linux-user/symqemu-x86_64`. (Note that
+prefix the target command with `build/qemu-x86_64`. (Note that
 you'll have to run AFL in QEMU mode by adding `-Q` to its command line; the
 fuzzing helper will automatically pick up the setting and use QEMU mode too.)
 
