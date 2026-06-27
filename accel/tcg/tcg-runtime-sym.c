@@ -97,6 +97,12 @@
 /* The binary helpers */
 
 DEF_HELPER_BINARY(add, add)
+// DECL_HELPER_BINARY(add) {
+//     BINARY_HELPER_ENSURE_EXPRESSIONS;
+//     fprintf(stderr, "[SYM-DEBUG] symbolic ADD executed!\n");
+//     return _sym_build_add(arg1_expr, arg2_expr);
+// }
+
 DEF_HELPER_BINARY(sub, sub)
 DEF_HELPER_BINARY(mul, mul)
 DEF_HELPER_BINARY(div, signed_div)
@@ -605,19 +611,26 @@ static void *sym_movcond_internal(CPUArchState *env,
     }
 
     if (c1_expr == NULL) {
-        c1_expr = _sym_build_integer(c1, _sym_bits_helper(c2_expr));
+        // c1_expr = _sym_build_integer(c1, _sym_bits_helper(c2_expr));
+        c1_expr = _sym_build_integer(c1, result_bits);
     }
 
     if (c2_expr == NULL) {
-        c2_expr = _sym_build_integer(c2, _sym_bits_helper(c1_expr));
+        // c2_expr = _sym_build_integer(c2, _sym_bits_helper(c1_expr));
+        c2_expr = _sym_build_integer(c2, result_bits);
     }
 
     if (v1_expr == NULL) {
-        v1_expr = _sym_build_integer(v1, _sym_bits_helper(c1_expr));
+        // v1_expr = _sym_build_integer(v1, _sym_bits_helper(c1_expr));
+        v1_expr = _sym_build_integer(v1, result_bits);
+
+
     }
 
     if (v2_expr == NULL) {
-        v2_expr = _sym_build_integer(v2, _sym_bits_helper(c1_expr));
+        // v2_expr = _sym_build_integer(v2, _sym_bits_helper(c1_expr));
+        v2_expr = _sym_build_integer(v2, result_bits);
+
     }
 
     assert(_sym_bits_helper(c1_expr) == result_bits);
