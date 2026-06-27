@@ -52,3 +52,9 @@ class SymQemuTests(unittest.TestCase):
 
     def test_simple_i128(self):
         self.run_symqemu_and_assert_correct_result('simple_i128')
+
+    def test_movcond_issue56(self):
+        # Regression test for #56: a movcond with concrete comparison operands
+        # but a symbolic selected value used to NULL-deref in
+        # sym_movcond_internal (Expr::bits() on a NULL this, fault addr 0x14).
+        self.run_symqemu_and_assert_correct_result('movcond_issue56')
