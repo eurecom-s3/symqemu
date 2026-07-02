@@ -603,21 +603,23 @@ static void *sym_movcond_internal(CPUArchState *env,
     if (c1_expr == NULL && c2_expr == NULL && v1_expr == NULL && v2_expr == NULL) {
         return NULL;
     }
+    int c1_bits = (c1_expr != NULL) ? _sym_bits_helper(c1_expr) : result_bits;
+    int c2_bits = (c2_expr != NULL) ? _sym_bits_helper(c2_expr) : result_bits;
 
     if (c1_expr == NULL) {
-        c1_expr = _sym_build_integer(c1, _sym_bits_helper(c2_expr));
+        c1_expr = _sym_build_integer(c1, c2_bits);
     }
 
     if (c2_expr == NULL) {
-        c2_expr = _sym_build_integer(c2, _sym_bits_helper(c1_expr));
+        c2_expr = _sym_build_integer(c2, c1_bits);
     }
 
     if (v1_expr == NULL) {
-        v1_expr = _sym_build_integer(v1, _sym_bits_helper(c1_expr));
+        v1_expr = _sym_build_integer(v1, c1_bits);
     }
 
     if (v2_expr == NULL) {
-        v2_expr = _sym_build_integer(v2, _sym_bits_helper(c1_expr));
+        v2_expr = _sym_build_integer(v2, c1_bits);
     }
 
     assert(_sym_bits_helper(c1_expr) == result_bits);

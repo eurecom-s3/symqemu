@@ -344,7 +344,20 @@ static void gen_writeback(DisasContext *s, X86DecodedInsn *decode, int opn, TCGv
         if (op->has_ea) {
             gen_op_st_v(s, op->ot, v, s->A0);
         } else {
-            gen_op_mov_reg_v(s, op->ot, op->n, v);
+	    if(decode->b == 0xbe || decode->b == 0xbf){
+		    if(op->ot == MO_32){
+		    	tcg_gen_ext32s_tl(cpu_regs[op->n], v);
+		    }
+		    else if(op->ot == MO_16){
+		    	tcg_gen_ext16s_tl(cpu_regs[op->n], v);
+		    }
+		    else{
+		        tcg_gen_mov_tl(cpu_regs[op->n], v);
+		    }
+	    }
+	    else{
+		    gen_op_mov_reg_v(s, op->ot, op->n, v);
+	    }
         }
         break;
     case X86_OP_MMX:
