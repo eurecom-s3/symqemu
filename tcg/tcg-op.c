@@ -871,6 +871,8 @@ void tcg_gen_clz_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
     } else {
         gen_helper_clz_i32(ret, arg1, arg2);
     }
+    /* SymQEMU: no symbolic helper for clz yet, concretize the result. */
+    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_i32_expr_num(ret), tcg_constant_i64(0));
 }
 
 void tcg_gen_clzi_i32(TCGv_i32 ret, TCGv_i32 arg1, uint32_t arg2)
@@ -914,6 +916,8 @@ void tcg_gen_ctz_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
     } else {
         gen_helper_ctz_i32(ret, arg1, arg2);
     }
+    /* SymQEMU: no symbolic helper for clz yet, concretize the result. */
+    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_i32_expr_num(ret), tcg_constant_i64(0));
 }
 
 void tcg_gen_ctzi_i32(TCGv_i32 ret, TCGv_i32 arg1, uint32_t arg2)
@@ -942,6 +946,8 @@ void tcg_gen_clrsb_i32(TCGv_i32 ret, TCGv_i32 arg)
     } else {
         gen_helper_clrsb_i32(ret, arg);
     }
+    /* SymQEMU: no symbolic helper for clrsb yet, concretize the result. */
+    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_i32_expr_num(ret), tcg_constant_i64(0));
 }
 
 void tcg_gen_ctpop_i32(TCGv_i32 ret, TCGv_i32 arg1)
@@ -957,6 +963,8 @@ void tcg_gen_ctpop_i32(TCGv_i32 ret, TCGv_i32 arg1)
     } else {
         gen_helper_ctpop_i32(ret, arg1);
     }
+    /* SymQEMU: no symbolic helper for clz yet, concretize the result. */
+    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_i32_expr_num(ret), tcg_constant_i64(0));
 }
 
 void tcg_gen_rotl_i32(TCGv_i32 ret, TCGv_i32 arg1, TCGv_i32 arg2)
@@ -2775,6 +2783,8 @@ void tcg_gen_clz_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
     } else {
         gen_helper_clz_i64(ret, arg1, arg2);
     }
+    /* SymQEMU: no symbolic helper for clz yet, concretize the result. */
+    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_i64_expr_num(ret), tcg_constant_i64(0));
 }
 
 void tcg_gen_clzi_i64(TCGv_i64 ret, TCGv_i64 arg1, uint64_t arg2)
@@ -2818,6 +2828,8 @@ void tcg_gen_ctz_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
     } else {
         gen_helper_ctz_i64(ret, arg1, arg2);
     }
+    /* SymQEMU: no symbolic helper for clz yet, concretize the result. */
+    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_i64_expr_num(ret), tcg_constant_i64(0));
 }
 
 void tcg_gen_ctzi_i64(TCGv_i64 ret, TCGv_i64 arg1, uint64_t arg2)
@@ -2857,6 +2869,8 @@ void tcg_gen_clrsb_i64(TCGv_i64 ret, TCGv_i64 arg)
     } else {
         gen_helper_clrsb_i64(ret, arg);
     }
+    /* SymQEMU: no symbolic helper for clrsb yet, concretize the result. */
+    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_i64_expr_num(ret), tcg_constant_i64(0));
 }
 
 void tcg_gen_ctpop_i64(TCGv_i64 ret, TCGv_i64 arg1)
@@ -2871,6 +2885,8 @@ void tcg_gen_ctpop_i64(TCGv_i64 ret, TCGv_i64 arg1)
     } else {
         gen_helper_ctpop_i64(ret, arg1);
     }
+    /* SymQEMU: no symbolic helper for clz yet, concretize the result. */
+    tcg_gen_op2_i64(INDEX_op_mov_i64, tcgv_i64_expr_num(ret), tcg_constant_i64(0));
 }
 
 void tcg_gen_rotl_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
