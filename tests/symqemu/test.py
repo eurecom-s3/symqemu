@@ -52,3 +52,6 @@ class SymQemuTests(unittest.TestCase):
 
     def test_simple_i128(self):
         self.run_symqemu_and_assert_correct_result('simple_i128')
+        
+    def test_bit_count(self):
+        self.run_symqemu_and_assert_correct_result('bit_count')
